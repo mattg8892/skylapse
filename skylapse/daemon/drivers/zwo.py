@@ -22,6 +22,16 @@ _SDK_PATHS = [
 _BAYER_MAP = {0: BayerPattern.RGGB, 1: BayerPattern.BGGR,
               2: BayerPattern.GRBG, 3: BayerPattern.GBRG}
 
+# ZWO's white-balance controls are digital gains applied to the RAW buffer, not
+# preview-only. 50 is the neutral midpoint of the 1-99 range.
+NEUTRAL_WB = 50
+
+# Exposure polling. zwoasi's own capture() waits on the sensor forever, so a
+# wedged USB link hangs the capture loop instead of raising — and the daemon's
+# reopen-with-backoff recovery never gets a chance to run.
+_POLL_INTERVAL_S = 0.01
+_CAPTURE_TIMEOUT_MARGIN_S = 15.0
+
 
 def _load_sdk():
     import zwoasi
@@ -71,6 +81,22 @@ class ZwoDriver(CameraDriver):
         self._cam.set_image_type(img_type)
         self._cam.disable_dark_subtract()
 
+        # Force neutral white balance. ZWO ships a non-neutral factory WB
+        # (55/75 on the ASI676MC) and applies it to the RAW16 buffer itself:
+        # measured on hardware, B/R was 1.69 at the factory values and 1.10 at
+        # neutral, on an unchanged scene. Left alone it tints every JPEG blue
+        # and — worse — bakes a vendor cast into DNGs that Siril/PixInsight
+        # expect to be untouched sensor data. The pipeline owns colour, not the
+        # camera firmware.
+        for name in ("ASI_WB_R", "ASI_WB_B"):
+            control = getattr(self._asi, name, None)
+            if control is None:
+                continue
+            try:
+                self._cam.set_control_value(control, NEUTRAL_WB, auto=False)
+            except Exception as exc:
+                log.warning("Could not set %s to neutral: %s", name, exc)
+
         # Stable id: SDK camera ID (user-settable flash id) or serial where
         # supported; older models (ASI120 era) fall back to sanitized name.
         cam_id = ""
@@ -80,6 +106,13 @@ class ZwoDriver(CameraDriver):
             pass
         if not cam_id:
             cam_id = props["Name"].lower().replace(" ", "-").replace("(", "").replace(")", "")
+        # The name fallback already carries the vendor ("ZWO ASI676MC"), so the
+        # f"zwo-{cam_id}" below would yield "zwo-zwo-asi676mc" — and camera_id
+        # is both the config registry key and the image folder name. (The
+        # ASI676MC raises ZWO_IOError from get_id(), so this path is not rare:
+        # any model without a writable flash id lands here.)
+        if cam_id.startswith("zwo-"):
+            cam_id = cam_id[len("zwo-"):]
 
         exp = controls["Exposure"]
         gain = controls["Gain"]
@@ -109,11 +142,43 @@ class ZwoDriver(CameraDriver):
         self._cam.set_control_value(self._asi.ASI_GAIN, gain)
         self._exposure_us, self._gain = exposure_us, gain
 
+    def _expose(self) -> bytearray:
+        """Bounded stand-in for zwoasi's capture().
+
+        Same sequence, but the wait for the sensor can time out. zwoasi loops
+        on ASI_EXP_WORKING with no deadline, so a camera that stops responding
+        mid-exposure (brownout on a USB3 rig is the classic cause) would block
+        the capture loop forever. Timing out instead turns that into a
+        CameraError, which is what the daemon's reopen-with-backoff expects.
+        """
+        asi = self._asi
+        self._cam.start_exposure()
+        deadline = (time.time() + self._exposure_us / 1_000_000
+                    + _CAPTURE_TIMEOUT_MARGIN_S)
+        while True:
+            status = self._cam.get_exposure_status()
+            if status != asi.ASI_EXP_WORKING:
+                break
+            if time.time() > deadline:
+                try:
+                    self._cam.stop_exposure()
+                except Exception:
+                    pass                      # already wedged; nothing to save
+                raise CameraError(
+                    f"Exposure timed out ({self._exposure_us / 1_000_000:.1f}s "
+                    f"+ {_CAPTURE_TIMEOUT_MARGIN_S:.0f}s margin)")
+            time.sleep(_POLL_INTERVAL_S)
+        if status != asi.ASI_EXP_SUCCESS:
+            raise CameraError(f"Exposure failed (status {status})")
+        return self._cam.get_data_after_exposure(None)
+
     def capture(self) -> Frame:
         assert self._cam and self._info
         ts = time.time()
         try:
-            data = self._cam.capture()  # blocking; returns numpy array
+            data = self._expose()       # blocking, bounded; raw bayer buffer
+        except CameraError:
+            raise
         except Exception as exc:  # zwoasi raises its own hierarchy
             raise CameraError(f"ZWO capture failed: {exc}") from exc
 
@@ -125,7 +190,7 @@ class ZwoDriver(CameraDriver):
             pass
 
         return Frame(
-            data=data.tobytes(),
+            data=bytes(data),
             width=self._info.width,
             height=self._info.height,
             bayer=self._info.bayer,

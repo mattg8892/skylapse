@@ -54,6 +54,44 @@ CameraDriver (ABC)
 Both drivers return raw bayer + metadata; the pipeline owns debayer → JPEG and bayer → DNG
 (via pidng). Identical output regardless of camera. Probe order: ZWO on USB first, then CSI.
 
+### What first contact with real ZWO hardware changed
+
+Bench session on a Pi 5 + **ASI676MC** (3552×3552, 12-bit, USB3), SDK v1.41. Three
+assumptions in the driver did not survive; all three are now fixed in `drivers/zwo.py`.
+
+1. **White balance is not preview-only — it is baked into the RAW buffer.** ZWO ships a
+   non-neutral factory WB (`WB_R` 55 / `WB_B` 75) and applies those gains to RAW16 itself.
+   Measured on an unchanged scene: B/R was **1.686** at the factory values, **1.097** at
+   neutral 50/50, and **0.009** at an extreme 99/1 — so the gains demonstrably reach the
+   raw data. Unhandled, this tints every JPEG blue *and* bakes a vendor colour cast into
+   DNGs that Siril/PixInsight are entitled to assume are untouched sensor data. The driver
+   now forces neutral WB at `open()`. Colour is the pipeline's job, not the firmware's.
+2. **`get_id()` is not universally supported.** The ASI676MC raises `ZWO_IOError` from it,
+   so the model-name fallback is the common path, not the rare one — and since that name
+   already begins with the vendor, the `zwo-` prefix was applied twice
+   (`zwo-zwo-asi676mc`). That string is the config registry key *and* the image folder
+   name, so it had to be fixed before any real capture history accumulated. Cameras with a
+   writable flash id are the exception; the registry design in the previous section should
+   be read with that in mind.
+3. **`zwoasi.capture()` waits on the sensor with no deadline.** Its poll loop spins on
+   `ASI_EXP_WORKING` forever, so a camera that stops responding mid-exposure — a USB3
+   brownout on a long exposure being the classic cause, and exactly what the hardware
+   notes in the README warn about — would hang the capture loop indefinitely. That
+   silently defeats the goal-4 promise that capture never stops, because the daemon's
+   reopen-with-backoff recovery can only fire on a `CameraError` that never arrives. The
+   driver now runs its own bounded poll (exposure + 15s margin) and raises `CameraError`
+   on timeout, making the existing recovery path reachable.
+
+Verified working as designed, no change needed: 12-bit sensor data arrives scaled to the
+full 16-bit range (low bits populated, max 65534), so `mean_brightness`'s `255/65535`
+assumption is correct; exposures of 5s and 15s complete cleanly; `99-asi.rules` raises
+`usbfs_memory_mb` from 16 to 1024 on plug-in, which USB3 frames of this size need.
+
+Known upstream annoyance, not patched: zwoasi 0.2.0's `Camera.__del__` raises
+`TypeError: 'NoneType' object is not callable` at interpreter shutdown (module globals are
+torn down before the finaliser runs). It is noise in the log after the capture loop has
+already exited, and it is a library bug rather than ours.
+
 ### Camera registry
 
 Every camera reports a stable `camera_id` (ZWO flash id/serial, or model for Pi cams).
