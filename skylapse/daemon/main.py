@@ -110,11 +110,15 @@ class CaptureDaemon:
             # Dawn: night just became day -> render last night's timelapse,
             # then run cleanup while nothing interesting is in the sky.
             now_period = period(self.cfg)
+            if self.last_period is not None and now_period != self.last_period:
+                log.info("Period change: %s -> %s", self.last_period, now_period)
             if self.last_period in ("night", "twilight") and now_period == "day":
+                log.info("Dawn: running night jobs (timelapse + cleanup)")
                 cam_root = config.IMAGE_ROOT / self.camera_id
                 latest_night = max((d for d in cam_root.iterdir() if d.is_dir()),
                                    default=None)
                 if latest_night and cam.timelapse.auto_render:
+                    log.info("Rendering timelapse for %s", latest_night.name)
                     nightjobs.render_night(latest_night, cam.timelapse)
                 nightjobs.cleanup(cam_root, self.cfg.cleanup_free_gb)
             self.last_period = now_period
@@ -149,8 +153,18 @@ class CaptureDaemon:
             nightjobs.check_storage_warning(config.IMAGE_ROOT,
                                             self.cfg.cleanup_free_gb)
             try:
+                prev_exposure, prev_gain = self.exposure_us, self.gain
                 self.exposure_us, self.gain = next_exposure(
                     profile, self.last_brightness, self.exposure_us, self.gain)
+                # Debug, not info: one of these per frame alongside the capture
+                # line would double the journal volume for a decision that is
+                # only interesting when AE is misbehaving.
+                log.debug("AE(%s): measured=%s target=%d -> exposure %dus "
+                          "(was %dus), gain %d (was %d)", now_period,
+                          "none" if self.last_brightness is None
+                          else "%.1f" % self.last_brightness,
+                          profile.target_brightness, self.exposure_us,
+                          prev_exposure, self.gain, prev_gain)
                 self.driver.set_controls(self.exposure_us, self.gain)
                 frame = self.driver.capture()
             except CameraError:
@@ -178,8 +192,21 @@ class CaptureDaemon:
             jpeg = process.save_jpeg(frame, self.camera_id, self.cfg.jpeg_quality,
                                      overlay=cam.overlay, stars=frame._stars)
             self.keeper_buffer.append(frame)
-            if self._raw_due(frame):
+            dng_saved = self._raw_due(frame)
+            if dng_saved:
                 process.save_dng(frame, self.camera_id)
+
+            # One line per completed frame. Under systemd this lands in journald,
+            # which owns rotation — Skylapse writes no log files of its own. This
+            # is the only durable per-frame record of what the capture loop did,
+            # so it carries every field needed to reconstruct a night afterwards
+            # (the status file holds just the latest frame and is overwritten).
+            log.info("Frame t=%s exposure=%dus gain=%d brightness=%.1f stars=%s "
+                     "dng=%s file=%s",
+                     time.strftime("%H:%M:%S", time.localtime(frame.timestamp)),
+                     frame.exposure_us, frame.gain, self.last_brightness,
+                     frame._stars if frame._stars is not None else "-",
+                     "yes" if dng_saved else "no", jpeg.name)
 
             self._write_status({
                 "state": "capturing",
