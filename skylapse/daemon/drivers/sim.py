@@ -15,7 +15,7 @@ from .base import BayerPattern, CameraDriver, CameraInfo, Frame
 
 WIDTH, HEIGHT = 1280, 960
 N_STARS = 350
-# Scene tuned so ~5s exposure at gain 100 hits a mean around 90/255.
+# Scene tuned so ~0.6s exposure at gain 100 hits a mean around 90/255.
 RADIANCE_SCALE = 1.05e-9
 FULL_WELL = 65535
 
