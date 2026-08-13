@@ -1,13 +1,32 @@
 [Unit]
+# @SKYLAPSE_ROOT@ / @SKYLAPSE_USER@ are substituted by install.sh at install
+# time. They resolve to the git checkout and its owner rather than a copy under
+# /opt: the service runs directly out of the working tree (pip install -e), so
+# updating a rig is `git pull && sudo systemctl restart skylapse-daemon` with no
+# reinstall step. Deliberate choice for developer//field-test units — the
+# flashable SD image is the path for everyone else.
 Description=Skylapse capture daemon
 After=local-fs.target
 
 [Service]
-ExecStart=/opt/skylapse/venv/bin/skylapse-daemon
+ExecStart=@SKYLAPSE_ROOT@/venv/bin/skylapse-daemon
+WorkingDirectory=@SKYLAPSE_ROOT@
 Restart=always
 RestartSec=5
-User=skylapse
+User=@SKYLAPSE_USER@
 SupplementaryGroups=video
+# /run is a tmpfs, so /run/skylapse does not survive a reboot. systemd recreates
+# it owned by User= before ExecStart, which is why the daemon never needs write
+# access to /run itself. Preserve=yes keeps it alive for skylapse-api while this
+# unit is restarting.
+RuntimeDirectory=skylapse
+RuntimeDirectoryMode=0755
+RuntimeDirectoryPreserve=yes
+# Capture must outlive a wedged frame: the ZWO driver bounds its own exposure
+# wait and raises, but if the process dies outright systemd brings it straight
+# back. Goal 4 — capture never stops.
+StandardOutput=journal
+StandardError=journal
 
 [Install]
 WantedBy=multi-user.target

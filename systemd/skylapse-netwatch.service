@@ -1,15 +1,31 @@
 [Unit]
+# @SKYLAPSE_ROOT@ / @SKYLAPSE_USER@ are substituted by install.sh at install
+# time — see skylapse-daemon.service for why this runs from the git checkout
+# rather than an /opt copy.
+#
+# NOT enabled by install.sh. The network state machine is unverified on real
+# hardware and its failure mode is tearing down a working Wi-Fi link, which on a
+# headless rig means losing the box. Enable deliberately, with a way back in:
+#   sudo systemctl enable --now skylapse-netwatch
 Description=Skylapse network watchdog
 After=NetworkManager.service
 Wants=NetworkManager.service
 
 [Service]
-ExecStart=/opt/skylapse/venv/bin/skylapse-netwatch
+ExecStart=@SKYLAPSE_ROOT@/venv/bin/skylapse-netwatch
+WorkingDirectory=@SKYLAPSE_ROOT@
 Restart=always
 RestartSec=5
 WatchdogSec=30
 NotifyAccess=main
 Type=notify
+# Manipulates NetworkManager connections, so unlike the daemon and API this one
+# genuinely needs root — it is the reason the three services are separate units.
+RuntimeDirectory=skylapse
+RuntimeDirectoryMode=0755
+RuntimeDirectoryPreserve=yes
+StandardOutput=journal
+StandardError=journal
 
 [Install]
 WantedBy=multi-user.target

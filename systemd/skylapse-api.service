@@ -1,12 +1,30 @@
 [Unit]
+# @SKYLAPSE_ROOT@ / @SKYLAPSE_USER@ are substituted by install.sh at install
+# time — see skylapse-daemon.service for why this runs from the git checkout
+# rather than an /opt copy.
 Description=Skylapse web API
 After=network.target
 
 [Service]
-ExecStart=/opt/skylapse/venv/bin/uvicorn skylapse.api.main:app --host 0.0.0.0 --port 80
+ExecStart=@SKYLAPSE_ROOT@/venv/bin/uvicorn skylapse.api.main:app --host 0.0.0.0 --port 80
+WorkingDirectory=@SKYLAPSE_ROOT@
 Restart=always
 RestartSec=5
+# Port 80 is below 1024, so binding it normally requires root. Instead the
+# service runs as the ordinary service user and is granted just the one
+# capability that binding needs. The unit previously carried this line with no
+# User=, which meant it ran as root and the capability was redundant.
+User=@SKYLAPSE_USER@
 AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+# Shares /run/skylapse with the daemon: the API writes the command files
+# (focus_start, keeper_cmd, resume_cmd, netwatch_cmd.json) that the daemon and
+# netwatch poll. Preserve=yes so restarting either unit does not delete it.
+RuntimeDirectory=skylapse
+RuntimeDirectoryMode=0755
+RuntimeDirectoryPreserve=yes
+StandardOutput=journal
+StandardError=journal
 
 [Install]
 WantedBy=multi-user.target
