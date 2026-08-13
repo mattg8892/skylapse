@@ -176,7 +176,7 @@ class CaptureDaemon:
             frame._stars = star_count(corrected if corrected is not arr else arr) \
                 if period(self.cfg) != "day" else None
             jpeg = process.save_jpeg(frame, self.camera_id, self.cfg.jpeg_quality,
-                                     overlay=self.cfg.overlay, stars=frame._stars)
+                                     overlay=cam.overlay, stars=frame._stars)
             self.keeper_buffer.append(frame)
             if self._raw_due(frame):
                 process.save_dng(frame, self.camera_id)
