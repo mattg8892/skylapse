@@ -82,6 +82,18 @@ assumptions in the driver did not survive; all three are now fixed in `drivers/z
    driver now runs its own bounded poll (exposure + 15s margin) and raises `CameraError`
    on timeout, making the existing recovery path reachable.
 
+**Consequence — the JPEG path has no white balance, and now it shows.** Neutralising the
+camera WB is right for raw fidelity, but it revealed that `pipeline/process.py` debayers
+and rescales without ever applying colour multipliers. On the same bench scene the neutral
+raw means are R 12258 / **G 18030** / B 13300 — green runs ~1.4× the others because RGGB
+has two green photosites per quad and green QE is highest. So JPEGs went from a blue cast
+(ZWO's 55/75 acting as an accidental, wrong white balance) to a green one (no white balance
+at all). The factory defaults were masking a missing pipeline stage. Fixing it belongs in
+the pipeline, not the driver: JPEG encode needs per-camera WB multipliers — measured once
+per sensor, or a grey-world estimate for the sky — while DNG keeps the neutral raw data and
+carries the multipliers as `AsShotNeutral` metadata for Siril/PixInsight to apply. Not yet
+implemented.
+
 Verified working as designed, no change needed: 12-bit sensor data arrives scaled to the
 full 16-bit range (low bits populated, max 65534), so `mean_brightness`'s `255/65535`
 assumption is correct; exposures of 5s and 15s complete cleanly; `99-asi.rules` raises
