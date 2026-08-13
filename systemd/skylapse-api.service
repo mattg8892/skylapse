@@ -1,0 +1,12 @@
+[Unit]
+Description=Skylapse web API
+After=network.target
+
+[Service]
+ExecStart=/opt/skylapse/venv/bin/uvicorn skylapse.api.main:app --host 0.0.0.0 --port 80
+Restart=always
+RestartSec=5
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,13 @@
+[Unit]
+Description=Skylapse capture daemon
+After=local-fs.target
+
+[Service]
+ExecStart=/opt/skylapse/venv/bin/skylapse-daemon
+Restart=always
+RestartSec=5
+User=skylapse
+SupplementaryGroups=video
+
+[Install]
+WantedBy=multi-user.target

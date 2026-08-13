@@ -1,0 +1,35 @@
+[project]
+name = "skylapse"
+version = "0.1.0"
+description = "Open-source allsky camera software for Raspberry Pi — ZWO and Pi cameras, JPEG+DNG, zero-code setup"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.29",
+    "pydantic>=2.6",
+    "pyyaml>=6.0",
+    "astral>=3.2",
+    "numpy>=1.26",
+    "opencv-python-headless>=4.9",
+    "pidng>=4.0.9",
+    "segno>=1.6",
+]
+
+[project.optional-dependencies]
+zwo = ["zwoasi>=0.1.0"]
+picam = []  # picamera2 comes from apt (python3-picamera2), not pip
+dewheater = ["smbus2>=0.4", "RPi.bme280>=0.2", "gpiozero>=2.0"]  # experimental
+dev = ["pytest>=8.0", "httpx>=0.27"]
+
+[project.scripts]
+skylapse-daemon = "skylapse.daemon.main:main"
+skylapse-netwatch = "skylapse.netwatch.service:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["skylapse"]

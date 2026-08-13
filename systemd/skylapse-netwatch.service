@@ -1,0 +1,15 @@
+[Unit]
+Description=Skylapse network watchdog
+After=NetworkManager.service
+Wants=NetworkManager.service
+
+[Service]
+ExecStart=/opt/skylapse/venv/bin/skylapse-netwatch
+Restart=always
+RestartSec=5
+WatchdogSec=30
+NotifyAccess=main
+Type=notify
+
+[Install]
+WantedBy=multi-user.target
