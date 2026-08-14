@@ -380,6 +380,8 @@ function RawCard({ raw, storage, onRaw }) {
           button. Deeper costs RAM: about 25 MB per frame.
         </p>
 
+        {mode === 'every_frame' && <EnduranceWarning storage={storage} />}
+
         {mode !== 'off' && cost && (
           <p className="rounded-lg bg-zinc-800/60 p-3 text-xs text-zinc-400">
             {cost}
@@ -512,6 +514,67 @@ function UpdateCard({ cfg, showToast, onChannel }) {
         restored automatically.
       </p>
     </Card>
+  )
+}
+
+/**
+ * Sustained-write warning for every-frame RAW.
+ *
+ * Inline and amber rather than a blocking modal: this is a real consideration,
+ * not an error, and a modal trains people to dismiss without reading. It also
+ * never goes away while the mode is active — it can be collapsed to one line,
+ * but a one-time dismissal would be long forgotten by the time a card starts
+ * failing, which is the moment it matters.
+ */
+function EnduranceWarning({ storage }) {
+  const [open, setOpen] = useState(true)
+
+  // The user's actual cost, not a generic figure — sensor size and cadence
+  // vary enormously across rigs. Falls back to a hedged phrase when there is
+  // nothing measured yet.
+  const gb = storage?.every_frame_raw_gb
+  const measured = storage?.raw_measured
+  const frames = storage?.frames_per_night
+  const partial = storage?.basis === 'in_progress'
+  const rate = gb
+    ? `~${gb} GB per night${measured ? '' : ' (estimated)'}`
+    : '~30+ GB per night'
+
+  return (
+    <div className="rounded-lg border border-amber-700/60 bg-amber-950/40 p-3">
+      <button onClick={() => setOpen(!open)}
+        aria-expanded={open}
+        className="flex w-full items-start gap-2 text-left text-sm text-amber-300">
+        <span aria-hidden="true">⚠</span>
+        <span className="flex-1">
+          {open ? 'Heads up: heavy sustained writes' : `Heavy sustained writes — ${rate}`}
+        </span>
+        <span className="shrink-0 text-xs text-amber-500/80">
+          {open ? 'Hide' : 'Details'}
+        </span>
+      </button>
+
+      {open && (
+        <div className="mt-2 space-y-2 text-xs text-amber-200/80">
+          <p>
+            Saving every frame as RAW writes <strong>{rate}</strong>
+            {frames ? ` (${frames.toLocaleString()} frames at ` : ''}
+            {frames
+              ? `${Math.round((storage.raw_bytes_per_frame ?? 0) / 1e6)} MB each)`
+              : ''}
+            {partial && ' — measured from tonight so far, so a full night will be more'}
+            . On a microSD card this is heavy sustained wear; cards can fail
+            suddenly after months of it.
+          </p>
+          <p>
+            Recommended: a high-endurance SD card or a USB SSD for the image
+            store, and keep a config backup off the camera (Settings → Download
+            config, or automatically with every USB export) so recovery is quick
+            if the card does die.
+          </p>
+        </div>
+      )}
+    </div>
   )
 }
 

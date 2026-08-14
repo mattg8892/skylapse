@@ -44,6 +44,10 @@ def night_bytes(night_dir: Path) -> int:
     return sum(f.stat().st_size for f in night_dir.iterdir() if f.is_file())
 
 
+# Used only when a rig has never written a DNG, so there is nothing to measure.
+# Roughly a 12MP 16-bit sensor; the UI hedges the wording when this is in play.
+RAW_BYTES_FALLBACK = 25_000_000
+
 # Walking a 1200-frame night on every 5s status poll (per connected browser)
 # is real work on a Pi, and the answer moves slowly. Cache it.
 _RETENTION_TTL_S = 60
@@ -67,29 +71,52 @@ def _retention(cfg: config.Config) -> dict:
     root = config.IMAGE_ROOT
     per_night = 0
     basis = None
+    frames = 0
+    non_raw = 0
+    raw_sample = 0
     if root.exists():
         for cam in root.iterdir():
             if not cam.is_dir():
                 continue
             nights = sorted((d for d in cam.iterdir() if d.is_dir()),
                             key=lambda d: d.name)
+            measured = None
             if len(nights) >= 2:
-                per_night += night_bytes(nights[-2])
-                basis = "complete"
+                measured, basis = nights[-2], "complete"
             elif nights:
-                per_night += night_bytes(nights[-1])
-                basis = basis or "in_progress"
+                measured, basis = nights[-1], basis or "in_progress"
+            if measured is None:
+                continue
+            per_night += night_bytes(measured)
+            frames += sum(1 for _ in measured.glob(FRAME_GLOB))
+            raws = sorted(measured.glob("img_*.dng"))
+            raw_bytes = sum(f.stat().st_size for f in raws)
+            non_raw += night_bytes(measured) - raw_bytes
+            if raws and not raw_sample:
+                raw_sample = raws[-1].stat().st_size
 
     usable = 0.0
     if root.exists():
         usable = max(0.0, shutil.disk_usage(root).free / 1e9 - cfg.cleanup_free_gb)
     per_night_gb = per_night / 1e9
+
+    # What every-frame RAW would actually cost *this* rig: the night's non-RAW
+    # footprint plus one DNG per frame. Measured from a real DNG where one
+    # exists, since sensor size and bit depth vary by an order of magnitude
+    # across supported cameras and a generic figure would be wrong for most.
+    raw_per_frame = raw_sample or RAW_BYTES_FALLBACK
+    every_frame_gb = (non_raw + frames * raw_per_frame) / 1e9 if frames else None
+
     value = {
         "per_night_gb": round(per_night_gb, 2) if basis else None,
         # Headroom above the cleanup floor, not raw free space: below the floor
         # the oldest nights start being deleted, so that is the real ceiling.
         "nights_remaining": int(usable / per_night_gb) if per_night_gb > 0 else None,
         "basis": basis,
+        "frames_per_night": frames or None,
+        "raw_bytes_per_frame": raw_per_frame,
+        "raw_measured": bool(raw_sample),
+        "every_frame_raw_gb": round(every_frame_gb, 1) if every_frame_gb else None,
     }
     _retention_cache.update(at=now, value=value)
     return value
