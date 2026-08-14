@@ -18,7 +18,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from .. import config, notify, remote, usbexport
+from .. import __version__, config, notify, remote, usbexport
 from ..daemon.pipeline import process
 
 app = FastAPI(title="Skylapse", version="0.1.0")
@@ -156,6 +156,7 @@ def status() -> dict:
         "daemon": daemon,
         "network": _read_status("netwatch"),
         "server_time": time.time(),
+        "version": __version__,
         "setup_complete": cfg.setup_complete,
         "storage": _storage(cfg),
         "current": _current(daemon, cfg),
