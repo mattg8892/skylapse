@@ -6,6 +6,7 @@ config.yaml and /run/skylapse status files — no direct coupling.
 from __future__ import annotations
 
 import json
+import shutil
 import subprocess
 import time
 from pathlib import Path
@@ -34,13 +35,61 @@ def _read_status(name: str) -> dict:
 
 # -- status ----------------------------------------------------------------
 
+def _storage(cfg: config.Config) -> dict:
+    """Free space, nights held, and the cleanup floor — everything the
+    dashboard's storage card needs, so it never has to guess how close the
+    card is to auto-deleting the oldest night."""
+    root = config.IMAGE_ROOT
+    if not root.exists():
+        return {"free_gb": None, "total_gb": None, "nights": 0,
+                "cleanup_free_gb": cfg.cleanup_free_gb}
+    usage = shutil.disk_usage(root)
+    nights = sum(1 for cam in root.iterdir() if cam.is_dir()
+                 for night in cam.iterdir() if night.is_dir())
+    return {
+        "free_gb": round(usage.free / 1e9, 1),
+        "total_gb": round(usage.total / 1e9, 1),
+        "nights": nights,
+        "cleanup_free_gb": cfg.cleanup_free_gb,
+    }
+
+
+def _current(daemon: dict, cfg: config.Config) -> dict:
+    """Which camera and night the UI should act on.
+
+    Derived from the latest frame path rather than added to the daemon's
+    status write: the daemon only records camera_id on camera open, and every
+    per-frame write since then overwrites it. Reading it back out of the path
+    keeps this an API concern and leaves the capture loop alone.
+    """
+    camera_id = night = ""
+    latest = daemon.get("latest")
+    if latest:
+        path = Path(latest)
+        night, camera_id = path.parent.name, path.parent.parent.name
+    if not camera_id:
+        camera_id = cfg.active_camera or next(iter(cfg.cameras), "")
+    if camera_id and not night:
+        cam_root = config.IMAGE_ROOT / camera_id
+        if cam_root.is_dir():
+            nights = sorted(d.name for d in cam_root.iterdir() if d.is_dir())
+            night = nights[-1] if nights else ""
+    has_timelapse = bool(camera_id and night and (
+        config.IMAGE_ROOT / camera_id / night / f"timelapse_{night}.mp4").exists())
+    return {"camera_id": camera_id, "night": night, "timelapse": has_timelapse}
+
+
 @app.get("/api/status")
 def status() -> dict:
+    cfg = config.load()
+    daemon = _read_status("daemon")
     return {
-        "daemon": _read_status("daemon"),
+        "daemon": daemon,
         "network": _read_status("netwatch"),
         "server_time": time.time(),
-        "setup_complete": config.load().setup_complete,
+        "setup_complete": cfg.setup_complete,
+        "storage": _storage(cfg),
+        "current": _current(daemon, cfg),
     }
 
 
@@ -195,6 +244,20 @@ def capture_resume() -> dict:
 
 
 # -- timelapse ---------------------------------------------------------------
+
+@app.get("/api/timelapse/{camera_id}/{night}")
+def timelapse_file(camera_id: str, night: str):
+    """Serve a night's rendered mp4 so the dashboard can play it inline.
+
+    Declared before the render route only for readability — they never
+    collide, since this is GET and the render endpoint is POST under a
+    literal /render/ segment.
+    """
+    path = config.IMAGE_ROOT / camera_id / night / f"timelapse_{night}.mp4"
+    if not path.is_file():
+        raise HTTPException(404, "No timelapse for that night")
+    return FileResponse(path, media_type="video/mp4")
+
 
 @app.post("/api/timelapse/render/{camera_id}/{night}")
 def render_timelapse(camera_id: str, night: str, force: bool = False,
