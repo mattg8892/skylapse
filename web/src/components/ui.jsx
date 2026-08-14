@@ -1,0 +1,116 @@
+// Shared shell pieces. Extracted once the dashboard grew past a single card,
+// so every panel keeps the same dark aesthetic: rounded-2xl zinc panel, sky
+// accent, muted zinc-400 body copy.
+import { useCallback, useState } from 'react'
+
+export function Card({ title, right, children }) {
+  return (
+    <section className="rounded-2xl border border-zinc-800 bg-zinc-900 p-5">
+      {(title || right) && (
+        <div className="flex items-center justify-between gap-3">
+          {title ? <h2 className="font-medium">{title}</h2> : <span />}
+          {right}
+        </div>
+      )}
+      {children}
+    </section>
+  )
+}
+
+export function Toggle({ checked, onChange, label }) {
+  return (
+    <button
+      role="switch" aria-checked={checked} aria-label={label}
+      onClick={() => onChange(!checked)}
+      className={`h-6 w-11 shrink-0 rounded-full transition ${
+        checked ? 'bg-sky-500' : 'bg-zinc-700'}`}>
+      <span className={`block h-5 w-5 rounded-full bg-white transition ${
+        checked ? 'translate-x-5' : 'translate-x-0.5'}`} />
+    </button>
+  )
+}
+
+const TONES = {
+  default: 'border-zinc-700 hover:bg-zinc-800',
+  accent: 'border-sky-600 bg-sky-600/15 text-sky-300 hover:bg-sky-600/25',
+  warn: 'border-amber-600 bg-amber-600/15 text-amber-300 hover:bg-amber-600/25',
+}
+
+export function Button({ children, onClick, disabled, tone = 'default', className = '' }) {
+  return (
+    <button
+      onClick={onClick} disabled={disabled}
+      className={`rounded-lg border px-3 py-2.5 text-sm transition
+        disabled:cursor-not-allowed disabled:opacity-40 ${TONES[tone]} ${className}`}>
+      {children}
+    </button>
+  )
+}
+
+/** Segmented control — used for Auto/Manual exposure and Night/Day profile. */
+export function Segmented({ value, onChange, options }) {
+  return (
+    <div className="flex rounded-lg border border-zinc-700 p-0.5 text-sm">
+      {options.map((o) => (
+        <button
+          key={o.value} onClick={() => onChange(o.value)}
+          className={`flex-1 rounded-md px-3 py-1.5 transition ${
+            value === o.value ? 'bg-zinc-700 text-zinc-100' : 'text-zinc-400 hover:text-zinc-200'}`}>
+          {o.label}
+        </button>
+      ))}
+    </div>
+  )
+}
+
+export function NumberField({ label, value, onChange, min, max, step = 1, suffix }) {
+  return (
+    <label className="flex items-center justify-between gap-3 text-sm">
+      <span className="text-zinc-400">{label}</span>
+      <span className="flex items-center gap-2">
+        <input
+          type="number" value={value} min={min} max={max} step={step}
+          onChange={(e) => e.target.value !== '' && onChange(Number(e.target.value))}
+          className="w-24 rounded-lg border border-zinc-700 bg-zinc-800 px-2 py-1.5 text-right
+                     tabular-nums outline-none focus:border-sky-600" />
+        {suffix && <span className="w-6 text-zinc-500">{suffix}</span>}
+      </span>
+    </label>
+  )
+}
+
+export function Select({ label, value, onChange, options }) {
+  return (
+    <label className="flex items-center justify-between gap-3 text-sm">
+      <span className="text-zinc-400">{label}</span>
+      <select
+        value={value} onChange={(e) => onChange(e.target.value)}
+        className="rounded-lg border border-zinc-700 bg-zinc-800 px-2 py-1.5 outline-none
+                   focus:border-sky-600">
+        {options.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+      </select>
+    </label>
+  )
+}
+
+/** Transient confirmation for fire-and-forget actions (keeper, render, resume). */
+export function useToast() {
+  const [message, setMessage] = useState(null)
+  const show = useCallback((text) => {
+    setMessage(text)
+    setTimeout(() => setMessage((m) => (m === text ? null : m)), 3500)
+  }, [])
+  return [message, show]
+}
+
+export function Toast({ message }) {
+  if (!message) return null
+  return (
+    <div role="status" aria-live="polite"
+      className="pointer-events-none fixed inset-x-0 bottom-6 z-50 flex justify-center px-4">
+      <div className="rounded-full border border-zinc-700 bg-zinc-800/95 px-4 py-2 text-sm shadow-lg">
+        {message}
+      </div>
+    </div>
+  )
+}
