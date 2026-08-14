@@ -11,12 +11,15 @@ import subprocess
 import time
 from pathlib import Path
 
+import yaml
+
 from fastapi import FastAPI, HTTPException, Response
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from .. import config, notify, remote, usbexport
+from ..daemon.pipeline import process
 
 app = FastAPI(title="Skylapse", version="0.1.0")
 
@@ -180,6 +183,25 @@ def get_config() -> dict:
     return cfg
 
 
+@app.get("/api/config/download")
+def download_config():
+    """The live config as YAML, for keeping somewhere the SD card isn't.
+
+    The hotspot password is redacted: this file gets emailed to yourself and
+    dropped in cloud storage, which is not where an AP credential belongs. The
+    copy written to a USB stick during export is deliberately not redacted —
+    that one is for restoring a rig, and it stays on your own drive.
+    """
+    data = config.load().model_dump()
+    if data.get("network", {}).get("hotspot_password"):
+        data["network"]["hotspot_password"] = "<redacted>"
+    name = f"skylapse-config-{time.strftime('%Y-%m-%d')}.yaml"
+    return Response(
+        content=yaml.safe_dump(data, sort_keys=False),
+        media_type="application/x-yaml",
+        headers={"Content-Disposition": f'attachment; filename="{name}"'})
+
+
 @app.put("/api/config")
 def put_config(body: dict) -> dict:
     current = config.load()
@@ -266,8 +288,11 @@ def network_scan() -> list[dict]:
 
 # -- nights browser -----------------------------------------------------------
 
-THUMB_PX = 256
-THUMB_PREFIX = "thumb_"
+# Thumbnails are written at capture time by the daemon (process.save_jpeg).
+# The constants live there; these names are re-exported for the tests and the
+# backfill path below.
+THUMB_PX = process.THUMB_PX
+THUMB_PREFIX = process.THUMB_PREFIX
 
 # A night is one folder holding frames, sidecars, thumbnails and the mp4.
 # Everything that indexes frames filters on img_*.jpg specifically, so
@@ -350,9 +375,12 @@ def night_frames(camera_id: str, night: str, offset: int = 0,
 
 @app.get("/api/nights/{camera_id}/{night}/frame/{name}")
 def night_frame(camera_id: str, night: str, name: str, thumb: bool = False):
-    """One JPEG. thumb=true serves a ~256px version, generated on first request
-    and cached beside the frame — shipping 1200 full-res frames to a phone for a
-    filmstrip is not viable, and pre-generating them would stall the capture loop.
+    """One JPEG, or its filmstrip thumbnail.
+
+    Thumbnails are normally written at capture time, so this just serves them.
+    The generate-on-miss path remains as backfill for nights captured before
+    that existed — and it is a genuine miss path, not the common one: decoding
+    a full-res frame per thumbnail is exactly what made the first scrub slow.
     """
     folder = _night_dir(camera_id, night)
     jpeg = (folder / name).resolve()
@@ -362,17 +390,13 @@ def night_frame(camera_id: str, night: str, name: str, thumb: bool = False):
     if not thumb:
         return FileResponse(jpeg, media_type="image/jpeg")
 
-    thumbnail = folder / f"{THUMB_PREFIX}{jpeg.stem}.jpg"
+    thumbnail = process.thumb_path(jpeg)
     if not thumbnail.exists():
         import cv2
         img = cv2.imread(str(jpeg))
         if img is None:
             raise HTTPException(500, "Could not read frame")
-        h, w = img.shape[:2]
-        scale = THUMB_PX / max(h, w)
-        small = cv2.resize(img, (max(1, int(w * scale)), max(1, int(h * scale))),
-                           interpolation=cv2.INTER_AREA)
-        cv2.imwrite(str(thumbnail), small, [cv2.IMWRITE_JPEG_QUALITY, 80])
+        process.write_thumb(img, thumbnail)
     return FileResponse(thumbnail, media_type="image/jpeg")
 
 

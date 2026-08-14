@@ -93,6 +93,9 @@ class CameraEntry(BaseModel):
     driver: str = ""                     # "zwo" | "picam"
     model: str = ""
     first_seen: float = 0.0
+    capture_schedule: str = "always"     # always | night_only. night_only skips
+                                         # capture while the sun is up; every
+                                         # other subsystem keeps running.
     day: CaptureProfile = Field(default_factory=lambda: CaptureProfile(
         gap_s=60, target_brightness=120, max_exposure_us=100_000, max_gain=50))
     night: CaptureProfile = Field(default_factory=CaptureProfile)

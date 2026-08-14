@@ -36,6 +36,11 @@ const EXPOSURE_OPTIONS = [
   { value: 'manual', label: 'Manual exposure' },
 ]
 
+const SCHEDULE_OPTIONS = [
+  { value: 'always', label: '24/7' },
+  { value: 'night_only', label: 'Night only' },
+]
+
 export default function SettingsScreen({ showToast, storage }) {
   const [cfg, setCfg] = useState(null)
   const [topic, setTopic] = useState(null)
@@ -149,6 +154,23 @@ export default function SettingsScreen({ showToast, storage }) {
         )}
       </Card>
 
+      {/* Backup */}
+      <Card title="Backup">
+        <p className="mt-1 text-sm text-zinc-400">
+          Your settings as a YAML file. SD cards fail; keeping a copy elsewhere
+          turns a rebuild into a restore. A copy is also written to any USB
+          drive you export to.
+        </p>
+        <a href="/api/config/download"
+          className="mt-4 block w-full rounded-lg border border-zinc-700 py-2.5
+                     text-center text-sm hover:bg-zinc-800">
+          Download config
+        </a>
+        <p className="mt-2 text-xs text-zinc-500">
+          The hotspot password is redacted from this download.
+        </p>
+      </Card>
+
       {/* Remote access */}
       <Card title="Remote access">
         <p className="mt-1 text-sm text-zinc-400">
@@ -198,6 +220,19 @@ function CameraSettings({ id, cam, storage, onCamera, onProfile }) {
       <Card title="Capture"
         right={<span className="text-sm text-zinc-500">{cam.label || id}</span>}>
         <div className="mt-3 space-y-4">
+          <div>
+            <p className="mb-2 text-sm text-zinc-400">Capture</p>
+            <Segmented
+              value={cam.capture_schedule === 'night_only' ? 'night_only' : 'always'}
+              options={SCHEDULE_OPTIONS}
+              onChange={(capture_schedule) => onCamera({ capture_schedule })} />
+            <p className="mt-2 text-xs text-zinc-500">
+              Night only pauses capture while the sun is up and picks up again
+              at dusk. Twilight still captures. Timelapse rendering, alerts and
+              focus assist keep working either way.
+            </p>
+          </div>
+
           <Segmented value={period} onChange={setPeriod} options={PERIOD_OPTIONS} />
 
           <NumberField

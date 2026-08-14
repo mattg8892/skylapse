@@ -298,24 +298,55 @@ function NightView({ cameraId, night, showToast, onBack }) {
     return () => { alive = false }
   }, [cameraId, night])
 
-  const frame = frames[index]
+  // Keeper-saved frames are the ones worth finding again, and a badge alone
+  // does not help when they are three needles in 1200 frames.
+  const [dngOnly, setDngOnly] = useState(false)
+  const dngCount = frames.reduce((n, f) => n + (f.has_dng ? 1 : 0), 0)
+  const shown = dngOnly ? frames.filter((f) => f.has_dng) : frames
+
+  const frame = shown[index]
   const frameUrl = frame
     ? `/api/nights/${cameraId}/${night}/frame/${frame.name}` : null
   const dngUrl = frame?.has_dng
     ? `/api/nights/${cameraId}/${night}/raw/${frame.name.replace(/\.jpg$/, '.dng')}`
     : null
 
-  // Chart click -> nearest frame in time. This is the whole point of the chart:
-  // spot the clear stretch, jump straight to it.
-  const seekToTime = useCallback((ts) => {
-    if (!frames.length) return
+  const nearestTo = useCallback((list, ts) => {
     let best = 0, bestGap = Infinity
-    frames.forEach((f, i) => {
+    list.forEach((f, i) => {
       const gap = Math.abs(f.timestamp - ts)
       if (gap < bestGap) { bestGap = gap; best = i }
     })
-    setIndex(best)
-  }, [frames])
+    return best
+  }, [])
+
+  // Toggling the filter keeps you at the same moment in the night rather than
+  // dumping you back at the start.
+  const toggleDngOnly = () => {
+    const ts = shown[index]?.timestamp
+    const next = !dngOnly
+    const list = next ? frames.filter((f) => f.has_dng) : frames
+    setDngOnly(next)
+    setIndex(list.length && ts != null ? nearestTo(list, ts) : 0)
+  }
+
+  const jumpDng = (dir) => {
+    if (dngOnly) {
+      setIndex((i) => Math.min(shown.length - 1, Math.max(0, i + dir)))
+      return
+    }
+    const from = index + dir
+    const step = dir > 0 ? 1 : -1
+    for (let i = from; i >= 0 && i < shown.length; i += step) {
+      if (shown[i].has_dng) { setIndex(i); return }
+    }
+  }
+
+  // Chart click -> nearest frame in time. This is the whole point of the chart:
+  // spot the clear stretch, jump straight to it.
+  const seekToTime = useCallback((ts) => {
+    if (shown.length) setIndex(nearestTo(shown, ts))
+  }, [shown, nearestTo])
 
   return (
     <div className="mt-6 flex flex-col gap-5">
@@ -329,7 +360,8 @@ function NightView({ cameraId, night, showToast, onBack }) {
 
       <Card title="Frames"
         right={<span className="text-sm text-zinc-500">
-          {total ? `${index + 1} / ${total.toLocaleString()}` : '—'}
+          {shown.length ? `${index + 1} / ${shown.length.toLocaleString()}` : '—'}
+          {dngOnly && ' with RAW'}
         </span>}>
         {frame ? (
           <>
@@ -354,13 +386,38 @@ function NightView({ cameraId, night, showToast, onBack }) {
             </div>
 
             <input
-              type="range" min={0} max={Math.max(0, frames.length - 1)} value={index}
+              type="range" min={0} max={Math.max(0, shown.length - 1)} value={index}
               onChange={(e) => setIndex(Number(e.target.value))}
               className="mt-4 w-full accent-sky-500"
               aria-label="Scrub through the night" />
 
-            <Filmstrip cameraId={cameraId} night={night} frames={frames}
+            <Filmstrip cameraId={cameraId} night={night} frames={shown}
               index={index} onPick={setIndex} />
+
+            {dngCount > 0 && (
+              <div className="mt-3 flex flex-wrap items-center gap-2 text-sm">
+                <button onClick={toggleDngOnly}
+                  aria-pressed={dngOnly}
+                  className={`rounded-lg border px-3 py-1.5 transition ${
+                    dngOnly ? 'border-emerald-500 bg-emerald-600/20 text-emerald-300'
+                            : 'border-zinc-700 text-zinc-400 hover:bg-zinc-800'}`}>
+                  DNG frames ({dngCount})
+                </button>
+                <button onClick={() => jumpDng(-1)}
+                  className="rounded-lg border border-zinc-700 px-3 py-1.5
+                             text-zinc-400 hover:bg-zinc-800">
+                  ‹ prev
+                </button>
+                <button onClick={() => jumpDng(1)}
+                  className="rounded-lg border border-zinc-700 px-3 py-1.5
+                             text-zinc-400 hover:bg-zinc-800">
+                  next ›
+                </button>
+                <span className="text-xs text-zinc-500">
+                  {dngOnly ? 'Showing only frames with RAW' : 'Jump between RAW frames'}
+                </span>
+              </div>
+            )}
           </>
         ) : (
           <p className="mt-3 text-sm text-zinc-500">Loading frames…</p>

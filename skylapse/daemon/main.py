@@ -26,12 +26,15 @@ from .dewheater import DewHeater
 from .pipeline.analyze import star_count
 from .. import notify
 from . import nightjobs
-from .scheduler import (SAFETY_BRIGHT_LEVEL, next_exposure, period,
-                        profile_for, safety_should_stop)
+from .scheduler import (SAFETY_BRIGHT_LEVEL, next_dusk, next_exposure, period,
+                        profile_for, safety_should_stop, should_capture)
 
 log = logging.getLogger("skylapse.daemon")
 
 REOPEN_BACKOFF = (5, 15, 60)     # camera disconnect recovery, seconds
+IDLE_POLL_S = 30                 # recheck cadence while a night_only camera
+                                 # waits out the day — short enough that dusk
+                                 # is picked up promptly, long enough to idle
 
 
 class CaptureDaemon:
@@ -47,6 +50,8 @@ class CaptureDaemon:
         self.keeper_buffer: collections.deque[Frame] = collections.deque(maxlen=3)
         self.hotpixels = HotPixelMap(config.IMAGE_ROOT.parent / "calibration")
         self.last_period: str | None = None
+        self.idle_day = False               # night_only camera waiting for dusk
+        self.latest_path: str | None = None
         self.consecutive_bright = 0
         self.focus: FocusSession | None = None
         self.focus_started = 0.0
@@ -163,6 +168,32 @@ class CaptureDaemon:
 
             nightjobs.check_storage_warning(config.IMAGE_ROOT,
                                             self.cfg.cleanup_free_gb)
+
+            # Capture schedule. Deliberately placed after the focus, keeper,
+            # aurora and storage handling above: on a night_only camera those
+            # subsystems must keep working through the day, and focus assist in
+            # particular is a daylight activity — you aim and focus a rig in
+            # daylight and leave it to run at night.
+            if not should_capture(cam, now_period):
+                if not self.idle_day:
+                    self.idle_day = True
+                    log.info("Capture schedule 'night_only' and it is day: "
+                             "pausing capture until dusk")
+                dusk = next_dusk(self.cfg)
+                self._write_status({
+                    "state": "idle_day",
+                    "period": now_period,
+                    "dusk": dusk.timestamp() if dusk else None,
+                    # Keep the last frame so the dashboard shows the sky it saw
+                    # rather than an empty placeholder that reads as a fault.
+                    "latest": self.latest_path,
+                })
+                time.sleep(IDLE_POLL_S)
+                continue
+            if self.idle_day:
+                self.idle_day = False
+                log.info("Dusk reached; resuming capture")
+
             try:
                 prev_exposure, prev_gain = self.exposure_us, self.gain
                 self.exposure_us, self.gain = next_exposure(
@@ -219,10 +250,11 @@ class CaptureDaemon:
                      frame._stars if frame._stars is not None else "-",
                      "yes" if dng_saved else "no", jpeg.name)
 
+            self.latest_path = str(jpeg)
             self._write_status({
                 "state": "capturing",
                 "period": period(self.cfg),
-                "latest": str(jpeg),
+                "latest": self.latest_path,
                 "exposure_us": self.exposure_us,
                 "gain": self.gain,
                 "brightness": round(self.last_brightness, 1),

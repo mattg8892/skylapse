@@ -161,6 +161,19 @@ function FocusElsewhere({ showToast, onOpenFocus }) {
 }
 
 function StatusLine({ daemon: d }) {
+  // A night_only camera sitting out the day looks identical to a broken one
+  // unless we say why it is quiet and when it will wake up.
+  if (d.state === 'idle_day') {
+    const when = d.dusk
+      ? new Date(d.dusk * 1000).toLocaleTimeString([], {
+          hour: '2-digit', minute: '2-digit' })
+      : null
+    return (
+      <p className="text-sm text-amber-300">
+        Idle until dusk{when ? ` at ${when}` : ''} · night-only schedule
+      </p>
+    )
+  }
   if (d.state !== 'capturing') {
     return <p className="text-sm text-zinc-500">{d.state ?? 'idle'}</p>
   }

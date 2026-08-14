@@ -261,11 +261,31 @@ def _copy(src: Path, dest: Path, done: int, total: int, files_done: int,
     return done
 
 
+def write_config_backup(mountpoint: Path) -> Path | None:
+    """Drop the live config alongside the export.
+
+    SD cards die, and a rig's value is as much in its tuned profiles as in its
+    frames. Putting the config on the same stick that carries the images makes
+    a rebuild a copy rather than an afternoon of remembering settings.
+    """
+    src = config.CONFIG_PATH
+    if not src.is_file():
+        return None
+    dest = (mountpoint / EXPORT_DIRNAME
+            / f"config-backup-{time.strftime('%Y-%m-%d')}.yaml")
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(src, dest)
+    log.info("Wrote config backup to %s", dest)
+    return dest
+
+
 def _run_job(mountpoint: Path, job: dict, device: str) -> None:
     done = 0
     total = job["bytes_total"]
     files_total = job["files_total"]
     try:
+        # First, so a backup exists even if the copy is interrupted later.
+        write_config_backup(mountpoint)
         for i, (src, rel) in enumerate(job["items"]):
             done = _copy(src, mountpoint / rel, done, total, i, files_total,
                          device, str(mountpoint))

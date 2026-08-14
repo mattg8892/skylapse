@@ -14,6 +14,12 @@ import numpy as np
 from ...config import IMAGE_ROOT
 from ..drivers.base import BayerPattern, Frame
 
+# Filmstrip thumbnails. Canonical here because they are written at capture
+# time; the API imports these rather than keeping its own copy.
+THUMB_PX = 256
+THUMB_PREFIX = "thumb_"
+THUMB_QUALITY = 80
+
 _CV_BAYER = {
     BayerPattern.RGGB: cv2.COLOR_BayerBG2BGR,   # OpenCV naming is inverted
     BayerPattern.BGGR: cv2.COLOR_BayerRG2BGR,
@@ -83,7 +89,28 @@ def save_jpeg(frame: Frame, camera_id: str, quality: int = 92,
     stamp = datetime.fromtimestamp(frame.timestamp).strftime("%Y%m%d_%H%M%S")
     path = folder / f"img_{stamp}.jpg"
     cv2.imwrite(str(path), img, [cv2.IMWRITE_JPEG_QUALITY, quality])
+    # Thumbnail now, while the debayered array is already in memory. Generating
+    # these on demand meant the first scrub of a 1200-frame night made a phone
+    # wait on 1200 full-res decodes; here it costs a resize we have paid for.
+    write_thumb(img, thumb_path(path))
     _write_sidecar(path, frame)
+    return path
+
+
+def thumb_path(jpeg_path: Path) -> Path:
+    """Thumbnail location for a frame: thumb_<stem>.jpg beside it."""
+    return jpeg_path.parent / f"{THUMB_PREFIX}{jpeg_path.stem}.jpg"
+
+
+def write_thumb(img_bgr: np.ndarray, path: Path) -> Path:
+    """Downscale an already-decoded BGR frame to THUMB_PX on its long edge."""
+    h, w = img_bgr.shape[:2]
+    scale = THUMB_PX / max(h, w)
+    if scale < 1.0:
+        img_bgr = cv2.resize(
+            img_bgr, (max(1, int(w * scale)), max(1, int(h * scale))),
+            interpolation=cv2.INTER_AREA)
+    cv2.imwrite(str(path), img_bgr, [cv2.IMWRITE_JPEG_QUALITY, THUMB_QUALITY])
     return path
 
 

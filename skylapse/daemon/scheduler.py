@@ -4,7 +4,7 @@ Both are pure functions over inputs so they're trivially unit-testable.
 """
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from astral import LocationInfo
 from astral.sun import elevation
@@ -33,6 +33,45 @@ def profile_for(cfg: Config, cam: CameraEntry,
                 when: datetime | None = None) -> CaptureProfile:
     p = period(cfg, when)
     return cam.day if p == "day" else cam.night   # twilight uses night profile
+
+
+def should_capture(cam: CameraEntry, current_period: str) -> bool:
+    """Whether the capture schedule allows a frame right now.
+
+    `night_only` skips daylight for allsky rigs whose owners do not want a
+    day's worth of blue-sky frames filling the card. Twilight still captures:
+    it is when the interesting sky starts, and it already uses the night
+    profile, so treating it as day would cut off exactly the part people set an
+    allsky camera up for.
+    """
+    if cam.capture_schedule != "night_only":
+        return True
+    return current_period != "day"
+
+
+def next_dusk(cfg: Config, when: datetime | None = None) -> datetime | None:
+    """When the sun next drops below the horizon.
+
+    This is what "idle until dusk" means, so it matches the same threshold
+    `period()` uses to stop calling it day. None inside the polar circles,
+    where the sun may not set at all — the UI says "when the sun sets" instead
+    of inventing a time.
+    """
+    from astral.sun import sunset
+
+    when = when or datetime.now(timezone.utc)
+    loc = LocationInfo(latitude=cfg.location.latitude,
+                       longitude=cfg.location.longitude)
+    for offset in (0, 1):
+        try:
+            candidate = sunset(loc.observer,
+                               (when + timedelta(days=offset)).date(),
+                               tzinfo=timezone.utc)
+        except ValueError:
+            continue           # sun does not cross the horizon on that date
+        if candidate > when:
+            return candidate
+    return None
 
 
 # Manual-mode safety stop: trip on daylight or repeated near-saturation.
