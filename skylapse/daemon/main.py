@@ -18,7 +18,9 @@ from .. import config
 from .drivers.base import CameraDriver, CameraError, Frame, detect_camera
 from .pipeline import process
 from .pipeline.hotpixel import HotPixelMap
-from .focus import TIMEOUT_S as FOCUS_TIMEOUT, FocusSession, sharpness
+from .focus import (DEFAULT_EXPOSURE_MS as FOCUS_DEFAULT_EXPOSURE_MS,
+                    DEFAULT_GAIN as FOCUS_DEFAULT_GAIN,
+                    TIMEOUT_S as FOCUS_TIMEOUT, FocusSession, sharpness)
 from . import aurora
 from .dewheater import DewHeater
 from .pipeline.analyze import star_count
@@ -283,11 +285,28 @@ class CaptureDaemon:
                 self.focus = None
                 log.info("Focus mode OFF")
 
-    def _focus_frame(self) -> None:
-        """One rapid frame -> score -> status. Never saved."""
-        import numpy as np
+    def _focus_controls(self) -> tuple[int, int]:
+        """Live exposure/gain for focus mode.
+
+        Re-read from the control file before every frame rather than latched at
+        session start, so moving a slider on the phone lands on the very next
+        capture — which is the whole point of a live view.
+        """
+        exposure_ms, gain = FOCUS_DEFAULT_EXPOSURE_MS, FOCUS_DEFAULT_GAIN
         try:
-            self.driver.set_controls(1_000_000, 250)      # 1s, hot gain
+            data = json.loads((config.RUN_DIR / "focus_ctl.json").read_text())
+            exposure_ms = int(data.get("exposure_ms", exposure_ms))
+            gain = int(data.get("gain", gain))
+        except (OSError, ValueError, TypeError):
+            pass                      # no file yet, or garbage: use defaults
+        return max(1, exposure_ms) * 1000, max(0, gain)
+
+    def _focus_frame(self) -> None:
+        """One rapid frame -> preview + score -> status. Never saved to the store."""
+        import numpy as np
+        exposure_us, gain = self._focus_controls()
+        try:
+            self.driver.set_controls(exposure_us, gain)
             frame = self.driver.capture()
         except CameraError:
             log.exception("Focus capture failed; reopening camera")
@@ -297,8 +316,13 @@ class CaptureDaemon:
         dtype = np.uint16 if frame.bit_depth > 8 else np.uint8
         arr = np.frombuffer(frame.data, dtype=dtype).reshape(
             frame.height, frame.width)
+        # Full resolution on purpose: the API crops this server-side for zoom,
+        # so 8x/10x shows real sensor detail instead of an upscaled thumbnail.
+        process.write_preview(frame, config.RUN_DIR / "focus_full.jpg")
         info = self.focus.update(sharpness(arr))
-        self._write_status({"state": "focusing", **info})
+        self._write_status({"state": "focusing", "exposure_us": frame.exposure_us,
+                            "gain": frame.gain, "width": frame.width,
+                            "height": frame.height, **info})
 
     def _poll_keeper_command(self) -> None:
         """UI 'save RAW' button: dump the rolling raw buffer to DNGs."""

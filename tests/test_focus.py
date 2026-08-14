@@ -29,10 +29,26 @@ def test_session_tracks_best_and_trend():
     s = FocusSession()
     for score in (10.0, 14.0, 19.0, 25.0, 31.0):   # turning the right way
         info = s.update(score)
-    assert info["best"] == 31.0
     assert info["trend"] == "improving"
+    # Reported values are a 3-frame rolling mean, so best trails the raw peak
+    # of 31.0 — deliberately, see FocusSession.update.
+    assert info["best"] == round((19.0 + 25.0 + 31.0) / 3, 1)
+    assert info["score"] == info["best"]
+
     for score in (28.0, 22.0, 15.0, 11.0, 8.0):    # overshot the peak
         info = s.update(score)
-    assert info["best"] == 31.0                    # best remembers the peak
+    assert info["best"] == round((25.0 + 31.0 + 28.0) / 3, 1)  # remembers the peak
     assert info["trend"] == "worsening"
     assert info["frames"] == 10
+
+
+def test_smoothing_suppresses_single_frame_noise():
+    """The whole reason for smoothing: one noisy frame must not look like a
+    focus change big enough to chase."""
+    steady, spike = FocusSession(), FocusSession()
+    for _ in range(5):
+        steady.update(100.0)
+    for score in (100.0, 100.0, 100.0, 100.0, 160.0):   # one 60% outlier
+        info = spike.update(score)
+    assert info["score"] < 125.0, "a lone spike moved the reported score too far"
+    assert info["score_raw"] == 160.0, "raw value should still be available"

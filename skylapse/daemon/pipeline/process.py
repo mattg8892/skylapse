@@ -46,15 +46,34 @@ def day_folder(ts: float, camera_id: str) -> Path:
     return folder
 
 
-def save_jpeg(frame: Frame, camera_id: str, quality: int = 92,
-              overlay: bool = False, stars: int | None = None) -> Path:
+def to_bgr(frame: Frame) -> np.ndarray:
+    """Raw bayer -> 8-bit BGR. Shared by the JPEG writer and the focus preview
+    so the live view shows exactly what a saved frame would look like."""
     arr = _as_array(frame)
-    if frame.bayer == BayerPattern.MONO:
-        img = arr
-    else:
-        img = cv2.demosaicing(arr, _CV_BAYER[frame.bayer])
+    img = arr if frame.bayer == BayerPattern.MONO \
+        else cv2.demosaicing(arr, _CV_BAYER[frame.bayer])
     if frame.bit_depth > 8:
         img = (img.astype(np.float32) / 257.0).astype(np.uint8)
+    return img
+
+
+def write_preview(frame: Frame, path: Path, quality: int = 85) -> Path:
+    """Full-resolution JPEG to an arbitrary path, no sidecar.
+
+    Used for the focus live view, which writes to /run (a tmpfs) — focus
+    frames must never reach the image store, and keeping them off the SD card
+    also keeps them off its write budget.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".tmp.jpg")
+    cv2.imwrite(str(tmp), to_bgr(frame), [cv2.IMWRITE_JPEG_QUALITY, quality])
+    tmp.replace(path)        # atomic: the API never serves a half-written frame
+    return path
+
+
+def save_jpeg(frame: Frame, camera_id: str, quality: int = 92,
+              overlay: bool = False, stars: int | None = None) -> Path:
+    img = to_bgr(frame)
     if overlay:
         from .analyze import burn_overlay
         img = burn_overlay(np.ascontiguousarray(img), frame.timestamp,

@@ -3,14 +3,11 @@
 import { useEffect, useState } from 'react'
 import SettingsScreen from './SettingsScreen.jsx'
 import NightsScreen from './NightsScreen.jsx'
+import FocusScreen from './FocusScreen.jsx'
 import { Button, Card, Toast, useToast } from '../components/ui.jsx'
 
-// Mirrors focus.TIMEOUT_S. Duplicated rather than fetched: it only drives a
-// countdown label, and the daemon enforces the real deadline regardless.
-const FOCUS_TIMEOUT_MS = 15 * 60 * 1000
-
 export default function Dashboard({ status }) {
-  const [view, setView] = useState('dashboard')   // dashboard | nights | settings
+  const [view, setView] = useState('dashboard')   // dashboard | nights | settings | focus
   const [toast, showToast] = useToast()
   const d = status.daemon ?? {}
   const current = status.current ?? {}
@@ -50,11 +47,24 @@ export default function Dashboard({ status }) {
           onBack={() => setView('dashboard')} />
       )}
 
+      {view === 'focus' && (
+        <FocusScreen showToast={showToast} onExit={() => setView('dashboard')} />
+      )}
+
       {view === 'dashboard' && (
         <main className="mt-6 flex flex-col gap-5">
           <LatestFrame daemon={d} showToast={showToast} />
           <SafetyBanner daemon={d} showToast={showToast} />
-          <FocusCard showToast={showToast} />
+          <Card title="Focus assist">
+            <p className="mt-1 text-sm text-zinc-400">
+              A live view with zoom, exposure and gain controls, and a sharpness
+              score to chase. Nothing is written to the card while focusing, and
+              the session exits by itself after 15 minutes.
+            </p>
+            <Button onClick={() => setView('focus')} className="mt-4 w-full">
+              Start focus assist
+            </Button>
+          </Card>
           <StorageCard storage={status.storage} />
         </main>
       )}
@@ -165,104 +175,6 @@ function SafetyBanner({ daemon: d, showToast }) {
         </div>
         <Button tone="warn" onClick={resume} className="shrink-0">Resume</Button>
       </div>
-    </Card>
-  )
-}
-
-/* -- focus assist ---------------------------------------------------------- */
-
-const TREND_LABEL = { improving: '▲ sharper', worsening: '▼ softer', flat: '— steady' }
-const TREND_CLASS = {
-  improving: 'text-emerald-400', worsening: 'text-rose-400', flat: 'text-zinc-400',
-}
-
-function FocusCard({ showToast }) {
-  const [active, setActive] = useState(false)
-  const [info, setInfo] = useState(null)
-  const [startedAt, setStartedAt] = useState(0)
-  const [now, setNow] = useState(Date.now())
-
-  // Focus needs far tighter feedback than the app's 5s status poll — you are
-  // turning a ring and watching the number move. Poll fast, but only while on.
-  useEffect(() => {
-    if (!active) return
-    let alive = true
-    const id = setInterval(async () => {
-      if (!alive) return
-      setNow(Date.now())
-      try {
-        const s = await (await fetch('/api/status')).json()
-        if (!alive) return
-        const d = s.daemon ?? {}
-        if (d.state === 'focusing') {
-          setInfo(d)
-        } else if (Date.now() - startedAt > 6000) {
-          // Daemon dropped out of focus mode on its own: the 15-minute auto-exit.
-          setActive(false)
-          setInfo(null)
-          showToast('Focus mode ended')
-        }
-      } catch { /* transient; next tick retries */ }
-    }, 1000)
-    return () => { alive = false; clearInterval(id) }
-  }, [active, startedAt, showToast])
-
-  const start = async () => {
-    await fetch('/api/focus/start', { method: 'POST' }).catch(() => {})
-    setStartedAt(Date.now())
-    setNow(Date.now())
-    setInfo(null)
-    setActive(true)
-    showToast('Focus mode on — turn the ring until the score peaks')
-  }
-
-  const stop = async () => {
-    await fetch('/api/focus/stop', { method: 'POST' }).catch(() => {})
-    setActive(false)
-    setInfo(null)
-    showToast('Focus mode off')
-  }
-
-  const remaining = Math.max(0, FOCUS_TIMEOUT_MS - (now - startedAt))
-  const mm = Math.floor(remaining / 60000)
-  const ss = String(Math.floor((remaining % 60000) / 1000)).padStart(2, '0')
-
-  return (
-    <Card
-      title="Focus assist"
-      right={active && (
-        <span className="text-sm tabular-nums text-sky-400">auto-exit in {mm}:{ss}</span>
-      )}>
-      <p className="mt-1 text-sm text-zinc-400">
-        Rapid throwaway frames with a live sharpness score — turn the focus ring
-        until the number peaks. Nothing is written to the card while focusing,
-        and the session exits by itself after 15 minutes so a forgotten session
-        can’t cost you the night.
-      </p>
-
-      {active && (
-        <div className="mt-4 grid grid-cols-3 gap-3 rounded-xl bg-zinc-800/60 p-4 text-center">
-          <div>
-            <p className="text-xs text-zinc-500">Score</p>
-            <p className="text-2xl tabular-nums">{info?.score ?? '—'}</p>
-          </div>
-          <div>
-            <p className="text-xs text-zinc-500">Best</p>
-            <p className="text-2xl tabular-nums text-zinc-300">{info?.best ?? '—'}</p>
-          </div>
-          <div>
-            <p className="text-xs text-zinc-500">Trend</p>
-            <p className={`pt-1.5 text-lg ${TREND_CLASS[info?.trend] ?? 'text-zinc-400'}`}>
-              {TREND_LABEL[info?.trend] ?? '—'}
-            </p>
-          </div>
-        </div>
-      )}
-
-      <Button onClick={active ? stop : start} tone={active ? 'warn' : 'default'}
-        className="mt-4 w-full">
-        {active ? 'Stop focus assist' : 'Start focus assist'}
-      </Button>
     </Card>
   )
 }

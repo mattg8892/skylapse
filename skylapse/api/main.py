@@ -11,7 +11,7 @@ import subprocess
 import time
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Response
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -417,6 +417,62 @@ def focus_stop() -> dict:
     config.RUN_DIR.mkdir(parents=True, exist_ok=True)
     (config.RUN_DIR / "focus_stop").touch()
     return {"ok": True}
+
+
+class FocusControls(BaseModel):
+    exposure_ms: int = 500
+    gain: int = 250
+
+
+@app.post("/api/focus/controls")
+def focus_controls(body: FocusControls) -> dict:
+    """Exposure/gain for the live view. The daemon re-reads this before every
+    focus frame, so a slider move applies on the next capture."""
+    config.RUN_DIR.mkdir(parents=True, exist_ok=True)
+    payload = {"exposure_ms": max(1, body.exposure_ms), "gain": max(0, body.gain)}
+    (config.RUN_DIR / "focus_ctl.json").write_text(json.dumps(payload))
+    return {"ok": True, **payload}
+
+
+ZOOM_LEVELS = (1, 2, 4, 8, 10)
+
+
+@app.get("/api/focus/live")
+def focus_live(zoom: int = 1, cx: float = 0.5, cy: float = 0.5):
+    """The latest focus frame, optionally cropped.
+
+    Cropping happens here, on the full-resolution frame, and the crop is
+    returned at native scale. That is what makes 8x and 10x worth having: they
+    show real sensor detail. Scaling a downsized preview up in the browser
+    would just show bigger blur and tell you nothing about focus.
+    """
+    path = config.RUN_DIR / "focus_full.jpg"
+    if not path.is_file():
+        raise HTTPException(404, "No focus frame yet")
+
+    # Never cached: the whole file is one frame of a live view, and the URL is
+    # stable, so without this the browser would happily show a stale frame.
+    headers = {"Cache-Control": "no-store, no-cache, must-revalidate",
+               "Pragma": "no-cache"}
+
+    zoom = zoom if zoom in ZOOM_LEVELS else 1
+    if zoom == 1:
+        return FileResponse(path, media_type="image/jpeg", headers=headers)
+
+    import cv2
+    img = cv2.imread(str(path))
+    if img is None:
+        raise HTTPException(503, "Focus frame not readable yet")
+    h, w = img.shape[:2]
+    cw, ch = max(1, w // zoom), max(1, h // zoom)
+    # Clamp the window so a pan to the edge slides rather than falling off.
+    x0 = min(max(0, int(cx * w) - cw // 2), w - cw)
+    y0 = min(max(0, int(cy * h) - ch // 2), h - ch)
+    ok, buf = cv2.imencode(".jpg", img[y0:y0 + ch, x0:x0 + cw],
+                           [cv2.IMWRITE_JPEG_QUALITY, 85])
+    if not ok:
+        raise HTTPException(500, "Could not encode crop")
+    return Response(content=buf.tobytes(), media_type="image/jpeg", headers=headers)
 
 
 # -- capture control ---------------------------------------------------------

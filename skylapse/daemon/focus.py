@@ -12,6 +12,12 @@ import numpy as np
 
 CENTER_FRACTION = 0.5        # center 50% per axis = center 25% by area
 TIMEOUT_S = 15 * 60          # auto-exit: you WILL walk away and forget
+SMOOTH_FRAMES = 3            # rolling mean applied to the reported score
+
+# Live-view defaults. Short enough to feel responsive while turning a ring,
+# hot enough to show faint stars; both are overridable per frame from the UI.
+DEFAULT_EXPOSURE_MS = 500
+DEFAULT_GAIN = 250
 
 
 def sharpness(arr: np.ndarray) -> float:
@@ -33,14 +39,31 @@ class FocusSession:
 
     def __init__(self) -> None:
         self.best = 0.0
-        self.history: list[float] = []
+        self.history: list[float] = []      # raw scores, one per frame
+        self.smoothed: list[float] = []     # what the UI is shown
 
     def update(self, score: float) -> dict:
-        self.best = max(self.best, score)
+        """Fold in one frame's raw score and report the smoothed view.
+
+        Raw variance-of-Laplacian jitters several percent frame to frame on
+        sensor noise alone, which is the same order as the change you get from
+        a small nudge of the focus ring — so the raw number is unusable for
+        judging whether you just improved things. Everything reported here
+        (score, best, trend) is derived from a rolling mean of the last
+        SMOOTH_FRAMES frames, which means `best` lags the raw peak slightly.
+        That is the intended trade: a stable number you can actually chase.
+        """
         self.history.append(score)
-        recent = self.history[-5:]
+        window = self.history[-SMOOTH_FRAMES:]
+        smoothed = sum(window) / len(window)
+        self.smoothed.append(smoothed)
+        self.best = max(self.best, smoothed)
+
+        recent = self.smoothed[-5:]
         trend = "improving" if len(recent) >= 2 and recent[-1] > recent[0] \
             else "worsening" if len(recent) >= 2 and recent[-1] < recent[0] \
             else "flat"
-        return {"score": round(score, 1), "best": round(self.best, 1),
-                "trend": trend, "frames": len(self.history)}
+        return {"score": round(smoothed, 1), "best": round(self.best, 1),
+                "trend": trend, "frames": len(self.history),
+                # Raw value alongside, for the sparkline's per-frame detail.
+                "score_raw": round(score, 1)}
