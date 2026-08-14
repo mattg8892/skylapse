@@ -20,8 +20,10 @@ Two things shape the implementation:
 """
 from __future__ import annotations
 
+import getpass
 import json
 import logging
+import shutil
 import subprocess
 import sys
 import time
@@ -173,6 +175,26 @@ def _set_status(**fields) -> None:
 
 # -- applying ---------------------------------------------------------------
 
+def _worker_command(target_ref: str, apply_now: bool) -> list[str]:
+    """How to launch the worker so it survives restarting skylapse-api.
+
+    start_new_session alone is not enough: a child of the API inherits its
+    systemd cgroup, and stopping that unit kills everything in it — including
+    the updater, mid-flight. systemd-run puts the worker in its own transient
+    unit, outside that cgroup. --uid keeps it running as the service user so
+    the checkout does not end up owned by root.
+    """
+    inner = [sys.executable, "-m", "skylapse.updater", "apply", target_ref]
+    if apply_now:
+        inner.append("--now")
+    if shutil.which("systemd-run"):
+        return ["sudo", "-n", "systemd-run", "--collect", "--quiet",
+                f"--uid={getpass.getuser()}",
+                f"--working-directory={repo_root()}",
+                "--unit=skylapse-update", *inner]
+    return inner
+
+
 def start(target_ref: str, apply_now: bool = False) -> dict:
     """Spawn the detached worker that actually performs the update."""
     current = status()
@@ -180,11 +202,10 @@ def start(target_ref: str, apply_now: bool = False) -> dict:
         return {"ok": False, "error": "An update is already in progress"}
     _set_status(state="waiting", target=target_ref,
                 message="Update queued" if not apply_now else "Starting")
-    subprocess.Popen(
-        [sys.executable, "-m", "skylapse.updater", "apply", target_ref]
-        + (["--now"] if apply_now else []),
-        cwd=str(repo_root()), start_new_session=True,
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    cmd = _worker_command(target_ref, apply_now)
+    detached = cmd[0] != "sudo"       # only the fallback needs its own session
+    subprocess.Popen(cmd, cwd=str(repo_root()), start_new_session=detached,
+                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     return {"ok": True, "target": target_ref, "deferred": not apply_now}
 
 
@@ -193,11 +214,37 @@ def _changed_paths(from_ref: str, to_ref: str) -> set[str]:
     return {line.strip() for line in out.splitlines() if line.strip()}
 
 
+def service_start_id(unit: str) -> str:
+    """A token that changes if and only if the unit actually restarted.
+
+    MainPID plus the monotonic start timestamp. Without this the health check
+    cannot tell a successful restart from one that never happened — and a
+    daemon that is still running the *old* code from memory looks perfectly
+    healthy, which is exactly how a broken build once sailed through.
+    """
+    out = _run(["systemctl", "show", unit, "-p", "MainPID",
+                "-p", "ExecMainStartTimestampMonotonic"], timeout=30).stdout
+    return " ".join(sorted(line.strip() for line in out.splitlines() if line.strip()))
+
+
 def _restart_services() -> bool:
     result = _run(["sudo", "-n", "systemctl", "restart", *SERVICES], timeout=120)
     if result.returncode != 0:
-        log.error("Service restart failed: %s", result.stderr.strip())
+        log.error("Service restart failed (%s): %s",
+                  result.returncode, (result.stderr or "").strip())
     return result.returncode == 0
+
+
+def _restarts_took_effect(before: dict[str, str], timeout_s: int = 30) -> bool:
+    """Confirm every service really came back as a new process."""
+    deadline = time.time() + timeout_s
+    while time.time() < deadline:
+        if all(service_start_id(u) != before.get(u) for u in SERVICES):
+            return True
+        time.sleep(2)
+    stale = [u for u in SERVICES if service_start_id(u) == before.get(u)]
+    log.error("Services did not restart: %s", ", ".join(stale))
+    return False
 
 
 def _healthy() -> bool:
@@ -269,9 +316,13 @@ def apply(target_ref: str, apply_now: bool = False) -> dict:
 
     _set_status(state="running", target=target_ref, prior=prior[:7],
                 message="Restarting services")
-    _restart_services()
+    before = {u: service_start_id(u) for u in SERVICES}
+    restarted = _restart_services()
 
-    if _wait_healthy():
+    # All three must hold. Dropping any one of them lets a broken build pass:
+    # a failed restart leaves the old process happily serving old code, which
+    # reads as healthy by every other measure.
+    if restarted and _restarts_took_effect(before) and _wait_healthy():
         new_head = _run(["git", "rev-parse", "HEAD"]).stdout.strip()
         _set_status(state="done", target=target_ref, prior=prior[:7],
                     head=new_head[:7], message="Update complete")

@@ -161,6 +161,8 @@ def test_unhealthy_update_rolls_back(tmp_path, monkeypatch):
     monkeypatch.setattr(updater, "_run", fake_run)
     monkeypatch.setattr(updater, "_changed_paths", lambda a, b: set())
     monkeypatch.setattr(updater, "_restart_services", lambda: True)
+    monkeypatch.setattr(updater, "_restarts_took_effect",
+                        lambda before, timeout_s=30: True)
     # Never healthy after the update; healthy again after the rollback.
     healthy = iter([False, True])
     monkeypatch.setattr(updater, "_wait_healthy",
@@ -189,11 +191,94 @@ def test_successful_update_does_not_roll_back(tmp_path, monkeypatch):
     monkeypatch.setattr(updater, "_run", fake_run)
     monkeypatch.setattr(updater, "_changed_paths", lambda a, b: set())
     monkeypatch.setattr(updater, "_restart_services", lambda: True)
+    monkeypatch.setattr(updater, "_restarts_took_effect",
+                        lambda before, timeout_s=30: True)
     monkeypatch.setattr(updater, "_wait_healthy", lambda deadline_s=60: True)
 
     assert updater.apply("v0.2.0", apply_now=True)["ok"] is True
     assert checkouts == ["v0.2.0"]
     assert updater.status()["state"] == "done"
+
+
+def test_a_restart_that_never_happened_is_not_healthy(tmp_path, monkeypatch):
+    """Regression: a silently-failed restart left the OLD process running the
+    OLD code, which passed every health check and let a broken build through.
+    """
+    monkeypatch.setattr(config, "RUN_DIR", tmp_path)
+    checkouts = []
+
+    def fake_run(cmd, timeout=300, cwd=None):
+        class R:
+            returncode = 0
+            stderr = ""
+            stdout = "priorsha" if cmd[:2] == ["git", "rev-parse"] else ""
+        if cmd[:2] == ["git", "checkout"]:
+            checkouts.append(cmd[-1])
+        return R()
+
+    monkeypatch.setattr(updater, "_run", fake_run)
+    monkeypatch.setattr(updater, "_changed_paths", lambda a, b: set())
+    monkeypatch.setattr(updater, "_restart_services", lambda: True)
+    monkeypatch.setattr(updater, "_restarts_took_effect",
+                        lambda before, timeout_s=30: False)
+    # Everything else looks fine, because the old process is still serving.
+    monkeypatch.setattr(updater, "_wait_healthy", lambda deadline_s=60: True)
+
+    result = updater.apply("v9.9.9", apply_now=True)
+    assert result["ok"] is False, "unrestarted services were accepted as updated"
+    assert checkouts == ["v9.9.9", "priorsha"]
+
+
+def test_restarts_took_effect_detects_an_unchanged_unit(monkeypatch):
+    """The identity token must actually change, or the gate is decorative."""
+    monkeypatch.setattr(updater.time, "sleep", lambda s: None)
+    monkeypatch.setattr(updater, "service_start_id", lambda unit: "same")
+    assert updater._restarts_took_effect({u: "same" for u in updater.SERVICES},
+                                         timeout_s=1) is False
+
+    monkeypatch.setattr(updater, "service_start_id", lambda unit: "new")
+    assert updater._restarts_took_effect({u: "old" for u in updater.SERVICES},
+                                         timeout_s=1) is True
+
+
+def test_failed_restart_command_rolls_back(tmp_path, monkeypatch):
+    """apply() used to ignore the restart's return value entirely."""
+    monkeypatch.setattr(config, "RUN_DIR", tmp_path)
+    checkouts = []
+
+    def fake_run(cmd, timeout=300, cwd=None):
+        class R:
+            returncode = 0
+            stderr = ""
+            stdout = "priorsha" if cmd[:2] == ["git", "rev-parse"] else ""
+        if cmd[:2] == ["git", "checkout"]:
+            checkouts.append(cmd[-1])
+        return R()
+
+    monkeypatch.setattr(updater, "_run", fake_run)
+    monkeypatch.setattr(updater, "_changed_paths", lambda a, b: set())
+    monkeypatch.setattr(updater, "_restart_services", lambda: False)
+    monkeypatch.setattr(updater, "_wait_healthy", lambda deadline_s=60: True)
+
+    assert updater.apply("v9.9.9", apply_now=True)["ok"] is False
+    assert checkouts == ["v9.9.9", "priorsha"]
+
+
+def test_worker_escapes_the_api_cgroup(monkeypatch):
+    """Regression: a plain child of skylapse-api is killed when that unit
+    restarts, which is the one thing the updater must do."""
+    monkeypatch.setattr(updater.shutil, "which", lambda name: "/usr/bin/systemd-run")
+    cmd = updater._worker_command("v0.2.0", apply_now=True)
+    assert cmd[0] == "sudo" and "systemd-run" in cmd
+    assert any(a.startswith("--uid=") for a in cmd), "would run the checkout as root"
+    assert cmd[-1] == "--now" and "v0.2.0" in cmd
+
+
+def test_worker_falls_back_without_systemd_run(monkeypatch):
+    monkeypatch.setattr(updater.shutil, "which", lambda name: None)
+    cmd = updater._worker_command("v0.2.0", apply_now=False)
+    assert cmd[0] != "sudo"
+    assert cmd[-2:] == ["apply", "v0.2.0"]
 
 
 def test_build_only_runs_what_changed(tmp_path, monkeypatch):
