@@ -1,8 +1,11 @@
-// Focus assist as a live view. The image is the centrepiece — you are standing
-// at the camera turning a ring, so everything else is arranged around keeping
-// that picture large and current.
+// Focus assist as a live view.
+//
+// Laid out for the situation it is actually used in: standing at the camera in
+// the dark, holding a phone in portrait, one hand on the focus ring. The image
+// takes whatever height is left, and every control sits in the bottom third
+// where a thumb reaches — nothing here should ever require scrolling.
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Button, Card } from '../components/ui.jsx'
+import { Button } from '../components/ui.jsx'
 
 const ZOOMS = [1, 2, 4, 8, 10]
 const REFRESH_MS = 1000
@@ -26,23 +29,46 @@ export default function FocusScreen({ showToast, onExit }) {
   const [tick, setTick] = useState(0)
   const [history, setHistory] = useState([])
   const drag = useRef(null)
+  const lastFrames = useRef(0)
 
-  // Start the session, then push the initial control values so the daemon is
-  // using the same numbers the sliders are showing.
+  const pushControls = useCallback(async (ms, g) => {
+    await fetch('/api/focus/controls', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ exposure_ms: ms, gain: g }),
+    }).catch(() => {})
+  }, [])
+
   useEffect(() => {
     let alive = true
     const begin = async () => {
       await fetch('/api/focus/start', { method: 'POST' }).catch(() => {})
       await pushControls(exposureMs, gain)
-      const cfg = await (await fetch('/api/config')).json().catch(() => null)
-      if (alive && cfg) {
+      try {
+        const cfg = await (await fetch('/api/config')).json()
         const cam = Object.values(cfg.cameras ?? {})[0]
-        if (cam?.night?.max_gain) setMaxGain(Math.max(cam.night.max_gain, 600))
-      }
+        if (alive && cam?.night?.max_gain) {
+          setMaxGain(Math.max(cam.night.max_gain, 600))
+        }
+      } catch { /* keep the default ceiling */ }
     }
     begin()
     return () => { alive = false }
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  // Leaving by ANY route stops the session: nav button, browser back, closed
+  // tab, or the Stop button. Without this the daemon stays in focus mode until
+  // its 15-minute timeout while the dashboard shows a frame that never updates,
+  // which made the Stop button load-bearing. keepalive lets the request survive
+  // the page going away.
+  useEffect(() => {
+    const leave = () =>
+      fetch('/api/focus/stop', { method: 'POST', keepalive: true }).catch(() => {})
+    window.addEventListener('pagehide', leave)
+    return () => {
+      window.removeEventListener('pagehide', leave)
+      leave()
+    }
   }, [])
 
   useEffect(() => {
@@ -57,6 +83,11 @@ export default function FocusScreen({ showToast, onExit }) {
         const d = s.daemon ?? {}
         if (d.state === 'focusing') {
           setInfo(d)
+          // The daemon starts a fresh session when exposure or gain changes, so
+          // its frame counter restarts. That is the signal to drop the old
+          // sparkline: those points were measured under different conditions.
+          if ((d.frames ?? 0) < lastFrames.current) setHistory([])
+          lastFrames.current = d.frames ?? 0
           setHistory((h) => [...h.slice(-(SPARK_POINTS - 1)), d.score ?? 0])
         } else if (Date.now() - startedAt > 6000) {
           showToast('Focus mode ended')
@@ -67,13 +98,6 @@ export default function FocusScreen({ showToast, onExit }) {
     return () => { alive = false; clearInterval(id) }
   }, [startedAt, showToast, onExit])
 
-  const pushControls = useCallback(async (ms, g) => {
-    await fetch('/api/focus/controls', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ exposure_ms: ms, gain: g }),
-    }).catch(() => {})
-  }, [])
-
   const stop = async () => {
     await fetch('/api/focus/stop', { method: 'POST' }).catch(() => {})
     showToast('Focus mode off')
@@ -81,9 +105,8 @@ export default function FocusScreen({ showToast, onExit }) {
   }
 
   // Pan: dragging moves the crop window opposite the gesture, so it feels like
-  // pushing the image around. Only meaningful once zoomed in. Distances are
-  // divided by the zoom factor because a screen pixel covers 1/zoom of the
-  // frame at that level.
+  // pushing the image around. Distances divide by the zoom factor because a
+  // screen pixel covers 1/zoom of the frame at that level.
   const clamp01 = (v) => Math.min(1, Math.max(0, v))
 
   const onPointerDown = (e) => {
@@ -116,75 +139,66 @@ export default function FocusScreen({ showToast, onExit }) {
     + `&cx=${center.x.toFixed(3)}&cy=${center.y.toFixed(3)}&t=${tick}`
 
   return (
-    <div className="mt-6 flex flex-col gap-5">
-      <div className="flex items-center justify-between">
-        <h2 className="font-medium">Focus assist</h2>
-        <span className="text-sm tabular-nums text-sky-400">
-          auto-exit in {mm}:{ss}
-        </span>
+    // dvh, not vh: mobile browser chrome would otherwise push the controls off.
+    <div className="flex h-[100dvh] flex-col gap-3 pb-3 pt-3">
+      <div className="flex shrink-0 items-center justify-between gap-3">
+        <div className="flex items-baseline gap-3">
+          <span className="text-3xl tabular-nums leading-none">
+            {info?.score ?? '—'}
+          </span>
+          <span className="text-sm text-zinc-500">
+            best {info?.best ?? '—'}
+          </span>
+          <span className={`text-sm ${TREND_CLASS[info?.trend] ?? 'text-zinc-400'}`}>
+            {TREND_LABEL[info?.trend] ?? '—'}
+          </span>
+        </div>
+        <span className="shrink-0 text-sm tabular-nums text-sky-400">{mm}:{ss}</span>
       </div>
 
-      <div className="overflow-hidden rounded-2xl border border-zinc-800 bg-black"
+      {/* min-h-0 lets this shrink inside the flex column instead of overflowing */}
+      <div className="min-h-0 flex-1 overflow-hidden rounded-2xl border border-zinc-800 bg-black"
         onPointerDown={onPointerDown} onPointerMove={onPointerMove}
         onPointerUp={onPointerUp} onPointerCancel={onPointerUp}
         style={{ cursor: zoom > 1 ? 'grab' : 'default', touchAction: 'none' }}>
         <img src={liveUrl} alt="Live focus view" draggable={false}
-          className="w-full select-none" />
+          className="h-full w-full select-none object-contain" />
       </div>
 
-      <div className="flex flex-wrap items-center gap-2">
-        {ZOOMS.map((z) => (
-          <button key={z} onClick={() => { setZoom(z); if (z === 1) setCenter({ x: .5, y: .5 }) }}
-            className={`rounded-lg border px-3 py-1.5 text-sm transition ${
-              z === zoom ? 'border-sky-500 bg-sky-600/20 text-sky-300'
-                         : 'border-zinc-700 text-zinc-400 hover:bg-zinc-800'}`}>
-            {z}×
-          </button>
-        ))}
-        {zoom > 1 && (
-          <span className="ml-1 text-xs text-zinc-500">drag the image to pan</span>
-        )}
-      </div>
+      <Sparkline values={history} best={info?.best} />
 
-      <Card title="Sharpness"
-        right={<span className={`text-sm ${TREND_CLASS[info?.trend] ?? 'text-zinc-400'}`}>
-          {TREND_LABEL[info?.trend] ?? '—'}
-        </span>}>
-        <div className="mt-3 flex items-end gap-6">
-          <div>
-            <p className="text-xs text-zinc-500">Score</p>
-            <p className="text-3xl tabular-nums">{info?.score ?? '—'}</p>
-          </div>
-          <div>
-            <p className="text-xs text-zinc-500">Best</p>
-            <p className="text-2xl tabular-nums text-zinc-400">{info?.best ?? '—'}</p>
-          </div>
-        </div>
-        <Sparkline values={history} best={info?.best} />
-        <p className="mt-2 text-xs text-zinc-500">
-          Smoothed over the last 3 frames — raw scores jitter on noise alone.
-          Turn the ring until the line peaks and the arrow flips.
+      {info?.rebaselined && (
+        <p className="shrink-0 rounded-lg bg-amber-950/70 px-3 py-2 text-xs text-amber-300">
+          Rebaselined — sharpness only compares at a fixed exposure and gain, so
+          the peak resets when you move a slider.
         </p>
-      </Card>
+      )}
 
-      <Card title="Exposure">
-        <div className="mt-3 space-y-4">
-          <Slider label="Exposure" value={exposureMs} min={50} max={2000} step={50}
-            display={`${exposureMs} ms`}
-            onChange={(v) => { setExposureMs(v); pushControls(v, gain) }} />
-          <Slider label="Gain" value={gain} min={0} max={maxGain} step={5}
-            display={String(gain)}
-            onChange={(v) => { setGain(v); pushControls(exposureMs, v) }} />
-          {info && (
-            <p className="text-xs text-zinc-500">
-              Camera reported {(info.exposure_us / 1000).toFixed(0)} ms at gain{' '}
-              {info.gain} on the last frame.
-            </p>
-          )}
+      {/* Everything below is thumb territory. */}
+      <div className="shrink-0 space-y-3">
+        <div className="flex gap-2">
+          {ZOOMS.map((z) => (
+            <button key={z}
+              onClick={() => { setZoom(z); if (z === 1) setCenter({ x: .5, y: .5 }) }}
+              className={`flex-1 rounded-lg border py-2 text-sm transition ${
+                z === zoom ? 'border-sky-500 bg-sky-600/20 text-sky-300'
+                           : 'border-zinc-700 text-zinc-400'}`}>
+              {z}×
+            </button>
+          ))}
         </div>
-      </Card>
 
-      <Button tone="warn" onClick={stop} className="w-full">Stop focus assist</Button>
+        <Slider label="Exposure" value={exposureMs} min={50} max={2000} step={50}
+          display={`${exposureMs} ms`}
+          onChange={(v) => { setExposureMs(v); pushControls(v, gain) }} />
+        <Slider label="Gain" value={gain} min={0} max={maxGain} step={5}
+          display={String(gain)}
+          onChange={(v) => { setGain(v); pushControls(exposureMs, v) }} />
+
+        <Button tone="warn" onClick={stop} className="w-full">
+          Stop focus assist
+        </Button>
+      </div>
     </div>
   )
 }
@@ -196,16 +210,17 @@ function Slider({ label, value, min, max, step, display, onChange }) {
         <span className="text-zinc-400">{label}</span>
         <span className="tabular-nums text-zinc-300">{display}</span>
       </span>
+      {/* h-6 gives the thumb a bigger hit area than the default track */}
       <input type="range" min={min} max={max} step={step} value={value}
         onChange={(e) => onChange(Number(e.target.value))}
-        className="mt-2 w-full accent-sky-500" />
+        className="mt-1 h-6 w-full accent-sky-500" />
     </label>
   )
 }
 
 function Sparkline({ values, best }) {
   if (values.length < 2) {
-    return <div className="mt-4 h-20 rounded-xl bg-zinc-800/60" />
+    return <div className="h-12 shrink-0 rounded-xl bg-zinc-800/60" />
   }
   const max = Math.max(...values, best ?? 0) || 1
   const points = values
@@ -216,7 +231,7 @@ function Sparkline({ values, best }) {
   return (
     <svg viewBox="0 0 100 100" preserveAspectRatio="none" role="img"
       aria-label="Sharpness over time"
-      className="mt-4 h-20 w-full rounded-xl bg-zinc-800/60">
+      className="h-12 w-full shrink-0 rounded-xl bg-zinc-800/60">
       {bestY != null && (
         <line x1="0" y1={bestY} x2="100" y2={bestY} stroke="#fbbf24"
           strokeWidth="1" strokeDasharray="3 3" vectorEffect="non-scaling-stroke" />

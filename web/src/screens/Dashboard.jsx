@@ -6,8 +6,19 @@ import NightsScreen from './NightsScreen.jsx'
 import FocusScreen from './FocusScreen.jsx'
 import { Button, Card, Toast, useToast } from '../components/ui.jsx'
 
+// One entry per navigable screen. Focus is deliberately absent: it is entered
+// from the dashboard, not navigated to, and leaving it must stop the session.
+const NAV = [
+  { id: 'dashboard', label: 'Dashboard' },
+  { id: 'nights', label: 'Nights' },
+  { id: 'settings', label: 'Settings' },
+]
+
 export default function Dashboard({ status }) {
-  const [view, setView] = useState('dashboard')   // dashboard | nights | settings | focus
+  // A single source of truth for which screen is showing. The previous version
+  // gave each nav button its own toggle, so a click could take you off the
+  // current screen without landing on the target — hence the double-clicking.
+  const [screen, setScreen] = useState('dashboard')
   const [toast, showToast] = useToast()
   const d = status.daemon ?? {}
   const current = status.current ?? {}
@@ -16,7 +27,7 @@ export default function Dashboard({ status }) {
 
   return (
     <div className="mx-auto min-h-screen max-w-3xl px-4 py-6">
-      <header className="flex items-center justify-between">
+      <header className="flex items-center justify-between gap-3">
         <h1 className="text-lg font-medium">Skylapse</h1>
         <div className="flex items-center gap-3 text-sm">
           {standalone && (
@@ -27,33 +38,41 @@ export default function Dashboard({ status }) {
           <span className="text-zinc-400">
             {new Date(status.server_time * 1000).toLocaleTimeString()}
           </span>
-          <button onClick={() => setView(view === 'nights' ? 'dashboard' : 'nights')}
-            className="rounded-lg border border-zinc-700 px-3 py-1 hover:bg-zinc-800">
-            Nights
-          </button>
-          <button onClick={() => setView(view === 'settings' ? 'dashboard' : 'settings')}
-            className="rounded-lg border border-zinc-700 px-3 py-1 hover:bg-zinc-800">
-            {view === 'settings' ? 'Dashboard' : 'Settings'}
-          </button>
         </div>
       </header>
 
-      {view === 'settings' && (
+      {/* Every destination is always present and one click always switches. */}
+      <nav className="mt-4 flex gap-2 text-sm">
+        {NAV.map((item) => (
+          <button key={item.id} onClick={() => setScreen(item.id)}
+            aria-current={screen === item.id ? 'page' : undefined}
+            className={`rounded-lg border px-3 py-1.5 transition ${
+              screen === item.id
+                ? 'border-sky-500 bg-sky-600/20 text-sky-300'
+                : 'border-zinc-700 text-zinc-400 hover:bg-zinc-800'}`}>
+            {item.label}
+          </button>
+        ))}
+      </nav>
+
+      {/* Exactly one screen renders. */}
+      {screen === 'settings' && (
         <SettingsScreen showToast={showToast} storage={status.storage} />
       )}
 
-      {view === 'nights' && (
+      {screen === 'nights' && (
         <NightsScreen cameraId={current.camera_id} showToast={showToast}
-          onBack={() => setView('dashboard')} />
+          onBack={() => setScreen('dashboard')} />
       )}
 
-      {view === 'focus' && (
-        <FocusScreen showToast={showToast} onExit={() => setView('dashboard')} />
+      {screen === 'focus' && (
+        <FocusScreen showToast={showToast} onExit={() => setScreen('dashboard')} />
       )}
 
-      {view === 'dashboard' && (
+      {screen === 'dashboard' && (
         <main className="mt-6 flex flex-col gap-5">
-          <LatestFrame daemon={d} showToast={showToast} />
+          <LatestFrame daemon={d} status={status} showToast={showToast}
+            onOpenFocus={() => setScreen('focus')} />
           <SafetyBanner daemon={d} showToast={showToast} />
           <Card title="Focus assist">
             <p className="mt-1 text-sm text-zinc-400">
@@ -61,7 +80,7 @@ export default function Dashboard({ status }) {
               score to chase. Nothing is written to the card while focusing, and
               the session exits by itself after 15 minutes.
             </p>
-            <Button onClick={() => setView('focus')} className="mt-4 w-full">
+            <Button onClick={() => setScreen('focus')} className="mt-4 w-full">
               Start focus assist
             </Button>
           </Card>
@@ -76,7 +95,17 @@ export default function Dashboard({ status }) {
 
 /* -- latest frame + live status ------------------------------------------- */
 
-function LatestFrame({ daemon: d, showToast }) {
+function LatestFrame({ daemon: d, status, showToast, onOpenFocus }) {
+  // Defense in depth for the focus-escape bug. If the daemon is in focus mode —
+  // another device, a closed tab, a race — the stored frame is stale and will
+  // never update. Showing "waiting for first frame" there is a lie that looks
+  // like a broken camera, so say what is actually happening and offer a way out.
+  if (d.state === 'focusing') {
+    return <FocusElsewhere showToast={showToast} onOpenFocus={onOpenFocus} />
+  }
+
+  const depth = status?.current?.keeper_depth ?? 3
+
   return (
     <section>
       {d.latest ? (
@@ -89,11 +118,45 @@ function LatestFrame({ daemon: d, showToast }) {
         </div>
       )}
 
-      <div className="mt-3 flex items-center justify-between gap-4">
-        <StatusLine daemon={d} />
-        <KeeperButton showToast={showToast} />
+      <div className="mt-3 flex flex-wrap items-start justify-between gap-4">
+        <StatusLine daemon={d} status={status} />
+        <div className="shrink-0">
+          <KeeperButton depth={depth} showToast={showToast} />
+          <p className="mt-1 max-w-[16rem] text-xs text-zinc-500">
+            Grabs the most recent frames as editable RAW — for when a meteor or
+            something cool just happened.
+          </p>
+        </div>
       </div>
     </section>
+  )
+}
+
+function FocusElsewhere({ showToast, onOpenFocus }) {
+  const [tick, setTick] = useState(0)
+  useEffect(() => {
+    const id = setInterval(() => setTick((t) => t + 1), 2000)
+    return () => clearInterval(id)
+  }, [])
+
+  const stop = async () => {
+    await fetch('/api/focus/stop', { method: 'POST' }).catch(() => {})
+    showToast('Focus mode stopped — capture resuming')
+  }
+
+  return (
+    <Card title="Focus mode active">
+      <p className="mt-1 text-sm text-zinc-400">
+        This camera is in focus mode, so normal capture is paused and the latest
+        frame won’t update until it ends. It stops by itself after 15 minutes.
+      </p>
+      <img src={`/api/focus/live?zoom=1&t=${tick}`} alt="Live focus view"
+        className="mt-3 w-full rounded-xl border border-zinc-800 bg-black" />
+      <div className="mt-3 flex gap-3">
+        <Button tone="warn" className="flex-1" onClick={stop}>Stop focus mode</Button>
+        <Button onClick={onOpenFocus}>Open focus screen</Button>
+      </div>
+    </Card>
   )
 }
 
@@ -113,7 +176,7 @@ function StatusLine({ daemon: d }) {
   return <p className="text-sm text-zinc-400">{bits.join(' · ')}</p>
 }
 
-function KeeperButton({ showToast }) {
+function KeeperButton({ depth, showToast }) {
   const [busy, setBusy] = useState(false)
 
   // POST /api/keeper only drops a command file; the daemon acts on it up to a
@@ -145,9 +208,11 @@ function KeeperButton({ showToast }) {
     setBusy(false)
   }
 
+  // Label states the live configured depth, so it matches what pressing it
+  // will actually produce rather than a hardcoded guess.
   return (
     <Button onClick={save} disabled={busy} className="shrink-0">
-      {busy ? 'Saving…' : 'Save RAW'}
+      {busy ? 'Saving…' : `Save last ${depth} RAW frame${depth === 1 ? '' : 's'}`}
     </Button>
   )
 }

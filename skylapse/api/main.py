@@ -135,7 +135,14 @@ def _current(daemon: dict, cfg: config.Config) -> dict:
             night = nights[-1] if nights else ""
     has_timelapse = bool(camera_id and night and (
         config.IMAGE_ROOT / camera_id / night / f"timelapse_{night}.mp4").exists())
-    return {"camera_id": camera_id, "night": night, "timelapse": has_timelapse}
+    # keeper_depth drives the dashboard button's label, so it must reflect the
+    # configured value rather than the UI guessing a default.
+    # Plain lookup, not cfg.camera(): that one is fetch-or-create and would
+    # invent a registry entry on every status poll for an unknown id.
+    entry = cfg.cameras.get(camera_id)
+    depth = entry.raw.keeper_buffer_frames if entry else 3
+    return {"camera_id": camera_id, "night": night, "timelapse": has_timelapse,
+            "keeper_depth": depth}
 
 
 @app.get("/api/status")

@@ -50,6 +50,8 @@ class CaptureDaemon:
         self.consecutive_bright = 0
         self.focus: FocusSession | None = None
         self.focus_started = 0.0
+        self.focus_controls: tuple[int, int] | None = None
+        self.focus_rebaselined_at = 0.0
         self.aurora_alerted = False
         self.aurora_last_poll = 0.0
         self.last_kp: float | None = None
@@ -278,6 +280,9 @@ class CaptureDaemon:
             if self.focus is None:
                 self.focus = FocusSession()
                 self.focus_started = time.time()
+                # Fresh session: don't compare against the last session's
+                # controls and rebaseline on the very first frame.
+                self.focus_controls = None
                 log.info("Focus mode ON (auto-exit in %ds)", FOCUS_TIMEOUT)
         if stop.exists():
             stop.unlink(missing_ok=True)
@@ -305,6 +310,18 @@ class CaptureDaemon:
         """One rapid frame -> preview + score -> status. Never saved to the store."""
         import numpy as np
         exposure_us, gain = self._focus_controls()
+        # Sharpness is only comparable at constant exposure and gain — changing
+        # gain moves the score by more than a focus adjustment does. Carrying
+        # the old peak across would leave an unreachable target on the chart and
+        # a trend arrow describing the control change, not the focus ring.
+        if self.focus_controls is not None and (exposure_us, gain) != self.focus_controls:
+            log.info("Focus controls changed (%dms gain %d -> %dms gain %d); "
+                     "rebaselining sharpness score",
+                     self.focus_controls[0] // 1000, self.focus_controls[1],
+                     exposure_us // 1000, gain)
+            self.focus = FocusSession()
+            self.focus_rebaselined_at = time.time()
+        self.focus_controls = (exposure_us, gain)
         try:
             self.driver.set_controls(exposure_us, gain)
             frame = self.driver.capture()
@@ -322,7 +339,11 @@ class CaptureDaemon:
         info = self.focus.update(sharpness(arr))
         self._write_status({"state": "focusing", "exposure_us": frame.exposure_us,
                             "gain": frame.gain, "width": frame.width,
-                            "height": frame.height, **info})
+                            "height": frame.height,
+                            # Brief flag so the UI can explain the vanished peak
+                            # rather than looking like it lost the reading.
+                            "rebaselined": time.time() - self.focus_rebaselined_at < 4,
+                            **info})
 
     def _poll_keeper_command(self) -> None:
         """UI 'save RAW' button: dump the rolling raw buffer to DNGs."""
