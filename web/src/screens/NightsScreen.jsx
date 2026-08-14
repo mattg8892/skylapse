@@ -45,6 +45,10 @@ export default function NightsScreen({ cameraId, showToast, onBack }) {
         <Card><p className="text-sm text-zinc-500">No nights captured yet.</p></Card>
       )}
 
+      {!!nights?.length && (
+        <ExportCard cameraId={cameraId} nights={nights} showToast={showToast} />
+      )}
+
       <ul className="flex flex-col gap-3">
         {nights?.map((n) => (
           <li key={n.night}>
@@ -68,6 +72,193 @@ export default function NightsScreen({ cameraId, showToast, onBack }) {
         ))}
       </ul>
     </div>
+  )
+}
+
+/* -- USB export ------------------------------------------------------------ */
+
+const CONTENT_LABELS = {
+  timelapse: 'Timelapse video',
+  jpegs: 'JPEG frames (+ sidecars)',
+  raws: 'RAW / DNG files',
+}
+
+function ExportCard({ cameraId, nights, showToast }) {
+  const [drives, setDrives] = useState([])
+  const [device, setDevice] = useState('')
+  const [picked, setPicked] = useState(() => new Set())
+  const [content, setContent] = useState({ timelapse: true, jpegs: false, raws: false })
+  const [progress, setProgress] = useState(null)
+  const [busy, setBusy] = useState(false)
+
+  const refreshDrives = useCallback(async () => {
+    try {
+      const list = await (await fetch('/api/export/drives')).json()
+      setDrives(list)
+      setDevice((d) => (list.find((x) => x.device === d) ? d : list[0]?.device ?? ''))
+    } catch { setDrives([]) }
+  }, [])
+
+  useEffect(() => { refreshDrives() }, [refreshDrives])
+
+  // Poll while a copy is running so the bar actually moves.
+  useEffect(() => {
+    const id = setInterval(async () => {
+      try {
+        const s = await (await fetch('/api/export/status')).json()
+        setProgress(s.state === 'idle' ? null : s)
+      } catch { /* transient */ }
+    }, 1000)
+    return () => clearInterval(id)
+  }, [])
+
+  const drive = drives.find((d) => d.device === device)
+  const selectedBytes = nights
+    .filter((n) => picked.has(n.night))
+    .reduce((sum, n) => sum + n.bytes, 0)
+
+  const toggleNight = (night) => setPicked((prev) => {
+    const next = new Set(prev)
+    next.has(night) ? next.delete(night) : next.add(night)
+    return next
+  })
+
+  const start = async () => {
+    setBusy(true)
+    try {
+      if (!drive?.mountpoint) {
+        const m = await (await fetch(
+          `/api/export/mount?device=${encodeURIComponent(device)}`,
+          { method: 'POST' })).json()
+        if (!m.mountpoint) {
+          showToast(m.needs_sudo
+            ? 'Drive needs mounting by hand — see the hint in the API response'
+            : 'Could not mount the drive')
+          setBusy(false)
+          return
+        }
+        await refreshDrives()
+      }
+      const r = await fetch('/api/export/start', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          device, camera_id: cameraId, nights: [...picked], content,
+        }),
+      })
+      const body = await r.json()
+      if (!r.ok) {
+        const d = body.detail ?? {}
+        showToast(d.required_bytes
+          ? `Not enough space: needs ${gb(d.required_bytes)} GB, `
+            + `${gb(d.free_bytes)} GB free`
+          : d.error ?? 'Export could not start')
+      } else {
+        showToast(`Exporting ${body.files_total} files (${gb(body.bytes_total)} GB)`)
+      }
+    } catch { showToast('Export failed to start') }
+    setBusy(false)
+  }
+
+  const eject = async () => {
+    const r = await (await fetch(
+      `/api/export/eject?device=${encodeURIComponent(device)}`,
+      { method: 'POST' })).json()
+    showToast(r.ok ? 'Safe to remove the drive' : r.error ?? 'Could not eject')
+    refreshDrives()
+  }
+
+  // Card is hidden entirely when nothing is plugged in — an export UI with no
+  // drive is just noise on a phone screen.
+  if (!drives.length) return null
+
+  const pct = progress?.bytes_total
+    ? Math.min(100, Math.round((progress.bytes_done / progress.bytes_total) * 100))
+    : 0
+
+  return (
+    <Card title="Export to USB"
+      right={<Button onClick={refreshDrives} className="!py-1">Rescan</Button>}>
+      <div className="mt-3 space-y-4">
+        <Select label="Drive" value={device} onChange={setDevice}
+          options={drives.map((d) => ({
+            value: d.device,
+            label: `${d.label} · ${gb(d.size_bytes)} GB · ${d.fstype}`,
+          }))} />
+
+        <div>
+          <p className="text-sm text-zinc-400">Nights</p>
+          <ul className="mt-2 max-h-44 divide-y divide-zinc-800 overflow-y-auto
+                         rounded-lg border border-zinc-800">
+            {nights.map((n) => (
+              <li key={n.night}
+                className="flex items-center justify-between px-3 py-2 text-sm">
+                <label className="flex flex-1 items-center gap-2">
+                  <input type="checkbox" checked={picked.has(n.night)}
+                    onChange={() => toggleNight(n.night)} />
+                  <span>{n.night}</span>
+                </label>
+                <span className="tabular-nums text-zinc-500">{gb(n.bytes)} GB</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+
+        <div>
+          <p className="text-sm text-zinc-400">Include</p>
+          <ul className="mt-2 divide-y divide-zinc-800 rounded-lg border border-zinc-800">
+            {Object.entries(CONTENT_LABELS).map(([key, label]) => (
+              <li key={key} className="flex items-center justify-between px-3 py-2 text-sm">
+                <span>{label}</span>
+                <input type="checkbox" checked={content[key]}
+                  onChange={(e) =>
+                    setContent({ ...content, [key]: e.target.checked })} />
+              </li>
+            ))}
+          </ul>
+        </div>
+
+        {picked.size > 0 && (
+          <p className="text-xs text-zinc-500">
+            {picked.size} night{picked.size === 1 ? '' : 's'} selected — up to{' '}
+            {gb(selectedBytes)} GB before filtering by content type. Nothing is
+            removed from the camera.
+          </p>
+        )}
+
+        {progress && (
+          <div className="rounded-xl bg-zinc-800/60 p-4">
+            <div className="flex justify-between text-sm">
+              <span className={progress.state === 'error'
+                ? 'text-rose-400' : 'text-zinc-300'}>
+                {progress.state === 'running' ? 'Copying…'
+                  : progress.state === 'done' ? 'Export complete'
+                  : progress.error ?? progress.state}
+              </span>
+              <span className="tabular-nums text-zinc-400">{pct}%</span>
+            </div>
+            <div className="mt-2 h-2 overflow-hidden rounded-full bg-zinc-700">
+              <div className={`h-full ${
+                progress.state === 'error' ? 'bg-rose-500' : 'bg-sky-500'}`}
+                style={{ width: `${pct}%` }} />
+            </div>
+            <p className="mt-2 truncate text-xs text-zinc-500">
+              {progress.files_done ?? 0}/{progress.files_total ?? 0} files
+              {progress.current_file ? ` · ${progress.current_file}` : ''}
+            </p>
+          </div>
+        )}
+
+        <div className="flex gap-3">
+          <Button tone="accent" className="flex-1" onClick={start}
+            disabled={busy || !picked.size || progress?.state === 'running'}>
+            {progress?.state === 'running' ? 'Exporting…' : 'Start export'}
+          </Button>
+          <Button onClick={eject} disabled={progress?.state === 'running'}>
+            Eject
+          </Button>
+        </div>
+      </div>
+    </Card>
   )
 }
 

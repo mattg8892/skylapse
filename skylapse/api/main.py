@@ -16,7 +16,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from .. import config, notify, remote
+from .. import config, notify, remote, usbexport
 
 app = FastAPI(title="Skylapse", version="0.1.0")
 
@@ -498,6 +498,58 @@ def notify_generate_topic() -> dict:
     return {"topic": cfg.notifications.ntfy_topic,
             "subscribe_url": f"{cfg.notifications.ntfy_server.rstrip('/')}/"
                              f"{cfg.notifications.ntfy_topic}"}
+
+
+# -- USB export ---------------------------------------------------------------
+
+class ExportRequest(BaseModel):
+    device: str
+    camera_id: str
+    nights: list[str]
+    content: dict = {"timelapse": True, "jpegs": False, "raws": False}
+
+
+@app.get("/api/export/drives")
+def export_drives() -> list[dict]:
+    """USB drives eligible as export targets. The boot medium is never listed."""
+    return usbexport.list_drives()
+
+
+@app.post("/api/export/mount")
+def export_mount(device: str) -> dict:
+    try:
+        return usbexport.mount(device)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@app.post("/api/export/plan")
+def export_plan(body: ExportRequest) -> dict:
+    """Size a selection without copying, so the UI can show per-night cost."""
+    job = usbexport.plan(body.camera_id, body.nights, body.content)
+    return {"bytes_total": job["bytes_total"], "files_total": job["files_total"]}
+
+
+@app.post("/api/export/start")
+def export_start(body: ExportRequest) -> dict:
+    try:
+        result = usbexport.start(body.device, body.camera_id, body.nights,
+                                 body.content)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    if not result.get("ok"):
+        raise HTTPException(409, result)
+    return result
+
+
+@app.get("/api/export/status")
+def export_status() -> dict:
+    return usbexport.status()
+
+
+@app.post("/api/export/eject")
+def export_eject(device: str) -> dict:
+    return usbexport.eject(device)
 
 
 # -- remote access (Tailscale) ----------------------------------------------
