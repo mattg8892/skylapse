@@ -26,6 +26,7 @@ from .dewheater import DewHeater
 from .pipeline.analyze import star_count
 from .. import notify
 from . import nightjobs
+from .watchdog import StallWatch, describe as describe_age
 from .scheduler import (SAFETY_BRIGHT_LEVEL, next_dusk, next_exposure, period,
                         profile_for, safety_should_stop, should_capture)
 
@@ -52,6 +53,9 @@ class CaptureDaemon:
         self.last_period: str | None = None
         self.idle_day = False               # night_only camera waiting for dusk
         self.latest_path: str | None = None
+        self.last_frame_at = 0.0
+        self.stall = StallWatch()
+        self.state = "starting"             # what the watchdog judges against
         self.consecutive_bright = 0
         self.focus: FocusSession | None = None
         self.focus_started = 0.0
@@ -102,6 +106,7 @@ class CaptureDaemon:
             except CameraError as exc:
                 delay = REOPEN_BACKOFF[min(attempt, len(REOPEN_BACKOFF) - 1)]
                 log.warning("Camera open failed (%s); retry in %ss", exc, delay)
+                self.state = "no_camera"
                 self._write_status({"camera": None, "state": "no_camera"})
                 if attempt == 1:          # first retry failed too: it's real
                     notify.notify("camera_offline", "Camera offline",
@@ -116,11 +121,17 @@ class CaptureDaemon:
             self.cfg = config.load()          # cheap; picks up UI changes
             cam = self.cfg.camera(self.camera_id)
             profile = profile_for(self.cfg, cam)
-            # Dawn: night just became day -> render last night's timelapse,
-            # then run cleanup while nothing interesting is in the sky.
+            # Watchdog first, so a stall is noticed even on iterations that end
+            # early (focus, safety pause, night_only idle). It can only run
+            # while the loop is turning — the ZWO driver's bounded exposure wait
+            # is what guarantees a wedged camera returns here at all.
+            self._check_for_stall(profile)
+
             now_period = period(self.cfg)
             if self.last_period is not None and now_period != self.last_period:
                 log.info("Period change: %s -> %s", self.last_period, now_period)
+            # Dawn: night just became day -> render last night's timelapse,
+            # then run cleanup while nothing interesting is in the sky.
             if self.last_period in ("night", "twilight") and now_period == "day":
                 log.info("Dawn: running night jobs (timelapse + cleanup)")
                 cam_root = config.IMAGE_ROOT / self.camera_id
@@ -141,6 +152,7 @@ class CaptureDaemon:
                     self.focus = None
                     log.info("Focus mode timed out; resuming capture")
                 else:
+                    self.state = "focusing"
                     self._focus_frame()
                     continue
 
@@ -175,6 +187,7 @@ class CaptureDaemon:
             # particular is a daylight activity — you aim and focus a rig in
             # daylight and leave it to run at night.
             if not should_capture(cam, now_period):
+                self.state = "idle_day"
                 if not self.idle_day:
                     self.idle_day = True
                     log.info("Capture schedule 'night_only' and it is day: "
@@ -251,6 +264,12 @@ class CaptureDaemon:
                      "yes" if dng_saved else "no", jpeg.name)
 
             self.latest_path = str(jpeg)
+            self.last_frame_at = time.time()
+            self.state = "capturing"
+            if self.stall.frame_written():
+                log.info("Frames resumed after a stall")
+                notify.notify("camera_offline", "Skylapse: capturing again",
+                              "Frames are arriving normally again.")
             self._write_status({
                 "state": "capturing",
                 "period": period(self.cfg),
@@ -270,9 +289,25 @@ class CaptureDaemon:
 
     # -- helpers -----------------------------------------------------------
 
+    def _check_for_stall(self, profile) -> None:
+        """Alert once if frames have stopped arriving when they shouldn't have."""
+        age = self.stall.check(
+            state=self.state, now=time.time(), last_frame_at=self.last_frame_at,
+            gap_s=profile.gap_s, exposure_us=self.exposure_us)
+        if age is None:
+            return
+        pretty = describe_age(age)
+        log.warning("No frames for %s while state=%s — capture appears stalled",
+                    pretty, self.state)
+        notify.notify(
+            "camera_offline", "Skylapse: capture stalled",
+            f"No frames for {pretty}. The daemon is running, so the camera may "
+            f"be disconnected or not responding.")
+
     def _safety_pause(self, reason: str) -> None:
         """Stop capturing until user resume or the next dusk. Notifies once."""
         log.warning("Safety stop (%s): pausing capture", reason)
+        self.state = "paused_safety"
         self._write_status({"state": "paused_safety", "reason": reason})
         notify.notify("safety_stop", "Capture paused (safety)",
                       "Manual-exposure safety tripped: "
