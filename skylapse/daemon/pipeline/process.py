@@ -68,8 +68,17 @@ def save_jpeg(frame: Frame, camera_id: str, quality: int = 92,
     return path
 
 
-def save_dng(frame: Frame, camera_id: str) -> Path:
-    """Raw bayer -> DNG via pidng. Opens directly in Lightroom/Siril/PixInsight."""
+def write_dng(frame: Frame, path: Path) -> Path:
+    """Raw bayer -> DNG at an explicit path. Opens directly in
+    Lightroom/Siril/PixInsight.
+
+    Split out from save_dng so the writer can be exercised without the image
+    store's date-folder layout — see tests/test_dng.py. That test exists
+    because this call sequence is version-sensitive: pidng 4.x takes the tags
+    through options() and its convert() accepts only (image, filename).
+    Passing tags= to convert() raises TypeError at runtime, which is exactly
+    how every DNG write on the rig failed while the caller logged success.
+    """
     from pidng.core import RAW2DNG, DNGTags, Tag
     from pidng.defs import CFAPattern, PhotometricInterpretation
 
@@ -87,11 +96,19 @@ def save_dng(frame: Frame, camera_id: str) -> Path:
         tags.set(Tag.PhotometricInterpretation, PhotometricInterpretation.Color_Filter_Array)
     tags.set(Tag.Make, "Skylapse")
 
+    stem = path.with_suffix("")          # pidng appends .dng itself
+    path.parent.mkdir(parents=True, exist_ok=True)
+    dng = RAW2DNG()
+    dng.options(tags, path=str(stem.parent), compress=False)
+    dng.convert(_as_array(frame), filename=stem.name)
+    return stem.with_suffix(".dng")
+
+
+def save_dng(frame: Frame, camera_id: str) -> Path:
+    """Raw bayer -> DNG in the image store, beside the night's JPEGs."""
     folder = day_folder(frame.timestamp, camera_id)
     stamp = datetime.fromtimestamp(frame.timestamp).strftime("%Y%m%d_%H%M%S")
-    path = folder / f"img_{stamp}"
-    RAW2DNG().convert(_as_array(frame), tags=tags, filename=str(path))
-    return path.with_suffix(".dng")
+    return write_dng(frame, folder / f"img_{stamp}.dng")
 
 
 def _write_sidecar(image_path: Path, frame: Frame) -> None:

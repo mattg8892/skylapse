@@ -299,12 +299,26 @@ class CaptureDaemon:
         if not cmd.exists():
             return
         cmd.unlink(missing_ok=True)
-        for buffered in list(self.keeper_buffer):
+        buffered = list(self.keeper_buffer)
+        saved: list[str] = []
+        for frame in buffered:
             try:
-                process.save_dng(buffered, self.camera_id)
+                saved.append(process.save_dng(frame, self.camera_id).name)
             except Exception:
-                log.exception("Keeper DNG save failed")
-        log.info("Keeper: saved %d buffered frames as DNG", len(self.keeper_buffer))
+                # Per-frame and non-fatal: one bad frame must not cost the rest.
+                log.warning("Keeper: DNG save failed for frame at %.0f",
+                            frame.timestamp, exc_info=True)
+        # Only inside the success path. This previously logged unconditionally,
+        # so the journal reported saves for frames that had just raised — which
+        # is how a completely broken DNG writer went unnoticed.
+        if saved:
+            log.info("Keeper: saved %d of %d buffered frames as DNG (%s)",
+                     len(saved), len(buffered), ", ".join(saved))
+        else:
+            log.error("Keeper: saved none of %d buffered frames", len(buffered))
+        # Real counts for the UI toast — the POST returns long before this runs.
+        (config.RUN_DIR / "keeper_result.json").write_text(json.dumps(
+            {"saved": len(saved), "buffered": len(buffered), "at": time.time()}))
 
     def _raw_due(self, frame: Frame) -> bool:
         cam = self.cfg.camera(self.camera_id)
