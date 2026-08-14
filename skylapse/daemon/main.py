@@ -36,6 +36,10 @@ REOPEN_BACKOFF = (5, 15, 60)     # camera disconnect recovery, seconds
 IDLE_POLL_S = 30                 # recheck cadence while a night_only camera
                                  # waits out the day — short enough that dusk
                                  # is picked up promptly, long enough to idle
+COMMAND_POLL_S = 0.5             # how often a gap is interrupted to look for
+                                 # UI commands; the bound on button latency
+# Command files the UI drops in RUN_DIR. Seeing any of these ends a gap early.
+COMMAND_FILES = ("focus_start", "focus_stop", "keeper_cmd", "resume_cmd")
 
 
 class CaptureDaemon:
@@ -201,7 +205,7 @@ class CaptureDaemon:
                     # rather than an empty placeholder that reads as a fault.
                     "latest": self.latest_path,
                 })
-                time.sleep(IDLE_POLL_S)
+                self._sleep_interruptible(IDLE_POLL_S)
                 continue
             if self.idle_day:
                 self.idle_day = False
@@ -285,9 +289,27 @@ class CaptureDaemon:
             # Gap-based timing: wait gap_s after the frame (capture + save)
             # finishes. Deterministic in both auto and manual modes.
             if profile.gap_s > 0:
-                time.sleep(profile.gap_s)
+                self._sleep_interruptible(profile.gap_s)
 
     # -- helpers -----------------------------------------------------------
+
+    def _sleep_interruptible(self, seconds: float) -> None:
+        """Wait out a gap, but wake early when the UI asks for something.
+
+        Commands are only read at the top of the loop, so without this the
+        response time to a button press is a whole capture cadence — a minute
+        on the 60s day profile. Focus assist is interactive: someone is stood
+        at the camera with a hand on the ring, and a minute of nothing is
+        indistinguishable from a broken button.
+        """
+        deadline = time.time() + seconds
+        while self.running:
+            remaining = deadline - time.time()
+            if remaining <= 0:
+                return
+            if any((config.RUN_DIR / name).exists() for name in COMMAND_FILES):
+                return
+            time.sleep(min(COMMAND_POLL_S, remaining))
 
     def _check_for_stall(self, profile) -> None:
         """Alert once if frames have stopped arriving when they shouldn't have."""

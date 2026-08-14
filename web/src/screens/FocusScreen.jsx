@@ -17,7 +17,17 @@ const TREND_CLASS = {
   improving: 'text-emerald-400', worsening: 'text-rose-400', flat: 'text-zinc-400',
 }
 
+// How long to wait for the daemon to acknowledge focus_start before giving up.
+// Generous on purpose: it may be part-way through a 25s exposure, and the cost
+// of waiting a moment too long is a spinner, while the cost of giving up too
+// early is bouncing the user out of the screen they just opened.
+const START_TIMEOUT_MS = 90_000
+
 export default function FocusScreen({ showToast, onExit }) {
+  // 'starting' until the daemon confirms, then 'running'. Only a transition out
+  // of 'running' counts as the session ending — before confirmation, "not
+  // focusing" just means "not yet".
+  const [phase, setPhase] = useState('starting')
   const [info, setInfo] = useState(null)
   const [zoom, setZoom] = useState(1)
   const [center, setCenter] = useState({ x: 0.5, y: 0.5 })
@@ -30,6 +40,7 @@ export default function FocusScreen({ showToast, onExit }) {
   const [history, setHistory] = useState([])
   const drag = useRef(null)
   const lastFrames = useRef(0)
+  const startedRef = useRef(false)   // armed once focus_start is sent
 
   const pushControls = useCallback(async (ms, g) => {
     await fetch('/api/focus/controls', {
@@ -42,6 +53,7 @@ export default function FocusScreen({ showToast, onExit }) {
     let alive = true
     const begin = async () => {
       await fetch('/api/focus/start', { method: 'POST' }).catch(() => {})
+      startedRef.current = true         // arms the stop-on-leave below
       await pushControls(exposureMs, gain)
       try {
         const cfg = await (await fetch('/api/config')).json()
@@ -61,15 +73,30 @@ export default function FocusScreen({ showToast, onExit }) {
   // its 15-minute timeout while the dashboard shows a frame that never updates,
   // which made the Stop button load-bearing. keepalive lets the request survive
   // the page going away.
+  //
+  // Guarded by a ref so it only fires for a session this component actually
+  // started. A stop sent from a teardown that never issued a start would kill
+  // someone else's session — another device's, or in development the one the
+  // second half of a StrictMode double-mount just opened.
   useEffect(() => {
-    const leave = () =>
+    const leave = () => {
+      if (!startedRef.current) return
+      startedRef.current = false        // exactly one stop per session
       fetch('/api/focus/stop', { method: 'POST', keepalive: true }).catch(() => {})
+    }
     window.addEventListener('pagehide', leave)
     return () => {
       window.removeEventListener('pagehide', leave)
       leave()
     }
   }, [])
+
+  // Callbacks via refs so the poll interval is created once. Passing them as
+  // deps re-created it on every parent render (the dashboard re-renders every
+  // 5s), which is pure churn on a 1s timer.
+  const exitRef = useRef(onExit)
+  const toastRef = useRef(showToast)
+  useEffect(() => { exitRef.current = onExit; toastRef.current = showToast })
 
   useEffect(() => {
     let alive = true
@@ -81,7 +108,9 @@ export default function FocusScreen({ showToast, onExit }) {
         const s = await (await fetch('/api/status')).json()
         if (!alive) return
         const d = s.daemon ?? {}
+
         if (d.state === 'focusing') {
+          setPhase('running')
           setInfo(d)
           // The daemon starts a fresh session when exposure or gain changes, so
           // its frame counter restarts. That is the signal to drop the old
@@ -89,16 +118,32 @@ export default function FocusScreen({ showToast, onExit }) {
           if ((d.frames ?? 0) < lastFrames.current) setHistory([])
           lastFrames.current = d.frames ?? 0
           setHistory((h) => [...h.slice(-(SPARK_POINTS - 1)), d.score ?? 0])
-        } else if (Date.now() - startedAt > 6000) {
-          showToast('Focus mode ended')
-          onExit()
+          return
         }
-      } catch { /* transient */ }
+
+        // Not focusing. What that means depends entirely on whether we ever
+        // saw it running — this is the bug that used to eject the user after
+        // six seconds, before the daemon had even read the start command.
+        setPhase((current) => {
+          if (current === 'running') {
+            toastRef.current('Focus mode ended')
+            exitRef.current()
+            return 'ended'
+          }
+          if (current === 'starting' && Date.now() - startedAt > START_TIMEOUT_MS) {
+            toastRef.current('Focus mode did not start — is the camera busy?')
+            exitRef.current()
+            return 'ended'
+          }
+          return current
+        })
+      } catch { /* transient; the next tick retries */ }
     }, REFRESH_MS)
     return () => { alive = false; clearInterval(id) }
-  }, [startedAt, showToast, onExit])
+  }, [startedAt])
 
   const stop = async () => {
+    startedRef.current = false        // this stop counts; teardown must not repeat it
     await fetch('/api/focus/stop', { method: 'POST' }).catch(() => {})
     showToast('Focus mode off')
     onExit()
@@ -157,12 +202,28 @@ export default function FocusScreen({ showToast, onExit }) {
       </div>
 
       {/* min-h-0 lets this shrink inside the flex column instead of overflowing */}
-      <div className="min-h-0 flex-1 overflow-hidden rounded-2xl border border-zinc-800 bg-black"
+      <div className="relative min-h-0 flex-1 overflow-hidden rounded-2xl border
+                      border-zinc-800 bg-black"
         onPointerDown={onPointerDown} onPointerMove={onPointerMove}
         onPointerUp={onPointerUp} onPointerCancel={onPointerUp}
         style={{ cursor: zoom > 1 ? 'grab' : 'default', touchAction: 'none' }}>
-        <img src={liveUrl} alt="Live focus view" draggable={false}
-          className="h-full w-full select-none object-contain" />
+        {phase === 'running' && (
+          <img src={liveUrl} alt="Live focus view" draggable={false}
+            className="h-full w-full select-none object-contain" />
+        )}
+        {phase === 'starting' && (
+          // The daemon reads commands between frames, so on a long exposure it
+          // can be a few seconds before the first focus frame exists. Say so,
+          // rather than showing a stale or missing image.
+          <div className="grid h-full place-items-center px-6 text-center">
+            <div>
+              <p className="text-sm text-zinc-300">Starting focus…</p>
+              <p className="mt-1 text-xs text-zinc-500">
+                Waiting for the camera to finish the frame in progress.
+              </p>
+            </div>
+          </div>
+        )}
       </div>
 
       <Sparkline values={history} best={info?.best} />
