@@ -40,6 +40,19 @@ loop behaves like it does on real hardware:
 SKYLAPSE_SIM=1 skylapse-daemon
 ```
 
+## Updating
+
+Skylapse updates itself. Settings → Updates shows the running version, offers
+whatever the latest release is, and applies it with one button — defaulting to
+the next daytime window so a restart never interrupts a clear night. If the
+camera doesn't come back healthy within a minute, the previous version is
+restored automatically.
+
+It updates **Skylapse only** — never the OS, apt packages, or firmware.
+
+Development units can follow `main` instead of tagged releases via the
+development-channel toggle on the same card.
+
 ## Architecture
 
 Three independent systemd services sharing a config file and status files — no direct
