@@ -43,6 +43,35 @@ Shared state:
 - `/var/lib/skylapse/images/YYYY-MM-DD/` — image store, JSON sidecar per frame
 - `/run/skylapse/` — runtime status files (daemon heartbeat, netwatch state, latest frame path)
 
+### External image store (SPEC — not built)
+
+A supported path for putting the image store on a permanently attached USB SSD,
+and the recommended setup for anyone running every-frame RAW. Two independent
+arguments point the same way: **capacity** (measured on an ASI676MC, every-frame
+RAW costs ~37 GB/night, so a 256 GB card holds about a week) and **endurance**
+(that is sustained write volume a microSD card is not built for — they fail
+suddenly, months in, having given no warning).
+
+- `SKYLAPSE_IMAGES` points at the mount, e.g. `/mnt/skylapse-images`. Nothing in
+  the daemon changes: the store location is already an environment variable.
+- The drive is mounted by a systemd `.mount` unit, and `skylapse-daemon.service`
+  gains `RequiresMountsFor=` on the image root plus `After=` the mount unit.
+- **The daemon must refuse to run rather than write to the bare mountpoint.**
+  This is the entire risk of the feature. If the SSD is absent, unplugged, or
+  slow to enumerate at boot, an unguarded daemon writes happily into the empty
+  directory *underneath* the mount — filling the SD card it was moved off, and
+  scattering a night across two filesystems where nothing will find it again.
+  `RequiresMountsFor=` handles the boot ordering; the daemon should additionally
+  verify at startup that the image root is a mountpoint whenever the configured
+  path is not on the root filesystem, and fail loudly if it is not.
+- Cleanup, retention and the storage card need no changes — they already measure
+  whatever filesystem the store sits on.
+- The setup wizard offers this when it detects a non-boot SSD, and can format
+  and populate the mount unit. Until then it is a documented manual setup.
+
+Deliberately not in scope: network storage (a dropped NFS mount fails in far
+more ways, mid-write), or striping a store across several drives.
+
 ## Camera drivers
 
 ```
