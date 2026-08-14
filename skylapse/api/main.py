@@ -18,7 +18,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from .. import __version__, config, notify, remote, usbexport
+from .. import __version__, config, notify, remote, updater, usbexport
 from ..daemon.pipeline import process
 
 app = FastAPI(title="Skylapse", version="0.1.0")
@@ -638,6 +638,34 @@ def export_status() -> dict:
 @app.post("/api/export/eject")
 def export_eject(device: str) -> dict:
     return usbexport.eject(device)
+
+
+# -- updates ------------------------------------------------------------------
+
+@app.get("/api/update/check")
+def update_check(force: bool = False) -> dict:
+    """What is available. Cached for a day unless force=true."""
+    return updater.check(force=force)
+
+
+@app.get("/api/update/status")
+def update_status() -> dict:
+    return updater.status()
+
+
+class UpdateRequest(BaseModel):
+    target_ref: str
+    apply_now: bool = False
+
+
+@app.post("/api/update/apply")
+def update_apply(body: UpdateRequest) -> dict:
+    """Kick off an update. The work happens in a detached process, because
+    applying restarts this one."""
+    result = updater.start(body.target_ref, apply_now=body.apply_now)
+    if not result.get("ok"):
+        raise HTTPException(409, result.get("error", "Could not start update"))
+    return result
 
 
 # -- remote access (Tailscale) ----------------------------------------------

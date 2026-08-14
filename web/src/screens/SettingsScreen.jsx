@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import {
   Button, Card, NumberField, Segmented, Select, Toggle,
 } from '../components/ui.jsx'
@@ -153,6 +153,11 @@ export default function SettingsScreen({ showToast, storage }) {
           </div>
         )}
       </Card>
+
+      <UpdateCard cfg={cfg} showToast={showToast}
+        onChannel={(channel) =>
+          save({ updates: { ...cfg.updates, channel } },
+               { ...cfg, updates: { ...cfg.updates, channel } })} />
 
       {/* Backup */}
       <Card title="Backup">
@@ -381,6 +386,131 @@ function RawCard({ raw, storage, onRaw }) {
           </p>
         )}
       </div>
+    </Card>
+  )
+}
+
+/* -- updates --------------------------------------------------------------- */
+
+const RUNNING_STATES = ['waiting', 'running', 'rolling_back']
+
+function UpdateCard({ cfg, showToast, onChannel }) {
+  const [info, setInfo] = useState(null)
+  const [progress, setProgress] = useState(null)
+  const [checking, setChecking] = useState(false)
+  const channel = cfg.updates?.channel ?? 'release'
+
+  const load = useCallback(async (force) => {
+    try {
+      setInfo(await (await fetch(`/api/update/check${force ? '?force=true' : ''}`)).json())
+    } catch { /* leave the previous answer showing */ }
+  }, [])
+
+  useEffect(() => { load(false) }, [load, channel])
+
+  // Poll only while something is in flight — the API restarts mid-update, so
+  // failures here are expected and must not clear what we already know.
+  useEffect(() => {
+    const id = setInterval(async () => {
+      try {
+        const s = await (await fetch('/api/update/status')).json()
+        setProgress(s.state === 'idle' ? null : s)
+        if (s.state === 'done') load(true)
+      } catch { /* API restarting */ }
+    }, 2000)
+    return () => clearInterval(id)
+  }, [load])
+
+  const recheck = async () => {
+    setChecking(true)
+    await load(true)
+    setChecking(false)
+  }
+
+  const apply = async (now) => {
+    try {
+      const r = await fetch('/api/update/apply', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ target_ref: info.target_ref, apply_now: now }),
+      })
+      const body = await r.json()
+      if (!r.ok) showToast(body.detail ?? 'Could not start the update')
+      else showToast(now ? 'Updating now — services will restart'
+                         : 'Update queued for the next daytime window')
+    } catch { showToast('Could not start the update') }
+  }
+
+  const busy = RUNNING_STATES.includes(progress?.state)
+
+  return (
+    <Card title="Updates"
+      right={<span className="text-sm text-zinc-500">v{info?.current ?? '—'}</span>}>
+      {info?.error ? (
+        <p className="mt-1 text-sm text-amber-400">{info.error}</p>
+      ) : info?.available ? (
+        <>
+          <p className="mt-1 text-sm text-sky-300">
+            {channel === 'dev'
+              ? `${info.commits_behind} commit${info.commits_behind === 1 ? '' : 's'} behind main (${info.latest})`
+              : `Version ${info.latest} is available`}
+          </p>
+          {info.notes && (
+            <pre className="mt-3 max-h-40 overflow-auto whitespace-pre-wrap rounded-lg
+                            bg-zinc-800/60 p-3 text-xs text-zinc-400">
+              {info.notes}
+            </pre>
+          )}
+        </>
+      ) : (
+        <p className="mt-1 text-sm text-zinc-400">Up to date.</p>
+      )}
+
+      {progress && (
+        <div className="mt-3 rounded-lg bg-zinc-800/60 p-3 text-sm">
+          <p className={progress.state === 'error' ? 'text-rose-400'
+            : progress.state === 'rolled_back' ? 'text-amber-300' : 'text-zinc-300'}>
+            {progress.message ?? progress.state}
+          </p>
+          {progress.prior && (
+            <p className="mt-1 text-xs text-zinc-500">
+              Previous build {progress.prior} kept for rollback
+            </p>
+          )}
+        </div>
+      )}
+
+      <div className="mt-4 flex gap-3">
+        <Button onClick={recheck} disabled={checking}>
+          {checking ? 'Checking…' : 'Check now'}
+        </Button>
+        {info?.available && (
+          <>
+            <Button tone="accent" className="flex-1" onClick={() => apply(false)}
+              disabled={busy}>
+              Update at next daytime
+            </Button>
+            <Button onClick={() => apply(true)} disabled={busy}>Now</Button>
+          </>
+        )}
+      </div>
+
+      <label className="mt-4 flex items-start justify-between gap-3 text-sm">
+        <span>
+          <span className="text-zinc-300">Development channel</span>
+          <span className="mt-1 block text-xs text-zinc-500">
+            Follow the latest commit on main instead of tagged releases. For
+            development units — expect rough edges.
+          </span>
+        </span>
+        <Toggle checked={channel === 'dev'} label="Development channel"
+          onChange={(on) => onChannel(on ? 'dev' : 'release')} />
+      </label>
+
+      <p className="mt-3 text-xs text-zinc-500">
+        Updates Skylapse only — never the operating system. If the camera
+        doesn’t come back healthy within a minute, the previous version is
+        restored automatically.
+      </p>
     </Card>
   )
 }

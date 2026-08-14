@@ -104,12 +104,19 @@ class CameraEntry(BaseModel):
     overlay: bool = False                # burn timestamp/exposure into JPEGs
 
 
+class UpdateConfig(BaseModel):
+    """In-app updates. Skylapse only — never the OS."""
+    channel: str = "release"              # release | dev (dev follows main)
+    auto_check: bool = True               # daily check; applying is always manual
+
+
 class Config(BaseModel):
     setup_complete: bool = False
     location: LocationConfig = Field(default_factory=LocationConfig)
     network: NetworkConfig = Field(default_factory=NetworkConfig)
     notifications: NotifyConfig = Field(default_factory=NotifyConfig)
     dew_heater: DewHeaterConfig = Field(default_factory=DewHeaterConfig)
+    updates: UpdateConfig = Field(default_factory=UpdateConfig)
     cameras: dict[str, CameraEntry] = Field(default_factory=dict)
     active_camera: str = ""              # camera_id; empty = auto (first detected)
     jpeg_quality: int = 92

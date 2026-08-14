@@ -245,6 +245,39 @@ lighter and more opinionated than the incumbents.
 
 Repo extra (non-software): printable enclosure STL + parts list, when ready.
 
+## In-app updates — IMPLEMENTED (skylapse/updater.py, settings card)
+
+Skylapse updates itself from its own git checkout. **Never the OS**: no apt, no
+firmware, no other packages. A camera that reboots into a broken userland because
+its imaging app decided to upgrade the system is worse than one running last
+month's build.
+
+- **Channels.** `release` (default) polls the GitHub releases API unauthenticated
+  — a public repo needs no token, and one call a day is nothing against the rate
+  limit — and compares the tag against `skylapse.__version__`. `dev` follows
+  `origin/main` instead, for development units where waiting for a tag defeats
+  the point. Checks are cached for a day; the UI's "Check now" forces one.
+- **Applying runs detached.** The update restarts `skylapse-api`, so it cannot
+  run inside it — the restart would kill the updater mid-flight, possibly
+  between `git checkout` and `pip install`. `/api/update/apply` spawns
+  `python -m skylapse.updater apply <ref>` in a new session; it outlives both
+  services and reports through `/run/skylapse/update.json`.
+- **Only what changed gets rebuilt.** `pip install -e .` runs only if
+  `pyproject.toml` differs, `npm run build` only if anything under `web/` does.
+  Both are minutes on a Pi and most updates touch neither.
+- **Auto-rollback.** The prior ref is recorded before anything changes. If the
+  daemon is not both `active` under systemd *and* answering `/api/status` within
+  60s of the restart, the updater checks the prior ref back out, re-runs the same
+  install/build steps, and restarts again. Rolling back code but not dependencies
+  would leave a mismatch harder to diagnose than the original failure. Health
+  needs both signals: a daemon can be `active` while wedged before its first frame.
+- **Deferred by default.** A restart drops frames, and the night you must not
+  drop frames is a clear one, so an update waits for the next daytime window
+  unless the operator picks "Now".
+- **Restarting services needs privilege**, via `sudo -n systemctl restart`. On a
+  dev unit that is the operator's passwordless sudo; a packaged appliance should
+  narrow this to a polkit rule for those two units specifically.
+
 ## Access control (SPEC — build before the wizard)
 
 Optional single password, OFF by default. The wizard's final screen offers "Protect this
