@@ -257,6 +257,130 @@ def network_scan() -> list[dict]:
     return sorted(nets, key=lambda n: -n["signal"])
 
 
+# -- nights browser -----------------------------------------------------------
+
+THUMB_PX = 256
+THUMB_PREFIX = "thumb_"
+
+# A night is one folder holding frames, sidecars, thumbnails and the mp4.
+# Everything that indexes frames filters on img_*.jpg specifically, so
+# thumb_*.jpg can live beside them without polluting the index or star counts.
+FRAME_GLOB = "img_*.jpg"
+
+
+def _night_dir(camera_id: str, night: str) -> Path:
+    """Resolve a night folder, refusing anything that escapes the image root.
+
+    camera_id and night arrive from the URL, so '..' segments would otherwise
+    let a request walk out of the store and serve arbitrary files.
+    """
+    root = config.IMAGE_ROOT.resolve()
+    path = (root / camera_id / night).resolve()
+    if not path.is_relative_to(root):
+        raise HTTPException(400, "Invalid path")
+    if not path.is_dir():
+        raise HTTPException(404, "No such night")
+    return path
+
+
+@app.get("/api/nights/{camera_id}")
+def nights(camera_id: str) -> list[dict]:
+    """Every night held for a camera, newest first."""
+    root = config.IMAGE_ROOT.resolve()
+    cam_root = (root / camera_id).resolve()
+    if not cam_root.is_relative_to(root) or not cam_root.is_dir():
+        raise HTTPException(404, "No such camera")
+
+    out = []
+    for night in sorted((d for d in cam_root.iterdir() if d.is_dir()),
+                        key=lambda d: d.name, reverse=True):
+        frames = sorted(night.glob(FRAME_GLOB))
+        if not frames:
+            continue
+        out.append({
+            "night": night.name,
+            "frames": len(frames),
+            "first": frames[0].stat().st_mtime,
+            "last": frames[-1].stat().st_mtime,
+            "has_timelapse": (night / f"timelapse_{night.name}.mp4").exists(),
+            "bytes": night_bytes(night),
+        })
+    return out
+
+
+@app.get("/api/nights/{camera_id}/{night}/frames")
+def night_frames(camera_id: str, night: str, offset: int = 0,
+                 limit: int = 500) -> dict:
+    """Windowed frame index. A night can run past 1200 frames, so this is
+    paginated rather than returned whole — the filmstrip fetches what it needs."""
+    folder = _night_dir(camera_id, night)
+    frames = sorted(folder.glob(FRAME_GLOB))
+    total = len(frames)
+    limit = max(1, min(limit, 2000))
+    offset = max(0, min(offset, total))
+    window = frames[offset:offset + limit]
+
+    items = []
+    for jpeg in window:
+        meta = {}
+        sidecar = jpeg.with_suffix(".json")
+        if sidecar.exists():
+            try:
+                meta = json.loads(sidecar.read_text())
+            except json.JSONDecodeError:
+                meta = {}
+        items.append({
+            "name": jpeg.name,
+            "timestamp": meta.get("timestamp", jpeg.stat().st_mtime),
+            "stars": meta.get("stars"),
+            "has_dng": jpeg.with_suffix(".dng").exists(),
+            "exposure_us": meta.get("exposure_us"),
+            "gain": meta.get("gain"),
+        })
+    return {"night": night, "total": total, "offset": offset,
+            "limit": limit, "frames": items}
+
+
+@app.get("/api/nights/{camera_id}/{night}/frame/{name}")
+def night_frame(camera_id: str, night: str, name: str, thumb: bool = False):
+    """One JPEG. thumb=true serves a ~256px version, generated on first request
+    and cached beside the frame — shipping 1200 full-res frames to a phone for a
+    filmstrip is not viable, and pre-generating them would stall the capture loop.
+    """
+    folder = _night_dir(camera_id, night)
+    jpeg = (folder / name).resolve()
+    if not jpeg.is_relative_to(folder) or not jpeg.is_file() \
+            or not jpeg.name.startswith("img_") or jpeg.suffix != ".jpg":
+        raise HTTPException(404, "No such frame")
+    if not thumb:
+        return FileResponse(jpeg, media_type="image/jpeg")
+
+    thumbnail = folder / f"{THUMB_PREFIX}{jpeg.stem}.jpg"
+    if not thumbnail.exists():
+        import cv2
+        img = cv2.imread(str(jpeg))
+        if img is None:
+            raise HTTPException(500, "Could not read frame")
+        h, w = img.shape[:2]
+        scale = THUMB_PX / max(h, w)
+        small = cv2.resize(img, (max(1, int(w * scale)), max(1, int(h * scale))),
+                           interpolation=cv2.INTER_AREA)
+        cv2.imwrite(str(thumbnail), small, [cv2.IMWRITE_JPEG_QUALITY, 80])
+    return FileResponse(thumbnail, media_type="image/jpeg")
+
+
+@app.get("/api/nights/{camera_id}/{night}/raw/{name}")
+def night_raw(camera_id: str, night: str, name: str):
+    """One DNG, as a download — browsers would otherwise try to render it."""
+    folder = _night_dir(camera_id, night)
+    dng = (folder / name).resolve()
+    if not dng.is_relative_to(folder) or not dng.is_file() \
+            or not dng.name.startswith("img_") or dng.suffix != ".dng":
+        raise HTTPException(404, "No such raw file")
+    return FileResponse(dng, media_type="image/x-adobe-dng",
+                        filename=dng.name, content_disposition_type="attachment")
+
+
 # -- sky quality --------------------------------------------------------------
 
 @app.get("/api/stars/{camera_id}/{night}")

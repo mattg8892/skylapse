@@ -77,7 +77,10 @@ def cleanup(camera_root: Path, free_gb_floor: float) -> int:
     for night in nights:
         if _free_gb(camera_root) >= free_gb_floor:
             break
-        for pattern in ("img_*.jpg", "img_*.json", "img_*.dng"):
+        # thumb_*.jpg are the API's lazily-generated filmstrip thumbnails. They
+        # must go with the frames they describe, or they outlive the night and
+        # leave the folder permanently non-empty so it can never be removed.
+        for pattern in ("img_*.jpg", "img_*.json", "img_*.dng", "thumb_*.jpg"):
             for f in night.glob(pattern):
                 f.unlink()
                 deleted += 1

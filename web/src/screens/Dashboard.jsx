@@ -2,20 +2,15 @@
 // sense while standing at the camera — keeper RAW, focus assist, re-render.
 import { useEffect, useState } from 'react'
 import SettingsScreen from './SettingsScreen.jsx'
-import { Button, Card, Select, Toast, useToast } from '../components/ui.jsx'
-
-const QUALITY_OPTIONS = [
-  { value: 'standard', label: 'Standard' },
-  { value: 'high', label: 'High' },
-  { value: 'max', label: 'Max' },
-]
+import NightsScreen from './NightsScreen.jsx'
+import { Button, Card, Toast, useToast } from '../components/ui.jsx'
 
 // Mirrors focus.TIMEOUT_S. Duplicated rather than fetched: it only drives a
 // countdown label, and the daemon enforces the real deadline regardless.
 const FOCUS_TIMEOUT_MS = 15 * 60 * 1000
 
 export default function Dashboard({ status }) {
-  const [showSettings, setShowSettings] = useState(false)
+  const [view, setView] = useState('dashboard')   // dashboard | nights | settings
   const [toast, showToast] = useToast()
   const d = status.daemon ?? {}
   const current = status.current ?? {}
@@ -35,21 +30,31 @@ export default function Dashboard({ status }) {
           <span className="text-zinc-400">
             {new Date(status.server_time * 1000).toLocaleTimeString()}
           </span>
-          <button onClick={() => setShowSettings(!showSettings)}
+          <button onClick={() => setView(view === 'nights' ? 'dashboard' : 'nights')}
             className="rounded-lg border border-zinc-700 px-3 py-1 hover:bg-zinc-800">
-            {showSettings ? 'Dashboard' : 'Settings'}
+            Nights
+          </button>
+          <button onClick={() => setView(view === 'settings' ? 'dashboard' : 'settings')}
+            className="rounded-lg border border-zinc-700 px-3 py-1 hover:bg-zinc-800">
+            {view === 'settings' ? 'Dashboard' : 'Settings'}
           </button>
         </div>
       </header>
 
-      {showSettings ? (
+      {view === 'settings' && (
         <SettingsScreen showToast={showToast} storage={status.storage} />
-      ) : (
+      )}
+
+      {view === 'nights' && (
+        <NightsScreen cameraId={current.camera_id} showToast={showToast}
+          onBack={() => setView('dashboard')} />
+      )}
+
+      {view === 'dashboard' && (
         <main className="mt-6 flex flex-col gap-5">
           <LatestFrame daemon={d} showToast={showToast} />
           <SafetyBanner daemon={d} showToast={showToast} />
           <FocusCard showToast={showToast} />
-          <TimelapseCard current={current} showToast={showToast} />
           <StorageCard storage={status.storage} />
         </main>
       )}
@@ -262,76 +267,6 @@ function FocusCard({ showToast }) {
   )
 }
 
-/* -- timelapse ------------------------------------------------------------- */
-
-function TimelapseCard({ current, showToast }) {
-  const [clipSeconds, setClipSeconds] = useState(30)
-  const [quality, setQuality] = useState('high')
-  const [busy, setBusy] = useState(false)
-  const [version, setVersion] = useState(0)   // cache-bust <video> after a re-render
-
-  if (!current.camera_id || !current.night) return null
-
-  const rerender = async () => {
-    setBusy(true)
-    try {
-      const url = `/api/timelapse/render/${current.camera_id}/${current.night}`
-        + `?force=true&clip_seconds=${clipSeconds}&quality=${quality}`
-      const r = await fetch(url, { method: 'POST' })
-      const body = await r.json()
-      if (r.ok) {
-        showToast(`Rendered ${body.file}`)
-        setVersion((v) => v + 1)
-      } else {
-        showToast(body.detail ?? 'Render failed')
-      }
-    } catch {
-      showToast('Render failed')
-    }
-    setBusy(false)
-  }
-
-  return (
-    <Card title="Timelapse"
-      right={<span className="text-sm text-zinc-500">{current.night}</span>}>
-      {current.timelapse || version > 0 ? (
-        <video
-          key={version} controls playsInline preload="metadata"
-          src={`/api/timelapse/${current.camera_id}/${current.night}?v=${version}`}
-          className="mt-3 w-full rounded-xl border border-zinc-800 bg-black" />
-      ) : (
-        <p className="mt-3 rounded-xl border border-dashed border-zinc-800 p-6
-                      text-center text-sm text-zinc-500">
-          No timelapse for this night yet — one renders automatically at dawn.
-        </p>
-      )}
-
-      <div className="mt-4 space-y-3">
-        <label className="block text-sm">
-          <span className="flex justify-between">
-            <span className="text-zinc-400">Clip length</span>
-            <span className="tabular-nums text-zinc-300">{clipSeconds}s</span>
-          </span>
-          <input
-            type="range" min="5" max="120" step="5" value={clipSeconds}
-            onChange={(e) => setClipSeconds(Number(e.target.value))}
-            className="mt-2 w-full accent-sky-500" />
-        </label>
-
-        <Select label="Quality" value={quality} onChange={setQuality}
-          options={QUALITY_OPTIONS} />
-
-        <Button onClick={rerender} disabled={busy} tone="accent" className="w-full">
-          {busy ? 'Rendering…' : 'Re-render this night'}
-        </Button>
-        <p className="text-xs text-zinc-500">
-          A one-off override for this render — your saved timelapse settings are
-          left alone.
-        </p>
-      </div>
-    </Card>
-  )
-}
 
 /* -- storage --------------------------------------------------------------- */
 
