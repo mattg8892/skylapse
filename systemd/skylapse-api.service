@@ -16,7 +16,17 @@ RestartSec=5
 # User=, which meant it ran as root and the capability was redundant.
 User=@SKYLAPSE_USER@
 AmbientCapabilities=CAP_NET_BIND_SERVICE
-CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+# Deliberately NOT CapabilityBoundingSet=CAP_NET_BIND_SERVICE. Narrowing the
+# bounding set to just that capability also strips CAP_SETUID/CAP_SETGID, which
+# sudo needs to become root — so every `sudo` from this service failed with
+# "unable to change to root gid", including the in-app updater's attempt to
+# restart these units. It failed silently enough that a broken update once
+# reported success. The API needs to launch a privileged helper, so its bounding
+# set has to permit that.
+#
+# A packaged appliance should tighten this back up with a sudoers or polkit rule
+# scoped to `systemctl restart skylapse-*` and `systemd-run` specifically,
+# rather than relying on the operator's general passwordless sudo.
 # Shares /run/skylapse with the daemon: the API writes the command files
 # (focus_start, keeper_cmd, resume_cmd, netwatch_cmd.json) that the daemon and
 # netwatch poll. Preserve=yes so restarting either unit does not delete it.
