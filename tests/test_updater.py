@@ -166,7 +166,7 @@ def test_unhealthy_update_rolls_back(tmp_path, monkeypatch):
     # Never healthy after the update; healthy again after the rollback.
     healthy = iter([False, True])
     monkeypatch.setattr(updater, "_wait_healthy",
-                        lambda deadline_s=60: next(healthy, True))
+                        lambda *a, **k: next(healthy, True))
 
     result = updater.apply("v9.9.9", apply_now=True)
     assert result["ok"] is False
@@ -193,7 +193,7 @@ def test_successful_update_does_not_roll_back(tmp_path, monkeypatch):
     monkeypatch.setattr(updater, "_restart_services", lambda: True)
     monkeypatch.setattr(updater, "_restarts_took_effect",
                         lambda before, timeout_s=30: True)
-    monkeypatch.setattr(updater, "_wait_healthy", lambda deadline_s=60: True)
+    monkeypatch.setattr(updater, "_wait_healthy", lambda *a, **k: True)
 
     assert updater.apply("v0.2.0", apply_now=True)["ok"] is True
     assert checkouts == ["v0.2.0"]
@@ -222,11 +222,51 @@ def test_a_restart_that_never_happened_is_not_healthy(tmp_path, monkeypatch):
     monkeypatch.setattr(updater, "_restarts_took_effect",
                         lambda before, timeout_s=30: False)
     # Everything else looks fine, because the old process is still serving.
-    monkeypatch.setattr(updater, "_wait_healthy", lambda deadline_s=60: True)
+    monkeypatch.setattr(updater, "_wait_healthy", lambda *a, **k: True)
 
     result = updater.apply("v9.9.9", apply_now=True)
     assert result["ok"] is False, "unrestarted services were accepted as updated"
     assert checkouts == ["v9.9.9", "priorsha"]
+
+
+def test_stale_status_file_is_not_healthy(monkeypatch):
+    """Regression: the daemon rewrites its status every frame, so a file left
+    by the *previous* process made a crash-looping daemon look alive."""
+    monkeypatch.setattr(updater, "_run", lambda cmd, timeout=30, cwd=None:
+                        type("R", (), {"stdout": "active", "returncode": 0,
+                                       "stderr": ""})())
+    restart_at = 1_000_000.0
+    monkeypatch.setattr(updater, "_read_daemon_status",
+                        lambda: {"updated": restart_at - 30})   # written before
+    assert updater._healthy(restart_at) is False
+    monkeypatch.setattr(updater, "_read_daemon_status",
+                        lambda: {"updated": restart_at + 5})    # written after
+    assert updater._healthy(restart_at) is True
+
+
+def test_health_requires_a_streak(monkeypatch):
+    """A crash-looping unit is 'active' for a moment on every cycle, so one
+    lucky sample must not count."""
+    monkeypatch.setattr(updater.time, "sleep", lambda s: None)
+    samples = iter([True, False, True, False, True, False] * 20)
+    monkeypatch.setattr(updater, "_healthy", lambda since: next(samples, False))
+    assert updater._wait_healthy(0.0, deadline_s=1, streak=3) is False
+
+    monkeypatch.setattr(updater, "_healthy", lambda since: True)
+    assert updater._wait_healthy(0.0, deadline_s=10, streak=3) is True
+
+
+def test_launch_failure_is_reported(tmp_path, monkeypatch):
+    """A refused systemd-run once left the status pinned at 'waiting'."""
+    monkeypatch.setattr(config, "RUN_DIR", tmp_path)
+    monkeypatch.setattr(updater.shutil, "which", lambda n: "/usr/bin/systemd-run")
+    monkeypatch.setattr(updater, "_run", lambda cmd, timeout=60, cwd=None:
+                        type("R", (), {"returncode": 1, "stdout": "",
+                                       "stderr": "Unit already exists"})())
+    result = updater.start("v0.2.0", apply_now=True)
+    assert result["ok"] is False
+    assert "already exists" in result["error"]
+    assert updater.status()["state"] == "error"
 
 
 def test_restarts_took_effect_detects_an_unchanged_unit(monkeypatch):
@@ -258,7 +298,7 @@ def test_failed_restart_command_rolls_back(tmp_path, monkeypatch):
     monkeypatch.setattr(updater, "_run", fake_run)
     monkeypatch.setattr(updater, "_changed_paths", lambda a, b: set())
     monkeypatch.setattr(updater, "_restart_services", lambda: False)
-    monkeypatch.setattr(updater, "_wait_healthy", lambda deadline_s=60: True)
+    monkeypatch.setattr(updater, "_wait_healthy", lambda *a, **k: True)
 
     assert updater.apply("v9.9.9", apply_now=True)["ok"] is False
     assert checkouts == ["v9.9.9", "priorsha"]

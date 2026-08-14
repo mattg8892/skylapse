@@ -39,6 +39,9 @@ RELEASES_URL = f"https://api.github.com/repos/{REPO}/releases/latest"
 CHECK_TTL_S = 24 * 3600          # daily; the on-demand endpoint passes force
 HEALTH_TIMEOUT_S = 60            # how long the new build gets to prove itself
 HEALTH_POLL_S = 3
+HEALTH_STREAK = 3                # consecutive healthy polls required — spans
+                                 # more than one systemd restart cycle, so a
+                                 # crash-loop cannot pass on a lucky sample
 DEFER_POLL_S = 300               # how often a deferred update re-checks for day
 STATUS_NAME = "update.json"
 CHECK_NAME = "update_check.json"
@@ -203,9 +206,19 @@ def start(target_ref: str, apply_now: bool = False) -> dict:
     _set_status(state="waiting", target=target_ref,
                 message="Update queued" if not apply_now else "Starting")
     cmd = _worker_command(target_ref, apply_now)
-    detached = cmd[0] != "sudo"       # only the fallback needs its own session
-    subprocess.Popen(cmd, cwd=str(repo_root()), start_new_session=detached,
-                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    if cmd[0] == "sudo":
+        # systemd-run returns as soon as the transient unit is started, so we
+        # can wait for it and surface a launch failure. Without this a refusal
+        # (a stale unit name, a sudo policy) left the status pinned at
+        # "waiting" forever with nothing to explain it.
+        result = _run(cmd, timeout=60)
+        if result.returncode != 0:
+            message = (result.stderr or "").strip() or "Could not launch updater"
+            _set_status(state="error", target=target_ref, message=message)
+            return {"ok": False, "error": message}
+    else:
+        subprocess.Popen(cmd, cwd=str(repo_root()), start_new_session=True,
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     return {"ok": True, "target": target_ref, "deferred": not apply_now}
 
 
@@ -247,27 +260,52 @@ def _restarts_took_effect(before: dict[str, str], timeout_s: int = 30) -> bool:
     return False
 
 
-def _healthy() -> bool:
-    """Active under systemd AND actually answering. Either alone is not enough:
-    a daemon can be 'active' while wedged before its first frame."""
+def _read_daemon_status() -> dict:
+    """The daemon block as the running API reports it."""
+    try:
+        req = urllib.request.Request("http://localhost/api/status")
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            return json.loads(resp.read()).get("daemon") or {}
+    except Exception:
+        return {}
+
+
+def _healthy(since: float) -> bool:
+    """Active under systemd AND producing status *newer than the restart*.
+
+    Freshness is the load-bearing part. The daemon rewrites
+    /run/skylapse/daemon.json on every frame, so a file left behind by the
+    previous process makes a crash-looping daemon look perfectly alive — which
+    is exactly how a build with a syntax error once passed. Requiring the
+    timestamp to postdate the restart means only the new process can satisfy it.
+
+    `systemctl is-active` alone is no better: it reports "active" for the
+    moment between forking a process and that process dying.
+    """
     active = _run(["systemctl", "is-active", "skylapse-daemon"],
                   timeout=30).stdout.strip()
     if active != "active":
         return False
-    try:
-        req = urllib.request.Request("http://localhost/api/status")
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            body = json.loads(resp.read())
-    except Exception:
-        return False
-    return bool(body.get("daemon"))
+    return float(_read_daemon_status().get("updated", 0)) > since
 
 
-def _wait_healthy(deadline_s: int = HEALTH_TIMEOUT_S) -> bool:
+def _wait_healthy(since: float, deadline_s: int = HEALTH_TIMEOUT_S,
+                  streak: int = HEALTH_STREAK) -> bool:
+    """Health must hold for several consecutive polls.
+
+    A crash-looping unit cycles through "active" every few seconds, so a single
+    lucky sample proves nothing; a streak spanning more than one restart cycle
+    does.
+    """
     deadline = time.time() + deadline_s
+    consecutive = 0
     while time.time() < deadline:
-        if _healthy():
-            return True
+        if _healthy(since):
+            consecutive += 1
+            if consecutive >= streak:
+                return True
+        else:
+            consecutive = 0
         time.sleep(HEALTH_POLL_S)
     return False
 
@@ -317,12 +355,13 @@ def apply(target_ref: str, apply_now: bool = False) -> dict:
     _set_status(state="running", target=target_ref, prior=prior[:7],
                 message="Restarting services")
     before = {u: service_start_id(u) for u in SERVICES}
+    restart_at = time.time()
     restarted = _restart_services()
 
-    # All three must hold. Dropping any one of them lets a broken build pass:
-    # a failed restart leaves the old process happily serving old code, which
-    # reads as healthy by every other measure.
-    if restarted and _restarts_took_effect(before) and _wait_healthy():
+    # All three must hold. Dropping any one lets a broken build pass: a failed
+    # restart leaves the old process serving old code, and a stale status file
+    # makes a crash-looping daemon read as healthy.
+    if restarted and _restarts_took_effect(before) and _wait_healthy(restart_at):
         new_head = _run(["git", "rev-parse", "HEAD"]).stdout.strip()
         _set_status(state="done", target=target_ref, prior=prior[:7],
                     head=new_head[:7], message="Update complete")
@@ -337,8 +376,9 @@ def apply(target_ref: str, apply_now: bool = False) -> dict:
                 message="Update unhealthy — rolling back")
     _run(["git", "checkout", "--force", prior], timeout=300)
     _build(changed)
+    rollback_at = time.time()
     _restart_services()
-    recovered = _wait_healthy()
+    recovered = _wait_healthy(rollback_at)
     _set_status(state="rolled_back" if recovered else "error",
                 target=target_ref, prior=prior[:7],
                 message="Rolled back to the previous version" if recovered
