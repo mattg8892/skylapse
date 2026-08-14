@@ -24,12 +24,19 @@ const PERIOD_OPTIONS = [
   { value: 'day', label: 'Day' },
 ]
 
+const RAW_MODE_OPTIONS = [
+  { value: 'off', label: 'Off' },
+  { value: 'every_frame', label: 'Every frame' },
+  { value: 'every_nth', label: 'Every Nth frame' },
+  { value: 'window', label: 'Time window' },
+]
+
 const EXPOSURE_OPTIONS = [
   { value: 'auto', label: 'Auto exposure' },
   { value: 'manual', label: 'Manual exposure' },
 ]
 
-export default function SettingsScreen({ showToast }) {
+export default function SettingsScreen({ showToast, storage }) {
   const [cfg, setCfg] = useState(null)
   const [topic, setTopic] = useState(null)
   const [remote, setRemote] = useState(null)
@@ -99,7 +106,7 @@ export default function SettingsScreen({ showToast }) {
 
       {cameras.map(([id, cam]) => (
         <CameraSettings
-          key={id} id={id} cam={cam}
+          key={id} id={id} cam={cam} storage={storage}
           onCamera={(patch) => saveCamera(id, patch)}
           onProfile={(period, patch) => saveProfile(id, period, patch)} />
       ))}
@@ -179,7 +186,7 @@ export default function SettingsScreen({ showToast }) {
 
 /* -- per-camera capture / timelapse / overlay ------------------------------ */
 
-function CameraSettings({ id, cam, onCamera, onProfile }) {
+function CameraSettings({ id, cam, storage, onCamera, onProfile }) {
   // Day and night are independent profiles in config; editing only one of them
   // silently would be a trap, so the period is an explicit control.
   const [period, setPeriod] = useState('night')
@@ -266,6 +273,11 @@ function CameraSettings({ id, cam, onCamera, onProfile }) {
         </div>
       </Card>
 
+      <RawCard raw={cam.raw ?? {}} storage={storage}
+        onRaw={(patch) => onCamera({ raw: { ...cam.raw, ...patch } })} />
+      {/* RawCard is defined below; kept out of this component so the capture,
+          timelapse and RAW cards stay independently readable. */}
+
       <Card title="Image overlay"
         right={<Toggle checked={cam.overlay ?? false} label="Burn overlay into JPEGs"
           onChange={(overlay) => onCamera({ overlay })} />}>
@@ -275,5 +287,76 @@ function CameraSettings({ id, cam, onCamera, onProfile }) {
         </p>
       </Card>
     </>
+  )
+}
+
+/* -- RAW policy ------------------------------------------------------------ */
+
+function RawCard({ raw, storage, onRaw }) {
+  const mode = raw.mode ?? 'off'
+  // Surfaced here rather than only on the dashboard: this is the screen where
+  // you turn on every-frame RAW, so this is where the cost belongs.
+  const cost = storage?.nights_remaining != null && storage?.per_night_gb
+    ? `About ${storage.nights_remaining} more nights at the current rate `
+      + `(${storage.per_night_gb} GB/night${
+        storage.basis === 'in_progress' ? ', measured from tonight so far' : ''}).`
+    : null
+
+  return (
+    <Card title="RAW (DNG)">
+      <p className="mt-1 text-sm text-zinc-400">
+        Full sensor data beside each JPEG, for editing keepers in Lightroom,
+        Siril or PixInsight. Roughly 25 MB per frame — far larger than a JPEG.
+      </p>
+
+      <div className="mt-4 space-y-3">
+        <Select label="Save RAW" value={mode} options={RAW_MODE_OPTIONS}
+          onChange={(m) => onRaw({ mode: m })} />
+
+        {mode === 'every_nth' && (
+          <NumberField label="Every" suffix="frames" min={2} max={1000}
+            value={raw.every_nth ?? 10}
+            onChange={(every_nth) => onRaw({ every_nth })} />
+        )}
+
+        {mode === 'window' && (
+          <div className="space-y-3 rounded-xl bg-zinc-800/40 p-4">
+            <TimeField label="From" value={raw.window_start ?? '22:00'}
+              onChange={(window_start) => onRaw({ window_start })} />
+            <TimeField label="Until" value={raw.window_end ?? '02:00'}
+              onChange={(window_end) => onRaw({ window_end })} />
+            <p className="text-xs text-zinc-500">
+              Local time. A window that ends before it starts is read as
+              crossing midnight.
+            </p>
+          </div>
+        )}
+
+        <NumberField label="Keeper buffer" suffix="frames" min={1} max={20}
+          value={raw.keeper_buffer_frames ?? 3}
+          onChange={(keeper_buffer_frames) => onRaw({ keeper_buffer_frames })} />
+        <p className="-mt-1 text-xs text-zinc-500">
+          How many recent frames are held in memory for the dashboard’s Save RAW
+          button. Deeper costs RAM: about 25 MB per frame.
+        </p>
+
+        {mode !== 'off' && cost && (
+          <p className="rounded-lg bg-zinc-800/60 p-3 text-xs text-zinc-400">
+            {cost}
+          </p>
+        )}
+      </div>
+    </Card>
+  )
+}
+
+function TimeField({ label, value, onChange }) {
+  return (
+    <label className="flex items-center justify-between gap-3 text-sm">
+      <span className="text-zinc-400">{label}</span>
+      <input type="time" value={value} onChange={(e) => onChange(e.target.value)}
+        className="rounded-lg border border-zinc-700 bg-zinc-800 px-2 py-1.5
+                   tabular-nums outline-none focus:border-sky-600" />
+    </label>
   )
 }

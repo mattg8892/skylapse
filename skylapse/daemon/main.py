@@ -142,6 +142,13 @@ class CaptureDaemon:
                 self._safety_pause(reason)
                 continue
 
+            # Keeper depth is a per-camera setting, and config hot-reloads, so
+            # re-seat the deque when it changes. Without this the config field
+            # is decorative — the buffer was pinned at its constructor default.
+            depth = max(1, cam.raw.keeper_buffer_frames)
+            if self.keeper_buffer.maxlen != depth:
+                self.keeper_buffer = collections.deque(self.keeper_buffer,
+                                                       maxlen=depth)
             self._poll_keeper_command()
 
             # Aurora poll every POLL_MINUTES; once-per-episode alerting.

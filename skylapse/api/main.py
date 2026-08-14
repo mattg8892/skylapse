@@ -35,14 +35,72 @@ def _read_status(name: str) -> dict:
 
 # -- status ----------------------------------------------------------------
 
+def night_bytes(night_dir: Path) -> int:
+    """On-disk size of one night, thumbnails and all — this feeds the retention
+    estimate, so it must count everything the night actually costs."""
+    return sum(f.stat().st_size for f in night_dir.iterdir() if f.is_file())
+
+
+# Walking a 1200-frame night on every 5s status poll (per connected browser)
+# is real work on a Pi, and the answer moves slowly. Cache it.
+_RETENTION_TTL_S = 60
+_retention_cache: dict = {"at": 0.0, "value": None}
+
+
+def _retention(cfg: config.Config) -> dict:
+    """How many more nights fit at the current consumption rate.
+
+    Measured from the last *complete* night, since the night in progress is
+    only partly written and would flatter the estimate. With no complete night
+    yet we fall back to the night in progress and say so, rather than showing
+    nothing — the point of the number is to make an expensive RAW policy
+    visible immediately, which is exactly when no complete night exists.
+    """
+    now = time.time()
+    if _retention_cache["value"] is not None and \
+            now - _retention_cache["at"] < _RETENTION_TTL_S:
+        return _retention_cache["value"]
+
+    root = config.IMAGE_ROOT
+    per_night = 0
+    basis = None
+    if root.exists():
+        for cam in root.iterdir():
+            if not cam.is_dir():
+                continue
+            nights = sorted((d for d in cam.iterdir() if d.is_dir()),
+                            key=lambda d: d.name)
+            if len(nights) >= 2:
+                per_night += night_bytes(nights[-2])
+                basis = "complete"
+            elif nights:
+                per_night += night_bytes(nights[-1])
+                basis = basis or "in_progress"
+
+    usable = 0.0
+    if root.exists():
+        usable = max(0.0, shutil.disk_usage(root).free / 1e9 - cfg.cleanup_free_gb)
+    per_night_gb = per_night / 1e9
+    value = {
+        "per_night_gb": round(per_night_gb, 2) if basis else None,
+        # Headroom above the cleanup floor, not raw free space: below the floor
+        # the oldest nights start being deleted, so that is the real ceiling.
+        "nights_remaining": int(usable / per_night_gb) if per_night_gb > 0 else None,
+        "basis": basis,
+    }
+    _retention_cache.update(at=now, value=value)
+    return value
+
+
 def _storage(cfg: config.Config) -> dict:
-    """Free space, nights held, and the cleanup floor — everything the
-    dashboard's storage card needs, so it never has to guess how close the
-    card is to auto-deleting the oldest night."""
+    """Free space, nights held, the cleanup floor, and how long the card lasts
+    at the current rate — everything the dashboard's storage card needs, so it
+    never has to guess how close it is to auto-deleting the oldest night."""
     root = config.IMAGE_ROOT
     if not root.exists():
         return {"free_gb": None, "total_gb": None, "nights": 0,
-                "cleanup_free_gb": cfg.cleanup_free_gb}
+                "cleanup_free_gb": cfg.cleanup_free_gb,
+                "per_night_gb": None, "nights_remaining": None, "basis": None}
     usage = shutil.disk_usage(root)
     nights = sum(1 for cam in root.iterdir() if cam.is_dir()
                  for night in cam.iterdir() if night.is_dir())
@@ -51,6 +109,7 @@ def _storage(cfg: config.Config) -> dict:
         "total_gb": round(usage.total / 1e9, 1),
         "nights": nights,
         "cleanup_free_gb": cfg.cleanup_free_gb,
+        **_retention(cfg),
     }
 
 
@@ -90,6 +149,9 @@ def status() -> dict:
         "setup_complete": cfg.setup_complete,
         "storage": _storage(cfg),
         "current": _current(daemon, cfg),
+        # Written by the daemon after it acts on a keeper request, so the UI can
+        # report what was actually saved — POST /api/keeper returns immediately.
+        "keeper": _read_status("keeper_result"),
     }
 
 

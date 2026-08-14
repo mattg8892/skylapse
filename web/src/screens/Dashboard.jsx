@@ -43,7 +43,7 @@ export default function Dashboard({ status }) {
       </header>
 
       {showSettings ? (
-        <SettingsScreen showToast={showToast} />
+        <SettingsScreen showToast={showToast} storage={status.storage} />
       ) : (
         <main className="mt-6 flex flex-col gap-5">
           <LatestFrame daemon={d} showToast={showToast} />
@@ -100,17 +100,36 @@ function StatusLine({ daemon: d }) {
 
 function KeeperButton({ showToast }) {
   const [busy, setBusy] = useState(false)
+
+  // POST /api/keeper only drops a command file; the daemon acts on it up to a
+  // full capture gap later. So we watch for the result it writes and report the
+  // real count, rather than claiming success the moment the POST returns.
   const save = async () => {
     setBusy(true)
     try {
-      const r = await fetch('/api/keeper', { method: 'POST' })
-      const body = await r.json()
-      showToast(body.note ?? 'Buffered frames will be saved as DNG')
+      const before = (await (await fetch('/api/status')).json()).keeper?.at ?? 0
+      await fetch('/api/keeper', { method: 'POST' })
+      showToast('Save RAW queued — waiting for the next frame')
+
+      const deadline = Date.now() + 120000
+      while (Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, 1500))
+        const k = (await (await fetch('/api/status')).json()).keeper
+        if (k?.at && k.at !== before) {
+          showToast(k.saved
+            ? `Saved ${k.saved} frame${k.saved === 1 ? '' : 's'} as DNG`
+            : `No frames saved (${k.buffered} buffered) — check the log`)
+          setBusy(false)
+          return
+        }
+      }
+      showToast('Save RAW timed out waiting for the daemon')
     } catch {
       showToast('Could not reach the camera')
     }
     setBusy(false)
   }
+
   return (
     <Button onClick={save} disabled={busy} className="shrink-0">
       {busy ? 'Saving…' : 'Save RAW'}
@@ -348,6 +367,18 @@ function StorageCard({ storage }) {
           <dd className="tabular-nums text-zinc-200">{storage.cleanup_free_gb} GB</dd>
         </div>
       </dl>
+
+      {storage.nights_remaining != null && (
+        <p className="mt-3 rounded-lg bg-zinc-800/60 p-3 text-sm">
+          <span className="text-zinc-200">
+            ~{storage.nights_remaining} more night{storage.nights_remaining === 1 ? '' : 's'}
+          </span>
+          <span className="text-zinc-500">
+            {' '}at {storage.per_night_gb} GB/night
+            {storage.basis === 'in_progress' && ' (tonight so far)'}
+          </span>
+        </p>
+      )}
 
       <p className="mt-3 text-xs text-zinc-500">
         Below the floor the oldest nights are trimmed automatically — frames
