@@ -245,6 +245,27 @@ lighter and more opinionated than the incumbents.
 
 Repo extra (non-software): printable enclosure STL + parts list, when ready.
 
+## Access control (SPEC — build before the wizard)
+
+Optional single password, OFF by default. The wizard's final screen offers "Protect this
+camera with a password?" with Skip as a first-class option; existing installs get the same
+via a Security card in Settings. Router-admin-page tier by design: one shared password, no
+accounts.
+
+- Stored hashed (argon2/bcrypt) in config — never plaintext.
+- Login issues a long-lived (~30 day) session cookie: once per device.
+- Protects UI + API by default. Optional sub-toggle **"public live view"**: latest frame
+  visible without login; settings and controls still locked.
+- Lockout recovery = physical access: remove the password entry over SSH, or (future
+  appliance) hotspot setup mode offers a reset. Never requires a reflash.
+- Tailscale remote access is already identity-authenticated; the password is a second layer
+  there. Honest framing: the camera is never internet-exposed either way — this defends
+  against the local LAN.
+- Deliberately **not**: LAN HTTPS (self-signed warnings, and Tailscale gives real HTTPS
+  remotely), multi-user, OAuth, API keys.
+- Implementation: FastAPI session middleware + login screen + Settings card. Must land
+  **before** the setup wizard so the wizard integrates it.
+
 ## Remote access (optional, wizard-driven) — IMPLEMENTED (skylapse/remote.py, settings card)
 
 Tailscale wrapped so the user never touches a terminal. Settings card "Enable remote
