@@ -84,6 +84,10 @@ const CONTENT_LABELS = {
 }
 
 function ExportCard({ cameraId, nights, showToast }) {
+  // Always present, drive or no drive. Hiding the card until a stick was
+  // plugged in meant the feature only existed for people who already knew it
+  // existed — and gave no way to check whether the Pi had even seen the drive.
+  const [open, setOpen] = useState(false)
   const [drives, setDrives] = useState([])
   const [device, setDevice] = useState('')
   const [picked, setPicked] = useState(() => new Set())
@@ -99,7 +103,15 @@ function ExportCard({ cameraId, nights, showToast }) {
     } catch { setDrives([]) }
   }, [])
 
-  useEffect(() => { refreshDrives() }, [refreshDrives])
+  // Poll for drives continuously so the button's indicator is honest even when
+  // the panel is shut, and briskly while it is open — someone standing at the
+  // Pi with this on their phone should watch the drive appear a moment after
+  // they push it in, without reaching for a refresh.
+  useEffect(() => {
+    refreshDrives()
+    const id = setInterval(refreshDrives, open ? 3000 : 15000)
+    return () => clearInterval(id)
+  }, [refreshDrives, open])
 
   // Poll while a copy is running so the bar actually moves.
   useEffect(() => {
@@ -167,18 +179,49 @@ function ExportCard({ cameraId, nights, showToast }) {
     refreshDrives()
   }
 
-  // Card is hidden entirely when nothing is plugged in — an export UI with no
-  // drive is just noise on a phone screen.
-  if (!drives.length) return null
-
   const pct = progress?.bytes_total
     ? Math.min(100, Math.round((progress.bytes_done / progress.bytes_total) * 100))
     : 0
+  const connected = drives.length > 0
+  const running = progress?.state === 'running'
 
   return (
-    <Card title="Export to USB"
-      right={<Button onClick={refreshDrives} className="!py-1">Rescan</Button>}>
-      <div className="mt-3 space-y-4">
+    <Card>
+      <button onClick={() => setOpen(!open)} aria-expanded={open}
+        className="flex w-full items-center gap-3 text-left">
+        <span className="flex-1 font-medium">Export to USB</span>
+        {connected && (
+          <span className="flex items-center gap-1.5 rounded-full bg-emerald-950
+                           px-2.5 py-0.5 text-xs text-emerald-400">
+            <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />
+            {drives.length > 1 ? `${drives.length} drives` : 'drive connected'}
+          </span>
+        )}
+        {running && (
+          <span className="text-xs text-sky-400 tabular-nums">{pct}%</span>
+        )}
+        <span className="text-xs text-zinc-500">{open ? 'Hide' : 'Open'}</span>
+      </button>
+
+      {open && !connected && (
+        <div className="mt-4 rounded-xl border border-dashed border-zinc-800 p-6
+                        text-center">
+          <p className="text-sm text-zinc-400">
+            Plug a USB drive into the Pi to export nights, images, and RAWs.
+          </p>
+          <p className="mt-2 text-xs text-zinc-500">
+            Watching for one now — it’ll appear here a moment after you insert
+            it. The Pi’s own SD card is never offered as a destination.
+          </p>
+          <Button onClick={refreshDrives} className="mt-4">Check again</Button>
+        </div>
+      )}
+
+      {open && connected && (
+      <div className="mt-4 space-y-4">
+        <div className="flex justify-end">
+          <Button onClick={refreshDrives} className="!py-1">Rescan</Button>
+        </div>
         <Select label="Drive" value={device} onChange={setDevice}
           options={drives.map((d) => ({
             value: d.device,
@@ -258,6 +301,7 @@ function ExportCard({ cameraId, nights, showToast }) {
           </Button>
         </div>
       </div>
+      )}
     </Card>
   )
 }
