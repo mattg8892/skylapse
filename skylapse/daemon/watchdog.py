@@ -60,6 +60,18 @@ class StallWatch:
     def __init__(self) -> None:
         self.alerted = False
 
+    def mark_alerted(self) -> None:
+        """Record that a camera-trouble alert was raised somewhere else.
+
+        The reopen loop sends its own camera_offline when the camera vanishes
+        outright, and it knows more about that case than the watchdog does. But
+        recovery is only reported through this latch, so without telling it,
+        an alert raised over there would never be followed by an all-clear —
+        you would be told the camera broke and never told it came back. That is
+        exactly what happened on the first real unplug.
+        """
+        self.alerted = True
+
     def frame_written(self) -> bool:
         """Record a captured frame.
 

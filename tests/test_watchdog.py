@@ -87,6 +87,24 @@ def test_recovery_rearms_and_reports_once():
                    last_frame_at=1700.0, **NIGHT) is not None
 
 
+def test_an_alert_from_the_reopen_loop_still_gets_an_all_clear():
+    """Regression from a real unplug: the reopen loop raised camera_offline,
+    the camera came back, and no recovery notice was ever sent — because only
+    the watchdog's own alerts armed the latch. Every alert needs an all-clear.
+    """
+    w = StallWatch()
+    w.mark_alerted()                       # as the reopen loop now does
+    assert w.frame_written() is True, "no all-clear after a reopen-loop alert"
+    assert w.frame_written() is False, "all-clear sent more than once"
+
+
+def test_mark_alerted_suppresses_a_duplicate_watchdog_alert():
+    """If the reopen loop already said something, the watchdog must not pile on."""
+    w = StallWatch()
+    w.mark_alerted()
+    assert w.check(state="capturing", now=1e6, last_frame_at=1.0, **NIGHT) is None
+
+
 def test_frames_without_a_stall_say_nothing():
     """Normal operation must not emit a recovery notice on every frame."""
     w = StallWatch()

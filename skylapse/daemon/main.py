@@ -119,6 +119,10 @@ class CaptureDaemon:
                 if attempt == 1:          # first retry failed too: it's real
                     notify.notify("camera_offline", "Camera offline",
                                   "Skylapse can't reach the camera.")
+                    # Arm the recovery notice. Every alert must have an
+                    # all-clear, or you are left refreshing the dashboard to
+                    # find out whether plugging it back in worked.
+                    self.stall.mark_alerted()
                 time.sleep(delay)
                 attempt += 1
 
@@ -275,9 +279,10 @@ class CaptureDaemon:
             self.last_frame_monotonic = time.monotonic()
             self.state = "capturing"
             if self.stall.frame_written():
-                log.info("Frames resumed after a stall")
+                log.info("Frames resumed; sending the all-clear")
                 notify.notify("camera_offline", "Skylapse: capturing again",
-                              "Frames are arriving normally again.")
+                              "The camera is back and frames are arriving "
+                              "normally.")
             self._write_status({
                 "state": "capturing",
                 "period": period(self.cfg),
