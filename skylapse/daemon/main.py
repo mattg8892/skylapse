@@ -287,6 +287,10 @@ class CaptureDaemon:
                 "state": "capturing",
                 "period": period(self.cfg),
                 "latest": self.latest_path,
+                # Wall clock of the capture itself, not of this status write.
+                # The dashboard counts down from it, so the save and analysis
+                # time between the two would show up as drift.
+                "frame_at": frame.timestamp,
                 "exposure_us": self.exposure_us,
                 "gain": self.gain,
                 "brightness": round(self.last_brightness, 1),

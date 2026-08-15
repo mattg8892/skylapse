@@ -5,6 +5,9 @@ import SettingsScreen from './SettingsScreen.jsx'
 import NightsScreen from './NightsScreen.jsx'
 import FocusScreen from './FocusScreen.jsx'
 import { Button, Card, Toast, useToast } from '../components/ui.jsx'
+import {
+  countdownFor, countdownText, idleDetail, pillFor, serverNow,
+} from '../lib/capture.js'
 
 // One entry per navigable screen. Focus is deliberately absent: it is entered
 // from the dashboard, not navigated to, and leaving it must stop the session.
@@ -27,9 +30,12 @@ export default function Dashboard({ status }) {
 
   return (
     <div className="mx-auto min-h-screen max-w-3xl px-4 py-6">
-      <header className="flex items-center justify-between gap-3">
-        <h1 className="text-lg font-medium">Skylapse</h1>
-        <div className="flex items-center gap-3 text-sm">
+      <header className="flex items-start justify-between gap-3">
+        <div>
+          <h1 className="text-lg font-medium">Skylapse</h1>
+          <LiveStatus status={status} />
+        </div>
+        <div className="flex shrink-0 items-center gap-3 text-sm">
           {standalone && (
             <span className="rounded-full bg-amber-950 px-3 py-1 text-amber-400">
               Network: Standalone
@@ -89,6 +95,52 @@ export default function Dashboard({ status }) {
       )}
 
       <Toast message={toast} />
+    </div>
+  )
+}
+
+/* -- live status pill ------------------------------------------------------ */
+
+const PILL_CLASS = {
+  green: 'bg-emerald-950 text-emerald-400',
+  amber: 'bg-amber-950 text-amber-400',
+  red: 'bg-rose-950 text-rose-400',
+  blue: 'bg-indigo-950 text-indigo-300',
+  sky: 'bg-sky-950 text-sky-300',
+  zinc: 'bg-zinc-800 text-zinc-400',
+}
+
+function LiveStatus({ status }) {
+  // Ticks locally every second so the countdown moves, and resyncs to the
+  // server clock on every status poll — the browser's own clock is not
+  // trustworthy relative to a Pi that steps its time at boot.
+  const [now, setNow] = useState(() => serverNow(status))
+
+  useEffect(() => {
+    setNow(serverNow(status))          // resync on each new status
+  }, [status])
+
+  useEffect(() => {
+    const id = setInterval(() => setNow((t) => t + 1), 1000)
+    return () => clearInterval(id)
+  }, [])
+
+  const pill = pillFor(status, now)
+  const countdown = countdownText(countdownFor(status, now))
+  const dusk = pill.key === 'idle_day' ? idleDetail(status) : null
+  const frames = status?.capture?.frames_tonight
+
+  return (
+    <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
+      <span className={`rounded-full px-2.5 py-0.5 ${PILL_CLASS[pill.tone]}`}>
+        <span aria-hidden="true">●</span> {pill.label}{dusk ? ` at ${dusk}` : ''}
+      </span>
+      {countdown && <span className="tabular-nums text-zinc-500">{countdown}</span>}
+      {frames > 0 && (
+        <span className="text-zinc-500">
+          {frames.toLocaleString()} frame{frames === 1 ? '' : 's'} tonight
+        </span>
+      )}
     </div>
   )
 }

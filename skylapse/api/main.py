@@ -20,6 +20,8 @@ from pydantic import BaseModel
 
 from .. import __version__, config, notify, remote, updater, usbexport
 from ..daemon.pipeline import process
+from ..daemon.scheduler import profile_for
+from ..daemon.watchdog import stall_threshold_s
 
 app = FastAPI(title="Skylapse", version="0.1.0")
 
@@ -175,10 +177,54 @@ def _current(daemon: dict, cfg: config.Config) -> dict:
             "keeper_depth": depth}
 
 
+# Counting a night's frames is a directory scan; frames arrive minutes apart at
+# most, so a short cache costs nothing and saves repeating it per browser poll.
+_FRAMES_TTL_S = 10
+_frames_cache: dict = {"at": 0.0, "night": "", "count": 0}
+
+
+def _frames_tonight(camera_id: str, night: str) -> int:
+    now = time.time()
+    if _frames_cache["night"] == night and now - _frames_cache["at"] < _FRAMES_TTL_S:
+        return _frames_cache["count"]
+    folder = config.IMAGE_ROOT / camera_id / night
+    count = sum(1 for _ in folder.glob(FRAME_GLOB)) if folder.is_dir() else 0
+    _frames_cache.update(at=now, night=night, count=count)
+    return count
+
+
+def _capture(cfg: config.Config, daemon: dict, current: dict) -> dict:
+    """What the dashboard needs to judge liveness for itself.
+
+    The pill is driven by frame freshness rather than the daemon's own state
+    string, because "capturing" is what a wedged daemon reports right up until
+    someone notices. Handing the client the same threshold the watchdog uses
+    means the pill and the notification can never disagree about what counts as
+    stalled.
+    """
+    cam = cfg.cameras.get(current.get("camera_id", ""))
+    gap_s = exposure_us = None
+    if cam is not None:
+        profile = profile_for(cfg, cam)
+        gap_s = profile.gap_s
+        exposure_us = daemon.get("exposure_us") or profile.exposure_us
+    return {
+        "frame_at": daemon.get("frame_at"),
+        "exposure_us": exposure_us,
+        "gap_s": gap_s,
+        "stall_threshold_s": (
+            stall_threshold_s(gap_s, exposure_us)
+            if gap_s is not None and exposure_us is not None else None),
+        "frames_tonight": _frames_tonight(current.get("camera_id", ""),
+                                          current.get("night", "")),
+    }
+
+
 @app.get("/api/status")
 def status() -> dict:
     cfg = config.load()
     daemon = _read_status("daemon")
+    current = _current(daemon, cfg)
     return {
         "daemon": daemon,
         "network": _read_status("netwatch"),
@@ -186,7 +232,8 @@ def status() -> dict:
         "version": __version__,
         "setup_complete": cfg.setup_complete,
         "storage": _storage(cfg),
-        "current": _current(daemon, cfg),
+        "current": current,
+        "capture": _capture(cfg, daemon, current),
         # Written by the daemon after it acts on a keeper request, so the UI can
         # report what was actually saved — POST /api/keeper returns immediately.
         "keeper": _read_status("keeper_result"),
