@@ -156,7 +156,7 @@ class CaptureDaemon:
             # eat the night. Nothing is saved to disk in this mode.
             self._poll_focus_command()
             if self.focus is not None:
-                if time.time() - self.focus_started > FOCUS_TIMEOUT:
+                if time.monotonic() - self.focus_started > FOCUS_TIMEOUT:
                     self.focus = None
                     log.info("Focus mode timed out; resuming capture")
                 else:
@@ -181,8 +181,8 @@ class CaptureDaemon:
             self._poll_keeper_command()
 
             # Aurora poll every POLL_MINUTES; once-per-episode alerting.
-            if time.time() - self.aurora_last_poll > aurora.POLL_MINUTES * 60:
-                self.aurora_last_poll = time.time()
+            if time.monotonic() - self.aurora_last_poll > aurora.POLL_MINUTES * 60:
+                self.aurora_last_poll = time.monotonic()
                 self.aurora_alerted, self.last_kp = aurora.check(
                     self.cfg, now_period, self.aurora_alerted)
 
@@ -306,9 +306,13 @@ class CaptureDaemon:
         at the camera with a hand on the ring, and a minute of nothing is
         indistinguishable from a broken button.
         """
-        deadline = time.time() + seconds
+        # Monotonic: a wall-clock deadline turns an NTP step into a wildly wrong
+        # sleep. Observed on this rig — the clock moved back four hours mid-gap
+        # and the daemon sat in this loop waiting for a deadline four hours out,
+        # capturing nothing and reporting "capturing" the whole time.
+        deadline = time.monotonic() + seconds
         while self.running:
-            remaining = deadline - time.time()
+            remaining = deadline - time.monotonic()
             if remaining <= 0:
                 return
             if any((config.RUN_DIR / name).exists() for name in COMMAND_FILES):
@@ -373,7 +377,7 @@ class CaptureDaemon:
             start.unlink(missing_ok=True)
             if self.focus is None:
                 self.focus = FocusSession()
-                self.focus_started = time.time()
+                self.focus_started = time.monotonic()
                 # Fresh session: don't compare against the last session's
                 # controls and rebaseline on the very first frame.
                 self.focus_controls = None
@@ -414,7 +418,7 @@ class CaptureDaemon:
                      self.focus_controls[0] // 1000, self.focus_controls[1],
                      exposure_us // 1000, gain)
             self.focus = FocusSession()
-            self.focus_rebaselined_at = time.time()
+            self.focus_rebaselined_at = time.monotonic()
         self.focus_controls = (exposure_us, gain)
         try:
             self.driver.set_controls(exposure_us, gain)
@@ -436,7 +440,7 @@ class CaptureDaemon:
                             "height": frame.height,
                             # Brief flag so the UI can explain the vanished peak
                             # rather than looking like it lost the reading.
-                            "rebaselined": time.time() - self.focus_rebaselined_at < 4,
+                            "rebaselined": time.monotonic() - self.focus_rebaselined_at < 4,
                             **info})
 
     def _poll_keeper_command(self) -> None:
