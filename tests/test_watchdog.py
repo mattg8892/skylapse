@@ -98,3 +98,34 @@ def test_frames_without_a_stall_say_nothing():
 ])
 def test_describe_is_readable(age, expected):
     assert watchdog.describe(age) == expected
+
+
+def test_the_daemon_measures_stalls_on_a_monotonic_clock(monkeypatch):
+    """Regression: a Pi has no battery-backed RTC, so it boots with a stale
+    clock that NTP steps forward — 15.8 hours on this rig after an overnight
+    power-off. Measured against wall time that step read as 15.8 hours of
+    silence, and every power-cycle would send a false stall alert.
+    """
+    import time
+    from skylapse.daemon.main import CaptureDaemon
+
+    daemon = CaptureDaemon()
+    seen = {}
+
+    class Spy:
+        def check(self, **kw):
+            seen.update(kw)
+            return None
+
+    daemon.stall = Spy()
+    daemon.last_frame_monotonic = time.monotonic()
+
+    class Profile:
+        gap_s, exposure_us = 5, 1_000_000
+
+    daemon._check_for_stall(Profile())
+
+    # Monotonic and wall clock are wildly different magnitudes; asserting on
+    # that distinguishes them without depending on either exact value.
+    assert abs(seen["now"] - time.monotonic()) < 5
+    assert abs(seen["now"] - time.time()) > 1000, "stall is measured on wall time"

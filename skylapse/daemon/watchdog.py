@@ -75,6 +75,12 @@ class StallWatch:
               gap_s: float, exposure_us: float) -> float | None:
         """Return the stall age in seconds if this is the moment to alert.
 
+        `now` and `last_frame_at` MUST come from a monotonic clock. A Pi has no
+        battery-backed RTC, so it boots with a stale time that NTP then steps
+        forward — measured at 15.8 hours on this rig after an overnight
+        power-off. Against wall time that step reads as 15.8 hours of silence,
+        and every power-cycle sends a false alert.
+
         None means "say nothing": either capture is legitimately quiet, or the
         gap is still within tolerance, or we have already alerted about this
         episode.

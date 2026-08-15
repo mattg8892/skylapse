@@ -57,7 +57,11 @@ class CaptureDaemon:
         self.last_period: str | None = None
         self.idle_day = False               # night_only camera waiting for dusk
         self.latest_path: str | None = None
-        self.last_frame_at = 0.0
+        # Monotonic, NOT wall clock. A Pi has no battery-backed RTC, so it boots
+        # with a stale time and NTP steps it forward — 15.8 hours, in the case
+        # that found this. Measuring a stall against wall time turns every
+        # power-cycle into a false "capture stalled" alert on someone's phone.
+        self.last_frame_monotonic = 0.0
         self.stall = StallWatch()
         self.state = "starting"             # what the watchdog judges against
         self.consecutive_bright = 0
@@ -268,7 +272,7 @@ class CaptureDaemon:
                      "yes" if dng_saved else "no", jpeg.name)
 
             self.latest_path = str(jpeg)
-            self.last_frame_at = time.time()
+            self.last_frame_monotonic = time.monotonic()
             self.state = "capturing"
             if self.stall.frame_written():
                 log.info("Frames resumed after a stall")
@@ -314,7 +318,8 @@ class CaptureDaemon:
     def _check_for_stall(self, profile) -> None:
         """Alert once if frames have stopped arriving when they shouldn't have."""
         age = self.stall.check(
-            state=self.state, now=time.time(), last_frame_at=self.last_frame_at,
+            state=self.state, now=time.monotonic(),
+            last_frame_at=self.last_frame_monotonic,
             gap_s=profile.gap_s, exposure_us=self.exposure_us)
         if age is None:
             return
