@@ -125,12 +125,13 @@ done
 
 chown -R $SKYLAPSE_USER:$SKYLAPSE_USER $INSTALL_DIR
 
-# git refuses to operate on a repo owned by another user. The updater runs as
-# $SKYLAPSE_USER against a checkout it owns, but the ownership above happens
-# after the copy, so make the trust explicit rather than relying on ordering.
-git config --system --add safe.directory $INSTALL_DIR
-
 SKYLAPSE_IMAGE_BUILD=1 SKYLAPSE_USER=$SKYLAPSE_USER $INSTALL_DIR/install.sh
+
+# After install.sh, because Pi OS Lite ships no git and install.sh is what
+# apt-installs it. git refuses to operate on a repo owned by another user, and
+# the in-app updater is git fetch + git checkout, so without this the image
+# could never update itself.
+git config --system --add safe.directory $INSTALL_DIR
 
 # The promised address is skylapse.local. Imager can override the hostname, but
 # somebody who flashes the image and clicks straight past customisation should
