@@ -1,9 +1,38 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 
 // Implements the flow from DESIGN.md: saved networks with reasons, three
 // actions (Try again / Connect new / Access point), "always" checkbox,
 // and the time-sync card that appears only when the camera's
 // clock source is browser-only.
+
+/**
+ * Setup, from the screen someone lands on when the network is gone.
+ *
+ * This is where a camera that has moved house ends up, and re-running setup is
+ * the shortest route back — but only for whoever already has the password. A
+ * fallback screen is reachable by anyone who can join the camera's own Wi-Fi,
+ * so it must not hand out a way around the lock.
+ */
+function RunSetupAgain() {
+  const [gate, setGate] = useState(null)
+
+  useEffect(() => {
+    fetch('/api/auth/status').then((r) => r.json()).then(setGate).catch(() => {})
+  }, [])
+
+  if (!gate || (gate.password_set && !gate.authenticated)) return null
+  return (
+    <button
+      onClick={async () => {
+        await fetch('/api/setup/reset', { method: 'POST' }).catch(() => {})
+        window.location.href = '/'
+      }}
+      className="mt-2 text-sm text-zinc-500 underline">
+      Run setup again
+    </button>
+  )
+}
+
 
 export default function ConnectionScreen({ status }) {
   const [showStandalone, setShowStandalone] = useState(false)
@@ -86,6 +115,7 @@ export default function ConnectionScreen({ status }) {
               onChange={(e) => setAlwaysStandalone(e.target.checked)} />
             Always use access point mode
           </label>
+          <RunSetupAgain />
         </div>
       </div>
 

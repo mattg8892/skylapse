@@ -293,7 +293,11 @@ def auth_logout(response: Response) -> dict:
 
 
 class PasswordChange(BaseModel):
-    password: str = ""              # empty removes protection
+    # Three states, deliberately distinct: absent leaves the password alone
+    # (for changing only the sub-toggle), empty removes it, anything else sets
+    # it. Defaulting absent to "remove" would let a request that simply forgot
+    # the field silently unprotect the camera.
+    password: str | None = None
     current: str = ""               # required once one is set
     public_live_view: bool | None = None
 
@@ -311,7 +315,9 @@ def auth_set_password(body: PasswordChange, response: Response) -> dict:
             body.current, cfg.auth.password_hash):
         raise HTTPException(403, "current password required")
 
-    if body.password:
+    if body.password is None:
+        pass                        # only the sub-toggle is being changed
+    elif body.password:
         if len(body.password) < auth.MIN_PASSWORD_CHARS:
             raise HTTPException(400, "password is too short")
         try:
@@ -330,9 +336,12 @@ def auth_set_password(body: PasswordChange, response: Response) -> dict:
         cfg.auth.public_live_view = body.public_live_view
     config.save(cfg)
 
-    if cfg.auth.password_hash:
-        _set_session(response, cfg)      # do not log the setter out of their own camera
-    else:
+    if cfg.auth.password_hash and body.password:
+        # A new secret was issued, so the caller's own cookie is now stale.
+        # Re-issuing here is what stops someone being logged out of the camera
+        # they have this second finished securing.
+        _set_session(response, cfg)
+    elif not cfg.auth.password_hash:
         response.delete_cookie(auth.SESSION_COOKIE)
     return {"ok": True, "password_set": bool(cfg.auth.password_hash),
             "public_live_view": cfg.auth.public_live_view}
@@ -1154,9 +1163,14 @@ def notify_generate_topic() -> dict:
     if not cfg.notifications.ntfy_topic:
         cfg.notifications.ntfy_topic = f"skylapse-{secrets.token_hex(4)}"
         config.save(cfg)
+    subscribe = (f"{cfg.notifications.ntfy_server.rstrip('/')}/"
+                 f"{cfg.notifications.ntfy_topic}")
+    # A QR beats typing a random hex topic into a phone by hand, and the wizard
+    # is exactly where the phone is already out. Rendered the same way remote
+    # access renders its own.
     return {"topic": cfg.notifications.ntfy_topic,
-            "subscribe_url": f"{cfg.notifications.ntfy_server.rstrip('/')}/"
-                             f"{cfg.notifications.ntfy_topic}"}
+            "subscribe_url": subscribe,
+            "qr_svg": remote.qr_svg(subscribe)}
 
 
 # -- USB export ---------------------------------------------------------------

@@ -217,3 +217,25 @@ def test_an_expiry_cannot_be_edited_without_the_signature():
     token = auth.issue_token(secret, now=0)
     _, _, signature = token.partition(".")
     assert not auth.token_valid(f"99999999999.{signature}", secret, now=1)
+
+
+def test_the_sub_toggle_can_be_changed_without_touching_the_password(locked_camera):
+    """A request that omits the password must not remove it. Defaulting an
+    absent field to "remove" would let a forgotten key silently unprotect the
+    camera — which is the whole point of having one."""
+    locked_camera.post("/api/auth/login", json={"password": "sekrit123"})
+    before = config.load().auth.password_hash
+
+    r = locked_camera.post("/api/auth/password",
+                           json={"current": "sekrit123", "public_live_view": True})
+    assert r.status_code == 200
+    cfg = config.load()
+    assert cfg.auth.password_hash == before, "the password was changed or removed"
+    assert cfg.auth.public_live_view is True
+
+
+def test_changing_only_the_sub_toggle_keeps_you_logged_in(locked_camera):
+    locked_camera.post("/api/auth/login", json={"password": "sekrit123"})
+    locked_camera.post("/api/auth/password",
+                       json={"current": "sekrit123", "public_live_view": True})
+    assert locked_camera.get("/api/config").status_code == 200

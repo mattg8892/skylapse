@@ -188,6 +188,9 @@ export default function SettingsScreen({ showToast, storage }) {
       {/* Network */}
       <NetworkCard showToast={showToast} />
 
+      {/* Security */}
+      <SecurityCard showToast={showToast} />
+
       {/* Remote access */}
       <Card title="Remote access">
         <p className="mt-1 text-sm text-zinc-400">
@@ -476,6 +479,118 @@ function CameraSettings({ id, cam, storage, onCamera, onProfile }) {
         </p>
       </Card>
     </>
+  )
+}
+
+/* -- security -------------------------------------------------------------- */
+
+/**
+ * The access-control card for cameras set up before there was a password, and
+ * for changing or removing one afterwards (DESIGN.md, "Access control").
+ *
+ * One shared password, router-admin tier. Removing it is as easy as setting
+ * it, on purpose: a security control you cannot back out of is one people
+ * avoid turning on at all.
+ */
+function SecurityCard({ showToast }) {
+  const [state, setState] = useState(null)
+  const [current, setCurrent] = useState('')
+  const [next, setNext] = useState('')
+  const [busy, setBusy] = useState(false)
+
+  const refresh = useCallback(() => {
+    fetch('/api/auth/status').then((r) => r.json()).then(setState).catch(() => {})
+  }, [])
+  useEffect(() => { refresh() }, [refresh])
+
+  if (!state) return null
+
+  const send = async (body, done) => {
+    setBusy(true)
+    const r = await fetch('/api/auth/password', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }).catch(() => null)
+    setBusy(false)
+    if (!r?.ok) {
+      const detail = await r?.json().catch(() => null)
+      return showToast?.(detail?.detail || 'Could not change the password')
+    }
+    setCurrent(''); setNext('')
+    refresh()
+    showToast?.(done)
+  }
+
+  return (
+    <Card title="Security">
+      <p className="mt-1 text-sm text-zinc-400">
+        {state.password_set
+          ? 'This camera asks for a password.'
+          : 'Anyone on your network can open this page and change settings.'}
+        {' '}One shared password, like a router’s admin page — it defends
+        against your local network, not the internet, which the camera is never
+        exposed to either way.
+      </p>
+
+      <div className="mt-4 space-y-3">
+        {state.password_set && (
+          <input type="password" value={current} placeholder="Current password"
+            autoComplete="current-password"
+            onChange={(e) => setCurrent(e.target.value)}
+            className="w-full rounded-lg border border-zinc-700 bg-zinc-900
+                       px-3 py-2.5 text-sm" />
+        )}
+        <input type="password" value={next} autoComplete="new-password"
+          placeholder={state.password_set ? 'New password' : 'Set a password'}
+          onChange={(e) => setNext(e.target.value)}
+          className="w-full rounded-lg border border-zinc-700 bg-zinc-900
+                     px-3 py-2.5 text-sm" />
+
+        <Button tone="accent" className="w-full" disabled={busy || !next}
+          onClick={() => send({ current, password: next },
+                              'Password saved')}>
+          {state.password_set ? 'Change password' : 'Set password'}
+        </Button>
+
+        {state.password_set && (
+          <>
+            <label className="flex items-start gap-3 text-sm">
+              <Toggle checked={state.public_live_view} label="Public live view"
+                onChange={(public_live_view) =>
+                  send({ current, public_live_view }, 'Saved')} />
+              <span className="text-zinc-400">
+                Show the latest frame without a password. Settings and controls
+                stay locked.
+              </span>
+            </label>
+            <Button tone="warn" className="w-full" disabled={busy || !current}
+              onClick={() => send({ current, password: '' },
+                                  'Password removed')}>
+              Remove password
+            </Button>
+            <p className="text-xs text-zinc-500">
+              Forgotten it? Clear the entry in /etc/skylapse/config.yaml over
+              SSH. It never needs a reflash.
+            </p>
+          </>
+        )}
+      </div>
+
+      <div className="mt-5 border-t border-zinc-800 pt-4">
+        <Button className="w-full"
+          onClick={async () => {
+            await fetch('/api/setup/reset', { method: 'POST' }).catch(() => {})
+            window.location.href = '/'
+          }}>
+          Run setup again
+        </Button>
+        <p className="mt-2 text-xs text-zinc-500">
+          Walks the first-run wizard with your current settings filled in.
+          Nothing is cleared.
+        </p>
+      </div>
+    </Card>
   )
 }
 

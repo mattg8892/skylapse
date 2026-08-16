@@ -3,9 +3,10 @@
 // accent, muted zinc-400 body copy.
 import { useCallback, useState } from 'react'
 
-export function Card({ title, right, children }) {
+export function Card({ title, right, children, className = '' }) {
   return (
-    <section className="rounded-2xl border border-zinc-800 bg-zinc-900 p-5">
+    <section
+      className={`rounded-2xl border border-zinc-800 bg-zinc-900 p-5 ${className}`}>
       {(title || right) && (
         <div className="flex items-center justify-between gap-3">
           {title ? <h2 className="font-medium">{title}</h2> : <span />}
