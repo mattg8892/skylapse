@@ -1,0 +1,212 @@
+"""The setup wizard: gating, the draft, and the atomic commit.
+
+DESIGN.md guard 4 is the contract being defended: the flag is persisted with
+the config, before the final screen renders, and re-entry is idempotent —
+walking the wizard again on a configured camera shows current values and never
+blanks them.
+"""
+from __future__ import annotations
+
+import pytest
+from fastapi.testclient import TestClient
+
+from skylapse import config, setup
+from skylapse.api import main as api
+
+
+@pytest.fixture
+def fresh(tmp_path, monkeypatch):
+    """A camera that has never been set up."""
+    monkeypatch.setattr(config, "CONFIG_PATH", tmp_path / "config.yaml")
+    monkeypatch.setattr(config, "RUN_DIR", tmp_path / "run")
+    config.save(config.Config())
+    return TestClient(api.app)
+
+
+@pytest.fixture
+def configured(fresh):
+    cfg = config.load()
+    cfg.setup_complete = True
+    cfg.location.latitude, cfg.location.longitude = 42.73, -87.78
+    cfg.location.timezone = "America/Chicago"
+    cfg.camera("picam-imx477").label = "Pi Camera"
+    cfg.active_camera = "picam-imx477"
+    config.save(cfg)
+    return fresh
+
+
+# -- gating ------------------------------------------------------------------
+
+def test_a_fresh_camera_reports_setup_incomplete(fresh):
+    assert fresh.get("/api/status").json()["setup_complete"] is False
+    assert fresh.get("/api/setup/draft").json()["complete"] is False
+
+
+def test_a_configured_camera_reports_complete(configured):
+    assert configured.get("/api/status").json()["setup_complete"] is True
+
+
+# -- the draft ---------------------------------------------------------------
+
+def test_the_draft_seeds_from_current_config(configured):
+    """Re-entry shows what the camera is set to, never a blank form."""
+    draft = configured.get("/api/setup/draft").json()["draft"]
+    assert draft["location"]["latitude"] == 42.73
+    assert draft["camera"]["camera_id"] == "picam-imx477"
+
+
+def test_a_screen_only_writes_its_own_section(fresh):
+    """Going Back and forward again must not blank the screens after it."""
+    fresh.patch("/api/setup/draft", json={"location": {"latitude": 51.5}})
+    fresh.patch("/api/setup/draft", json={"capture": {"schedule": "night_only"}})
+    draft = fresh.get("/api/setup/draft").json()["draft"]
+    assert draft["location"]["latitude"] == 51.5
+    assert draft["capture"]["schedule"] == "night_only"
+
+
+def test_the_draft_survives_a_reconnect(fresh):
+    """It lives on the camera, not in the phone. The future entry path is a
+    hotspot the camera is about to reconfigure — losing four screens of answers
+    to a locked phone would be a poor first impression."""
+    fresh.patch("/api/setup/draft", json={"location": {"latitude": 51.5}})
+    assert setup.draft_path().exists()
+    assert setup.load_draft()["location"]["latitude"] == 51.5
+
+
+def test_a_corrupt_draft_does_not_block_setup(fresh):
+    setup.draft_path().parent.mkdir(parents=True, exist_ok=True)
+    setup.draft_path().write_text("{not json")
+    assert fresh.get("/api/setup/draft").status_code == 200
+
+
+def test_patching_is_idempotent(fresh):
+    for _ in range(3):
+        fresh.patch("/api/setup/draft", json={"capture": {"schedule": "night_only"}})
+    assert setup.load_draft()["capture"]["schedule"] == "night_only"
+
+
+# -- committing --------------------------------------------------------------
+
+def test_completing_writes_config_and_flag_together(fresh):
+    """Guard 4: one atomic save. A power cut between them would leave a camera
+    that runs the wizard again at every boot."""
+    fresh.patch("/api/setup/draft", json={
+        "location": {"latitude": 42.73, "longitude": -87.78,
+                     "timezone": "America/Chicago"},
+        "camera": {"camera_id": "picam-imx477"},
+        "capture": {"schedule": "night_only", "raw_mode": "off"}})
+    assert fresh.post("/api/setup/complete").status_code == 200
+
+    cfg = config.load()
+    assert cfg.setup_complete is True
+    assert cfg.location.latitude == 42.73
+    assert cfg.cameras["picam-imx477"].capture_schedule == "night_only"
+
+
+def test_completing_clears_the_draft(fresh):
+    fresh.patch("/api/setup/draft", json={"location": {"latitude": 42.73}})
+    fresh.post("/api/setup/complete")
+    assert not setup.draft_path().exists()
+
+
+def test_completing_without_touching_anything_yields_a_working_config(fresh):
+    """Continue-through must produce something sane, not a half-set camera."""
+    assert fresh.post("/api/setup/complete").status_code == 200
+    cfg = config.load()
+    assert cfg.setup_complete is True
+    assert cfg.jpeg_quality > 0 and cfg.cleanup_free_gb > 0
+
+
+def test_re_running_setup_never_blanks_what_is_there(configured):
+    """The idempotency requirement end to end: walk it again, change one
+    screen, and everything else survives."""
+    configured.post("/api/setup/reset")
+    configured.patch("/api/setup/draft", json={"capture": {"schedule": "always"}})
+    configured.post("/api/setup/complete")
+
+    cfg = config.load()
+    assert cfg.location.latitude == 42.73, "location was blanked by a re-run"
+    assert cfg.cameras["picam-imx477"].label == "Pi Camera"
+    assert cfg.setup_complete is True
+
+
+def test_reset_reopens_the_wizard(configured):
+    assert configured.post("/api/setup/reset").status_code == 200
+    assert config.load().setup_complete is False
+
+
+# -- the password, applied only at the end -----------------------------------
+
+def test_a_password_from_the_wizard_takes_effect(fresh):
+    from skylapse import auth
+
+    fresh.patch("/api/setup/draft",
+                json={"security": {"password": "shedkey1",
+                                   "public_live_view": True}})
+    fresh.post("/api/setup/complete")
+
+    cfg = config.load()
+    assert auth.verify_password("shedkey1", cfg.auth.password_hash)
+    assert cfg.auth.public_live_view is True
+
+
+def test_an_abandoned_wizard_never_locks_the_camera(fresh):
+    """The password is applied at the commit, not on the security screen. A
+    wizard abandoned halfway must not leave a camera locked behind a password
+    nobody finished choosing."""
+    fresh.patch("/api/setup/draft", json={"security": {"password": "shedkey1"}})
+    assert config.load().auth.password_hash == ""
+
+
+def test_skipping_the_password_leaves_the_camera_open(fresh):
+    """Skip is first-class (DESIGN.md). Off is the default and must stay it."""
+    fresh.post("/api/setup/complete")
+    assert config.load().auth.password_hash == ""
+
+
+def test_the_wizard_does_not_log_you_out_of_what_you_just_set_up(fresh):
+    fresh.patch("/api/setup/draft", json={"security": {"password": "shedkey1"}})
+    fresh.post("/api/setup/complete")
+    assert fresh.get("/api/status").status_code == 200
+
+
+def test_a_too_short_password_is_refused_at_the_commit(fresh):
+    fresh.patch("/api/setup/draft", json={"security": {"password": "ab"}})
+    assert fresh.post("/api/setup/complete").status_code == 400
+    assert config.load().setup_complete is False, "committed despite refusing"
+
+
+# -- location cascade --------------------------------------------------------
+
+def test_the_location_check_proves_the_setting_matters(configured):
+    body = configured.get(
+        "/api/setup/location/check?latitude=42.73&longitude=-87.78").json()
+    assert body["sunset"] is not None
+    assert body["kp_threshold"] >= 1
+    assert body["null_island"] is False
+
+
+def test_null_island_is_flagged(configured):
+    """0,0 is what an unset config looks like, so it is the value most likely
+    to be wrong by accident rather than because someone is on a boat."""
+    body = configured.get(
+        "/api/setup/location/check?latitude=0&longitude=0").json()
+    assert body["null_island"] is True
+
+
+def test_impossible_coordinates_are_flagged(configured):
+    body = configured.get(
+        "/api/setup/location/check?latitude=95&longitude=200").json()
+    assert body["out_of_range"] is True
+
+
+def test_the_ip_estimate_fails_cleanly_with_no_internet(configured, monkeypatch):
+    """Offline is the normal case for this device. The cascade has to fall
+    through to manual entry, not hang or 500."""
+    import urllib.request
+
+    def no_internet(*a, **kw):
+        raise OSError("network unreachable")
+
+    monkeypatch.setattr(urllib.request, "urlopen", no_internet)
+    assert configured.get("/api/setup/location/estimate").status_code == 503

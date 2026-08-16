@@ -39,7 +39,8 @@ IDLE_POLL_S = 30                 # recheck cadence while a night_only camera
 COMMAND_POLL_S = 0.5             # how often a gap is interrupted to look for
                                  # UI commands; the bound on button latency
 # Command files the UI drops in RUN_DIR. Seeing any of these ends a gap early.
-COMMAND_FILES = ("focus_start", "focus_stop", "keeper_cmd", "resume_cmd")
+COMMAND_FILES = ("focus_start", "focus_stop", "keeper_cmd", "resume_cmd",
+                 "focus_cmd.json")
 
 
 class CaptureDaemon:
@@ -203,6 +204,7 @@ class CaptureDaemon:
                 self.keeper_buffer = collections.deque(self.keeper_buffer,
                                                        maxlen=depth)
             self._poll_keeper_command()
+            self._poll_setup_shot()
 
             # Aurora poll every POLL_MINUTES; once-per-episode alerting.
             if time.monotonic() - self.aurora_last_poll > aurora.POLL_MINUTES * 60:
@@ -425,6 +427,28 @@ class CaptureDaemon:
             if self.focus is not None:
                 self.focus = None
                 log.info("Focus mode OFF")
+
+    def _poll_setup_shot(self) -> None:
+        """The wizard's test shot: one real frame, straight to /run.
+
+        The only part of setup that proves the hardware works rather than
+        merely enumerating it. Written to the tmpfs, never to the image store —
+        a setup frame turning up in the middle of someone's first night would
+        be a small betrayal of the frame numbering.
+        """
+        request = config.RUN_DIR / "focus_cmd.json"
+        if not request.exists():
+            return
+        request.unlink(missing_ok=True)
+        try:
+            frame = self.driver.capture(*self._focus_controls())
+        except CameraError:
+            log.exception("Setup test shot failed")
+            return
+        cam = self.cfg.camera(self.camera_id)
+        process.write_preview(frame, config.RUN_DIR / "setup_shot.jpg",
+                              wb=self._wb(cam))
+        log.info("Setup test shot captured from %s", self.camera_id)
 
     def _focus_controls(self) -> tuple[int, int]:
         """Live exposure/gain for focus mode.

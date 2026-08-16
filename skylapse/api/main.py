@@ -18,7 +18,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from .. import (__version__, auth, config, notify, remote, updater,
+from .. import (__version__, auth, config, notify, remote, setup, updater,
                 usbexport)
 from ..daemon.pipeline import process
 from ..daemon.scheduler import profile_for
@@ -27,6 +27,193 @@ from ..daemon.watchdog import stall_threshold_s
 app = FastAPI(title="Skylapse", version="0.1.0")
 
 MAX_CLOCK_DRIFT_S = 5
+
+
+# -- setup wizard -----------------------------------------------------------
+
+@app.get("/api/setup/draft")
+def setup_draft() -> dict:
+    """The wizard's answers so far, seeded from config on first read."""
+    return {"complete": config.load().setup_complete,
+            "steps": list(setup.STEPS), "draft": setup.load_draft()}
+
+
+@app.patch("/api/setup/draft")
+def setup_patch(patch: dict) -> dict:
+    """One screen's answers. Merged section-wise so going Back and forward
+    again cannot blank the screens after it."""
+    return {"draft": setup.save_draft(setup.merge(setup.load_draft(), patch))}
+
+
+@app.post("/api/setup/complete")
+def setup_finish(body: dict | None = None) -> dict:
+    """Commit the draft and mark setup done.
+
+    Order matters and is DESIGN.md guard 4: the config and the flag are written
+    in one atomic save, *before* the final screen is rendered. A power cut at
+    the wrong instant then leaves a configured camera rather than one that
+    starts the wizard again at every boot.
+
+    The password is applied here rather than on the security screen so that a
+    wizard abandoned halfway never leaves a camera locked with a password
+    nobody finished choosing.
+    """
+    draft = setup.merge(setup.load_draft(), body or {})
+    cfg = setup.apply_draft(draft, config.load())
+
+    password = (draft.get("security") or {}).get("password") or ""
+    if password:
+        if len(password) < auth.MIN_PASSWORD_CHARS:
+            raise HTTPException(400, "password is too short")
+        try:
+            cfg.auth.password_hash = auth.hash_password(password)
+        except auth.PasswordTooLong as exc:
+            raise HTTPException(400, str(exc)) from exc
+        cfg.auth.session_secret = auth.new_secret()
+        cfg.auth.public_live_view = bool(
+            (draft.get("security") or {}).get("public_live_view"))
+
+    cfg.setup_complete = True
+    config.save(cfg)
+    setup.clear_draft()
+
+    response = JSONResponse({"ok": True, "summary": _setup_summary(cfg)})
+    if password:
+        # Whoever just set the password is holding the phone; logging them out
+        # of the camera they have this second finished setting up would be a
+        # remarkable way to end a wizard.
+        _set_session(response, cfg)
+    return response
+
+
+@app.post("/api/setup/reset")
+def setup_reset() -> dict:
+    """Run setup again. Clears the flag; the draft reseeds from current config,
+    so nothing is blanked before anything is answered."""
+    cfg = config.load()
+    cfg.setup_complete = False
+    config.save(cfg)
+    setup.clear_draft()
+    return {"ok": True}
+
+
+@app.get("/api/setup/location/estimate")
+def setup_location_estimate() -> dict:
+    """City-level location from the public IP. The middle rung of the cascade.
+
+    Asked for only after the browser's own geolocation has been declined or has
+    failed, and answered from the camera rather than the phone because in the
+    hotspot case the phone has no route to the internet either — but the camera
+    might, over ethernet.
+
+    Approximate by construction and labelled as such: it locates the ISP's exit,
+    which can be a different city. Good enough to put sunset within minutes,
+    which is all the scheduler needs.
+    """
+    import urllib.request
+
+    try:
+        with urllib.request.urlopen(
+                "http://ip-api.com/json/?fields=status,lat,lon,timezone,city,regionName",
+                timeout=6) as response:
+            data = json.loads(response.read().decode())
+    except Exception:
+        raise HTTPException(503, "no internet connection to estimate from")
+    if data.get("status") != "success":
+        raise HTTPException(503, "location lookup failed")
+    return {"latitude": data.get("lat"), "longitude": data.get("lon"),
+            "timezone": data.get("timezone"),
+            "place": ", ".join(p for p in (data.get("city"),
+                                           data.get("regionName")) if p),
+            "approximate": True, "source": "ip"}
+
+
+@app.get("/api/setup/location/check")
+def setup_location_check(latitude: float, longitude: float) -> dict:
+    """What a location implies, so the screen can prove it matters.
+
+    Sunset and the aurora threshold are the two things a wrong location breaks
+    quietly — the camera would simply idle at the wrong hours and never alert.
+    Showing them turns "type your coordinates" into something checkable.
+    """
+    from ..daemon.aurora import kp_threshold
+    from ..daemon.scheduler import next_dusk
+
+    cfg = config.load().model_copy(deep=True)
+    cfg.location.latitude, cfg.location.longitude = latitude, longitude
+    sunset = next_dusk(cfg)
+    # 0,0 is in the Gulf of Guinea and is what an unset config looks like, so
+    # it is the one value most likely to be wrong by accident rather than
+    # because someone is on a boat.
+    null_island = abs(latitude) < 0.5 and abs(longitude) < 0.5
+    return {
+        "sunset": sunset.timestamp() if sunset else None,
+        "kp_threshold": kp_threshold(latitude),
+        "null_island": null_island,
+        "out_of_range": not (-90 <= latitude <= 90 and -180 <= longitude <= 180),
+    }
+
+
+@app.post("/api/setup/camera/test")
+def setup_camera_test() -> dict:
+    """Detect cameras and take one real frame from the chosen one.
+
+    A test shot is the only part of setup that proves the hardware works rather
+    than merely enumerates. It goes through the focus preview path, which
+    writes to /run and never to the image store — a setup frame must not turn
+    up in someone's first night.
+    """
+    config.write_run_file("focus_cmd.json", json.dumps(
+        {"cmd": "test_shot", "at": time.time()}))
+    return {"ok": True,
+            "note": "capture requested; poll /api/setup/camera for the result"}
+
+
+@app.get("/api/setup/camera")
+def setup_camera() -> dict:
+    """What the daemon can see, and whether a test shot is waiting."""
+    status = _read_status("daemon") or {}
+    cfg = config.load()
+    cameras = [{"camera_id": cam_id,
+                "label": entry.label or entry.model or cam_id,
+                "driver": entry.driver}
+               for cam_id, entry in cfg.cameras.items()]
+    shot = config.RUN_DIR / "setup_shot.jpg"
+    return {
+        "cameras": cameras,
+        "active": cfg.active_camera or status.get("camera_id", ""),
+        "detected": status.get("camera_id", ""),
+        "state": status.get("state", "unknown"),
+        "shot_at": shot.stat().st_mtime if shot.exists() else None,
+    }
+
+
+@app.get("/api/setup/camera/shot")
+def setup_camera_shot() -> Response:
+    shot = config.RUN_DIR / "setup_shot.jpg"
+    if not shot.exists():
+        raise HTTPException(404, "no test shot yet")
+    return FileResponse(shot, media_type="image/jpeg",
+                        headers={"Cache-Control": "no-store"})
+
+
+def _setup_summary(cfg: config.Config) -> dict:
+    """What the final screen states back. Read from the saved config rather
+    than the draft, so it reflects what was actually written."""
+    from ..daemon.aurora import kp_threshold
+
+    camera_id = cfg.active_camera or next(iter(cfg.cameras), "")
+    entry = cfg.cameras.get(camera_id)
+    return {
+        "camera": (entry.label or entry.model or camera_id) if entry else "",
+        "latitude": cfg.location.latitude,
+        "longitude": cfg.location.longitude,
+        "timezone": cfg.location.timezone,
+        "schedule": entry.capture_schedule if entry else "always",
+        "raw_mode": entry.raw.mode if entry else "off",
+        "protected": bool(cfg.auth.password_hash),
+        "kp_threshold": kp_threshold(cfg.location.latitude),
+    }
 
 
 # -- access control ---------------------------------------------------------
