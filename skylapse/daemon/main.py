@@ -270,18 +270,27 @@ class CaptureDaemon:
             if corrected is not arr:
                 frame.data = corrected.tobytes()
 
-            self.last_brightness = process.mean_brightness(frame)
+            # Plane means once, used twice: metering needs them, and the
+            # sidecar keeps them so a colour cast is readable from a night's
+            # metadata without reopening a single frame.
+            frame._raw_means = process.plane_means(frame)
+            self.last_brightness = process.metered_brightness(
+                frame._raw_means, frame.bit_depth, self._wb(cam))
             self.consecutive_bright = (self.consecutive_bright + 1
                                        if self.last_brightness >= SAFETY_BRIGHT_LEVEL
                                        else 0)
             frame._stars = star_count(corrected if corrected is not arr else arr) \
                 if period(self.cfg) != "day" else None
             jpeg = process.save_jpeg(frame, self.camera_id, self.cfg.jpeg_quality,
-                                     overlay=cam.overlay, stars=frame._stars)
+                                     overlay=cam.overlay, stars=frame._stars,
+                                     wb=self._wb(cam))
+            # The settings screen renders pending multipliers from this, since
+            # the JPEG just written already has the applied ones baked in.
+            process.write_wb_preview(frame, self.camera_id, config.RUN_DIR)
             self.keeper_buffer.append(frame)
             dng_saved = self._raw_due(frame)
             if dng_saved:
-                process.save_dng(frame, self.camera_id)
+                process.save_dng(frame, self.camera_id, self._wb(cam))
 
             # One line per completed frame. Under systemd this lands in journald,
             # which owns rotation — Skylapse writes no log files of its own. This
@@ -462,7 +471,8 @@ class CaptureDaemon:
             frame.height, frame.width)
         # Full resolution on purpose: the API crops this server-side for zoom,
         # so 8x/10x shows real sensor detail instead of an upscaled thumbnail.
-        process.write_preview(frame, config.RUN_DIR / "focus_full.jpg")
+        process.write_preview(frame, config.RUN_DIR / "focus_full.jpg",
+                              wb=self._wb(self.cfg.camera(self.camera_id)))
         info = self.focus.update(sharpness(arr))
         self._write_status({"state": "focusing", "exposure_us": frame.exposure_us,
                             "gain": frame.gain, "width": frame.width,
@@ -498,6 +508,17 @@ class CaptureDaemon:
         # Real counts for the UI toast — the POST returns long before this runs.
         config.write_run_file("keeper_result.json", json.dumps(
             {"saved": len(saved), "buffered": len(buffered), "at": time.time()}))
+
+    @staticmethod
+    def _wb(cam) -> tuple[float, float]:
+        """This camera's colour multipliers, read fresh from its registry entry.
+
+        Per camera rather than global: the multipliers describe a sensor and
+        the lens in front of it, so the ASI676MC and the IMX477 have no
+        business sharing a number. Read on every frame so a change from the
+        settings screen takes effect on the next one, without a restart.
+        """
+        return (cam.wb_r, cam.wb_b)
 
     def _raw_due(self, frame: Frame) -> bool:
         cam = self.cfg.camera(self.camera_id)

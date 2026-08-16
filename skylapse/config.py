@@ -107,6 +107,13 @@ class CameraEntry(BaseModel):
     raw: RawPolicy = Field(default_factory=RawPolicy)
     timelapse: TimelapseConfig = Field(default_factory=TimelapseConfig)
     overlay: bool = False                # burn timestamp/exposure into JPEGs
+    # Colour multipliers for the JPEG path, green fixed at 1.0 as the
+    # reference. Per camera because they are a property of the sensor and the
+    # lens in front of it — the ASI676MC and the IMX477 have no business
+    # sharing a number. Default 1.0/1.0 is exactly today's behaviour, so no
+    # existing rig's output moves until its own sliders do.
+    wb_r: float = Field(1.0, ge=0.1, le=8.0)
+    wb_b: float = Field(1.0, ge=0.1, le=8.0)
 
 
 class UpdateConfig(BaseModel):
