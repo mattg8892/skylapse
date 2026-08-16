@@ -146,7 +146,15 @@ class NetwatchService:
             self.sm.on_hotspot_client_change(self._hotspot_client_count())
             if state == State.HOTSPOT:
                 for ssid in self._visible_known_networks():
-                    self._execute(self.sm.on_background_rescan_found_network(ssid))
+                    action = self.sm.on_background_rescan_found_network(ssid)
+                    if action == Action.NONE:
+                        log.debug("Rescan saw %r but a guard holds the hotspot "
+                                  "(clients=%d dwell_ok=%s)", ssid,
+                                  self.sm.ctx.hotspot_clients,
+                                  self.sm.ctx.hotspot_dwell_ok())
+                    else:
+                        log.info("Rescan found %r; leaving hotspot", ssid)
+                    self._execute(action)
                     break
 
     def _poll_commands(self) -> None:
@@ -167,6 +175,8 @@ class NetwatchService:
     # -- execute -----------------------------------------------------------
 
     def _execute(self, action: Action) -> None:
+        if action != Action.NONE:
+            log.info("state=%s action=%s", self.sm.ctx.state.value, action.value)
         if action == Action.START_WIFI_ATTEMPT:
             self._try_known_networks()
         elif action == Action.START_HOTSPOT:
@@ -177,6 +187,7 @@ class NetwatchService:
     def _try_known_networks(self) -> None:
         # nmcli autoconnects saved profiles when radio is in client mode.
         self._stop_hotspot()
+        log.info("Trying known networks (up to %ss)", WIFI_GRACE)
         deadline = time.time() + WIFI_GRACE
         while time.time() < deadline:
             if self._wifi_connected():
@@ -384,7 +395,12 @@ class NetwatchService:
 
 
 def main() -> None:
-    logging.basicConfig(level=logging.INFO)
+    # Timestamps matter here more than anywhere else in the project: every
+    # guard in this subsystem is a duration (backoff, dwell, grace), so a log
+    # without times cannot show whether any of them actually held. journald
+    # stamps its own, but this also runs in the foreground during bring-up.
+    logging.basicConfig(level=logging.INFO,
+                        format="%(asctime)s %(levelname)s %(message)s")
     NetwatchService().run()
 
 
