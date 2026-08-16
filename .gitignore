@@ -4,5 +4,7 @@ venv/
 web/node_modules/
 web/dist/
 dev-config.yaml
+# scratch config/images/run for the simulator quickstart in the README
+dev/
 .pytest_cache/
 *.egg-info/
