@@ -32,7 +32,15 @@ echo "==> System packages"
 # timelapse. Neither was in the original list, and both are hard requirements
 # for features DESIGN.md calls implemented.
 MISSING=""
-for p in python3-venv python3-picamera2 network-manager git ffmpeg nodejs npm; do
+# build-essential/python3-dev are for pidng, which PyPI ships as a source
+# tarball with no wheel — so the DNG writer needs a compiler at install time.
+# Everything else resolves to an aarch64 wheel. This was found by checking a
+# working rig and noticing build-essential was marked *manual* there: it had
+# been installed by hand months earlier, so the installer had never actually
+# been run anywhere without it, and would have failed on the first genuinely
+# fresh card.
+for p in python3-venv python3-dev build-essential python3-picamera2 \
+         network-manager git ffmpeg nodejs npm; do
     dpkg -s "$p" >/dev/null 2>&1 || MISSING="$MISSING $p"
 done
 if [ -n "$MISSING" ]; then
