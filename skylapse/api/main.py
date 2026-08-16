@@ -306,8 +306,7 @@ def time_sync(body: TimeSync) -> dict:
     drift = abs(time.time() - body.epoch_ms / 1000.0)
     offer = {"epoch_ms": body.epoch_ms, "timezone": body.timezone,
              "drift_s": round(drift, 1), "received": time.time()}
-    config.RUN_DIR.mkdir(parents=True, exist_ok=True)
-    (config.RUN_DIR / "time_offer.json").write_text(json.dumps(offer))
+    config.write_run_file("time_offer.json", json.dumps(offer))
     return {"applied_eligible": drift > MAX_CLOCK_DRIFT_S, **offer}
 
 
@@ -323,15 +322,14 @@ def network_join(body: WifiJoin) -> dict:
     """Hand credentials to netwatch via its command file. The UI has already
     warned the user this may disconnect their phone from the hotspot.
     """
-    config.RUN_DIR.mkdir(parents=True, exist_ok=True)
-    (config.RUN_DIR / "netwatch_cmd.json").write_text(json.dumps(
+    config.write_run_file("netwatch_cmd.json", json.dumps(
         {"cmd": "join", "ssid": body.ssid, "password": body.password}))
     return {"ok": True, "note": "Attempting connection; hotspot may drop for up to 90s"}
 
 
 @app.post("/api/network/standalone")
 def network_standalone(always: bool = False) -> dict:
-    (config.RUN_DIR / "netwatch_cmd.json").write_text(json.dumps(
+    config.write_run_file("netwatch_cmd.json", json.dumps(
         {"cmd": "standalone", "always": always}))
     if always:
         cfg = config.load()
@@ -415,9 +413,7 @@ def network_set_mode(body: NetworkMode) -> dict:
         # "switch back to Wi-Fi" would silently do nothing at all in exactly
         # the case someone is most likely to press it. The retry command is
         # what revokes a session choice.
-        config.RUN_DIR.mkdir(parents=True, exist_ok=True)
-        (config.RUN_DIR / "netwatch_cmd.json").write_text(
-            json.dumps({"cmd": "retry"}))
+        config.write_run_file("netwatch_cmd.json", json.dumps({"cmd": "retry"}))
     else:
         cfg.network.mode = "standalone"
         cfg.network.hotspot_until = (
@@ -433,7 +429,7 @@ def network_set_mode(body: NetworkMode) -> dict:
 
 @app.post("/api/network/retry")
 def network_retry() -> dict:
-    (config.RUN_DIR / "netwatch_cmd.json").write_text(json.dumps({"cmd": "retry"}))
+    config.write_run_file("netwatch_cmd.json", json.dumps({"cmd": "retry"}))
     return {"ok": True}
 
 
@@ -631,7 +627,7 @@ def focus_controls(body: FocusControls) -> dict:
     focus frame, so a slider move applies on the next capture."""
     config.RUN_DIR.mkdir(parents=True, exist_ok=True)
     payload = {"exposure_ms": max(1, body.exposure_ms), "gain": max(0, body.gain)}
-    (config.RUN_DIR / "focus_ctl.json").write_text(json.dumps(payload))
+    config.write_run_file("focus_ctl.json", json.dumps(payload))
     return {"ok": True, **payload}
 
 

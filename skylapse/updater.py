@@ -156,7 +156,7 @@ def check(force: bool = False) -> dict:
             "checked_at": time.time(),
         }
     config.RUN_DIR.mkdir(parents=True, exist_ok=True)
-    (config.RUN_DIR / CHECK_NAME).write_text(json.dumps(result))
+    config.write_run_file(CHECK_NAME, json.dumps(result))
     return result
 
 
@@ -171,9 +171,7 @@ def status() -> dict:
 
 
 def _set_status(**fields) -> None:
-    config.RUN_DIR.mkdir(parents=True, exist_ok=True)
-    (config.RUN_DIR / STATUS_NAME).write_text(json.dumps(
-        {"at": time.time(), **fields}))
+    config.write_run_file(STATUS_NAME, json.dumps({"at": time.time(), **fields}))
 
 
 # -- applying ---------------------------------------------------------------

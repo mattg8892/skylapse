@@ -496,7 +496,7 @@ class CaptureDaemon:
         else:
             log.error("Keeper: saved none of %d buffered frames", len(buffered))
         # Real counts for the UI toast — the POST returns long before this runs.
-        (config.RUN_DIR / "keeper_result.json").write_text(json.dumps(
+        config.write_run_file("keeper_result.json", json.dumps(
             {"saved": len(saved), "buffered": len(buffered), "at": time.time()}))
 
     def _raw_due(self, frame: Frame) -> bool:
@@ -518,7 +518,7 @@ class CaptureDaemon:
     def _write_status(self, extra: dict) -> None:
         config.RUN_DIR.mkdir(parents=True, exist_ok=True)
         status = {"updated": time.time(), **extra}
-        (config.RUN_DIR / "daemon.json").write_text(json.dumps(status))
+        config.write_run_file("daemon.json", json.dumps(status))
 
 
 def main() -> None:

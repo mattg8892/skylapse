@@ -202,7 +202,7 @@ def status() -> dict:
 
 def _write_status(**fields) -> None:
     config.RUN_DIR.mkdir(parents=True, exist_ok=True)
-    (config.RUN_DIR / STATUS_NAME).write_text(json.dumps(fields))
+    config.write_run_file(STATUS_NAME, json.dumps(fields))
 
 
 def start(device: str, camera_id: str, nights: list[str], content: dict) -> dict:

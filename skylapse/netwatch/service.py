@@ -543,9 +543,8 @@ class NetwatchService:
                 if ssid in visible and not self.sm.ctx.network_blacklisted(ssid)]
 
     def _write_status(self) -> None:
-        config.RUN_DIR.mkdir(parents=True, exist_ok=True)
         c = self.sm.ctx
-        (config.RUN_DIR / "netwatch.json").write_text(json.dumps({
+        config.write_run_file("netwatch.json", json.dumps({
             "state": c.state.value, "mode": c.mode.value,
             "session_standalone": c.session_standalone,
             "hotspot_clients": c.hotspot_clients,

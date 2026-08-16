@@ -142,6 +142,34 @@ def load() -> Config:
     return Config()
 
 
+def write_run_file(name: str, text: str) -> None:
+    """Write a status or command file into RUN_DIR, atomically.
+
+    Three services share /run/skylapse and two of them do not run as root, so
+    plain `write_text` on an existing file depends on who happens to own it.
+    systemd re-applies RuntimeDirectory ownership *recursively* every time a
+    unit using it starts — so netwatch starting (as root) rechowned the whole
+    directory, and the daemon's next status write died with EACCES on a file it
+    had written itself moments earlier. Measured on the rig at the first cold
+    boot after netwatch was enabled: the daemon crashed 15s in and restarted.
+
+    Creating a fresh file and renaming it over the old one needs write
+    permission on the directory, which every one of these services has, and
+    never on the file. It also means a reader can never catch a half-written
+    status file, which was true before and only ever worked by luck.
+    """
+    RUN_DIR.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=RUN_DIR, suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w") as fh:
+            fh.write(text)
+        os.chmod(tmp, 0o644)          # mkstemp is 0600; these are read by peers
+        os.replace(tmp, RUN_DIR / name)
+    finally:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+
+
 def _inherit_ownership(tmp: str, target: Path) -> None:
     """Give `tmp` the mode and owner of `target`, so replacing it is invisible.
 
