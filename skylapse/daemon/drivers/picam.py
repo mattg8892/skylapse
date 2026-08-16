@@ -42,6 +42,16 @@ RAW_FORMAT = "SRGGB12"
 # a requested 30s sub silently becomes a 66ms one.
 FRAME_DURATION_MARGIN_US = 1_000
 
+# libcamera applies a control change several frames later, and the queue keeps
+# serving frames exposed at the old settings meanwhile — measured at six on an
+# IMX477. Taking the first frame after a change files it under the new exposure,
+# which is how 100ms, 500ms and 2s captures came back byte-for-byte identical.
+SETTLE_FRAMES = 8
+
+# The sensor quantises exposure to its line time (100000us is honoured as
+# 99954us), so settling is judged on a tolerance, never on equality.
+SETTLE_TOLERANCE = 0.02
+
 _BAYER_CODES = (
     ("RGGB", BayerPattern.RGGB), ("BGGR", BayerPattern.BGGR),
     ("GRBG", BayerPattern.GRBG), ("GBRG", BayerPattern.GBRG),
@@ -63,6 +73,8 @@ class PiCamDriver(CameraDriver):
         self._stride = 0
         self._exposure_us = 100_000
         self._gain = 1
+        self._gain_value = 1.0
+        self._settling = False
 
     @staticmethod
     def probe() -> bool:
@@ -138,37 +150,73 @@ class PiCamDriver(CameraDriver):
             # current frame rate.
             "FrameDurationLimits": (duration, duration),
         })
-        self._exposure_us, self._gain = exposure_us, int(gain_value)
+        if (exposure_us, gain_value) != (self._exposure_us, self._gain_value):
+            self._settling = True
+        self._exposure_us, self._gain_value = exposure_us, gain_value
+        self._gain = int(gain_value)
+
+    def _settled(self, meta: dict) -> bool:
+        """Whether this frame was actually exposed at the settings we asked for."""
+        exposure = meta.get("ExposureTime")
+        gain = meta.get("AnalogueGain")
+        if exposure is None or gain is None:
+            return True                  # nothing to check against; take it
+        tolerance = max(2.0, self._exposure_us * SETTLE_TOLERANCE)
+        return (abs(exposure - self._exposure_us) <= tolerance
+                and abs(gain - self._gain_value) <= 0.05)
+
+    def _settled_request(self):
+        """A request whose metadata reflects the current controls.
+
+        Only pays the cost after a control change — in steady state, including
+        every frame of a manual-exposure night, the first request is taken.
+        """
+        budget = SETTLE_FRAMES if self._settling else 0
+        for _ in range(budget):
+            request = self._picam.capture_request()
+            if self._settled(request.get_metadata()):
+                self._settling = False
+                return request
+            request.release()
+        # Out of budget: take the next frame and report what it really was
+        # rather than blocking a night waiting for the sensor to agree.
+        if self._settling:
+            log.warning("Controls did not settle within %d frames; recording the "
+                        "exposure the sensor reports", SETTLE_FRAMES)
+            self._settling = False
+        return self._picam.capture_request()
 
     def capture(self) -> Frame:
         assert self._picam and self._info
         ts = time.time()
         try:
-            buf = self._picam.capture_array("raw")
+            request = self._settled_request()
         except Exception as exc:
             raise CameraError(f"Pi camera capture failed: {exc}") from exc
 
-        # capture_array gives bytes shaped by the stride. Reinterpret as 16-bit,
-        # then drop the row padding — skipping this shears the image.
-        arr = buf.view(np.uint16).reshape(self._info.height, self._stride // 2)
-        arr = np.ascontiguousarray(arr[:, :self._info.width])
-
-        temp = None
         try:
-            temp = float(self._picam.capture_metadata().get("SensorTemperature"))
-        except Exception:
-            pass
+            meta = request.get_metadata()
+            buf = request.make_array("raw")
+            # Bytes are shaped by the stride. Reinterpret as 16-bit, then drop
+            # the row padding — skipping this shears the image down the frame.
+            arr = buf.view(np.uint16).reshape(self._info.height, self._stride // 2)
+            arr = np.ascontiguousarray(arr[:, :self._info.width])
+        finally:
+            request.release()
 
+        temp = meta.get("SensorTemperature")
         return Frame(
             data=arr.tobytes(),
             width=self._info.width,
             height=self._info.height,
             bayer=self._info.bayer,
             bit_depth=self._info.bit_depth,
-            exposure_us=self._exposure_us,
-            gain=self._gain,
+            # What the sensor actually did, not what we asked for: it quantises
+            # to its line time, and the sidecar should record the truth.
+            exposure_us=int(meta.get("ExposureTime", self._exposure_us)),
+            gain=int(round(meta.get("AnalogueGain", self._gain_value))),
             timestamp=ts,
-            sensor_temp_c=temp,
+            sensor_temp_c=float(temp) if temp is not None else None,
         )
 
     def close(self) -> None:
