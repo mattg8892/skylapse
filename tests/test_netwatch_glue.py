@@ -274,3 +274,44 @@ def test_the_network_the_rescan_found_is_tried_first(monkeypatch):
     service._now()
     service._try_known_networks(preferred="yourmomshouse")
     assert radio.activations[0] == "netplan-wlan0-yourmomshouse"
+
+
+def test_wifi_only_mode_backs_off_instead_of_retrying_flat_out(monkeypatch):
+    """wifi_only has no hotspot to fall back to, so a failure is answered with
+    another attempt — which the service used to run immediately, from inside
+    the attempt that had just failed. That is unbounded recursion with no pause
+    between tries, hammering nmcli for as long as Wi-Fi is down.
+
+    Handing the retry back to the poll loop with a delay is also the only thing
+    that makes guard 1's backoff schedule reachable: on the automatic path the
+    second step is never used, because a second consecutive failure raises the
+    hotspot instead.
+    """
+    from skylapse.netwatch.statemachine import BACKOFF_STEPS, Mode
+
+    clock, radio = FakeClock(), FakeRadio(FakeClock())
+    radio.clock, radio.joinable = clock, False
+    service = _service(monkeypatch, radio, clock)
+    service.sm.ctx.mode = Mode.WIFI_ONLY
+
+    service._now()
+    service._try_known_networks()
+
+    assert radio.activations.count("netplan-wlan0-yourmomshouse") == 1, \
+        "retried inside the failed attempt instead of scheduling one"
+    # The first step belongs to the loss itself, which is counted before any
+    # attempt has failed; by the time an attempt fails we are on the second.
+    assert service._retry_at == clock.time() + BACKOFF_STEPS[1]
+
+    # Each further failure escalates, and the schedule caps rather than growing
+    # without bound.
+    delays = []
+    for _ in range(len(BACKOFF_STEPS) + 2):
+        clock.t = service._retry_at
+        service._now()
+        service._poll_events()          # fires the retry, which fails again
+        delays.append(round(service._retry_at - clock.time()))
+
+    assert delays == sorted(delays), f"backoff did not escalate: {delays}"
+    assert max(delays) == BACKOFF_STEPS[-1], f"never reached the cap: {delays}"
+    assert delays[-1] == BACKOFF_STEPS[-1], f"grew past its cap: {delays}"

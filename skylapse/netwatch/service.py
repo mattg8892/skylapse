@@ -313,8 +313,21 @@ class NetwatchService:
                 log.warning("Join of %r failed (%s)", ssid, reason)
                 auth_failure = reason == "auth"
         self._now()
-        self._execute(self.sm.on_wifi_attempt_failed(
-            ssid=last_ssid, auth_failure=auth_failure))
+        action = self.sm.on_wifi_attempt_failed(ssid=last_ssid,
+                                                auth_failure=auth_failure)
+        if action == Action.START_WIFI_ATTEMPT:
+            # Only wifi_only mode answers a failure with another attempt, since
+            # it has no hotspot to fall back to. Executing it here would recurse
+            # once per failure, with no pause between attempts, for as long as
+            # Wi-Fi stayed down. Handing it back to the poll loop with a delay
+            # is also what makes guard 1's backoff schedule reachable at all:
+            # on the automatic path the second step is never used, because a
+            # second consecutive failure raises the hotspot instead.
+            delay = self.sm.ctx.backoff_delay()
+            log.info("No hotspot in this mode; retrying in %ss", delay)
+            self._retry_at = time.time() + delay
+            return
+        self._execute(action)
 
     def _join(self, ssid: str, password: str) -> None:
         """Join a network with a user-supplied password.
