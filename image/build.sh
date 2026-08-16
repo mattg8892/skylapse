@@ -156,4 +156,10 @@ cleanup
 trap - EXIT
 
 mv "$WORK/skylapse.img" "$OUT"
+# Built under sudo, so it lands root-owned. Anything downstream that
+# rewrites it -- xz, in particular -- then fails trying to preserve an
+# ownership it has no right to set. Hand it back to whoever invoked us.
+if [ -n "${SUDO_UID:-}" ]; then
+    chown "$SUDO_UID:${SUDO_GID:-$SUDO_UID}" "$OUT"
+fi
 log "Built $OUT ($(du -h "$OUT" | cut -f1))"

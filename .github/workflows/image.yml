@@ -41,8 +41,10 @@ jobs:
       - name: Compress
         run: |
           # -T0 uses every core; the runner has several and this is the
-          # slowest step otherwise.
-          xz -T0 -9 "$GITHUB_WORKSPACE/skylapse.img"
+          # slowest step otherwise. -9 is dropped: the runner caps xz at
+          # ~4GB, which silently costs it threads, and -6 gets within a few
+          # percent of the same size in a fraction of the time.
+          xz -T0 -6 "$GITHUB_WORKSPACE/skylapse.img"
           ls -lh "$GITHUB_WORKSPACE/skylapse.img.xz"
 
       - name: Checksum
