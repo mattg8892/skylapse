@@ -13,12 +13,13 @@ from pathlib import Path
 
 import yaml
 
-from fastapi import FastAPI, HTTPException, Response
-from fastapi.responses import FileResponse
+from fastapi import FastAPI, HTTPException, Request, Response
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from .. import __version__, config, notify, remote, updater, usbexport
+from .. import (__version__, auth, config, notify, remote, updater,
+                usbexport)
 from ..daemon.pipeline import process
 from ..daemon.scheduler import profile_for
 from ..daemon.watchdog import stall_threshold_s
@@ -26,6 +27,139 @@ from ..daemon.watchdog import stall_threshold_s
 app = FastAPI(title="Skylapse", version="0.1.0")
 
 MAX_CLOCK_DRIFT_S = 5
+
+
+# -- access control ---------------------------------------------------------
+#
+# Off unless a password has been set, which is the default. When it is set it
+# protects the API; the SPA is always served, because the login screen is part
+# of the SPA and a device that refused to serve its own login page would be
+# unrecoverable from a phone.
+
+# Reachable without a session even when a password is set. Login obviously, and
+# the status probe the login screen itself needs to know whether to render.
+_OPEN_PATHS = {"/api/auth/status", "/api/auth/login"}
+
+# Additionally readable when "public live view" is on: the latest frame and
+# enough status to caption it. Controls and settings stay locked either way.
+_PUBLIC_PATHS = {"/api/status", "/api/latest"}
+
+
+def _authorised(request: Request, cfg: config.Config) -> bool:
+    if not cfg.auth.password_hash:
+        return True
+    path = request.url.path
+    if path in _OPEN_PATHS or not path.startswith("/api/"):
+        return True
+    token = request.cookies.get(auth.SESSION_COOKIE, "")
+    if auth.token_valid(token, cfg.auth.session_secret):
+        return True
+    # The public sub-toggle is read-only by construction: a GET, on a named
+    # path. Anything that changes the camera needs a session regardless.
+    return (cfg.auth.public_live_view and request.method == "GET"
+            and path in _PUBLIC_PATHS)
+
+
+@app.middleware("http")
+async def require_password(request: Request, call_next):
+    try:
+        cfg = config.load()
+    except Exception:
+        # A config we cannot read is not a reason to lock everyone out of the
+        # camera; it is a reason to let them in and see the error.
+        return await call_next(request)
+    if not _authorised(request, cfg):
+        return JSONResponse({"detail": "authentication required"}, status_code=401)
+    return await call_next(request)
+
+
+class Login(BaseModel):
+    password: str
+
+
+@app.get("/api/auth/status")
+def auth_status(request: Request) -> dict:
+    """What the SPA needs to decide between the login screen and the app."""
+    cfg = config.load()
+    return {
+        "password_set": bool(cfg.auth.password_hash),
+        "public_live_view": cfg.auth.public_live_view,
+        "authenticated": _authorised(request, cfg),
+    }
+
+
+@app.post("/api/auth/login")
+def auth_login(body: Login, response: Response) -> dict:
+    cfg = config.load()
+    if not cfg.auth.password_hash:
+        return {"ok": True, "note": "no password is set on this camera"}
+    if not auth.verify_password(body.password, cfg.auth.password_hash):
+        raise HTTPException(401, "wrong password")
+    _set_session(response, cfg)
+    return {"ok": True}
+
+
+@app.post("/api/auth/logout")
+def auth_logout(response: Response) -> dict:
+    response.delete_cookie(auth.SESSION_COOKIE)
+    return {"ok": True}
+
+
+class PasswordChange(BaseModel):
+    password: str = ""              # empty removes protection
+    current: str = ""               # required once one is set
+    public_live_view: bool | None = None
+
+
+@app.post("/api/auth/password")
+def auth_set_password(body: PasswordChange, response: Response) -> dict:
+    """Set, change or remove the password.
+
+    Changing it requires the current one even though the caller already holds a
+    session: a phone left unlocked on a bench is the realistic threat here, and
+    it is the one moment where asking again costs nothing.
+    """
+    cfg = config.load()
+    if cfg.auth.password_hash and not auth.verify_password(
+            body.current, cfg.auth.password_hash):
+        raise HTTPException(403, "current password required")
+
+    if body.password:
+        if len(body.password) < auth.MIN_PASSWORD_CHARS:
+            raise HTTPException(400, "password is too short")
+        try:
+            cfg.auth.password_hash = auth.hash_password(body.password)
+        except auth.PasswordTooLong as exc:
+            raise HTTPException(400, str(exc)) from exc
+        # A fresh secret on every change, so removing and re-setting a password
+        # invalidates the sessions the old one had handed out.
+        cfg.auth.session_secret = auth.new_secret()
+    else:
+        cfg.auth.password_hash = ""
+        cfg.auth.session_secret = ""
+        cfg.auth.public_live_view = False
+
+    if body.public_live_view is not None:
+        cfg.auth.public_live_view = body.public_live_view
+    config.save(cfg)
+
+    if cfg.auth.password_hash:
+        _set_session(response, cfg)      # do not log the setter out of their own camera
+    else:
+        response.delete_cookie(auth.SESSION_COOKIE)
+    return {"ok": True, "password_set": bool(cfg.auth.password_hash),
+            "public_live_view": cfg.auth.public_live_view}
+
+
+def _set_session(response: Response, cfg: config.Config) -> None:
+    """Long-lived so it is once per device, not once per visit.
+
+    Not `secure`: this is plain HTTP on a LAN by design (DESIGN.md rules out
+    self-signed certs), and a secure-only cookie would simply never be sent.
+    """
+    response.set_cookie(
+        auth.SESSION_COOKIE, auth.issue_token(cfg.auth.session_secret),
+        max_age=auth.SESSION_SECONDS, httponly=True, samesite="lax")
 
 
 def _read_status(name: str) -> dict:

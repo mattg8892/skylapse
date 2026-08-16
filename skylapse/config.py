@@ -116,6 +116,18 @@ class CameraEntry(BaseModel):
     wb_b: float = Field(1.0, ge=0.1, le=8.0)
 
 
+class AuthConfig(BaseModel):
+    """Optional single password. Off by default — see DESIGN.md.
+
+    A camera on a LAN nobody else touches should not demand a login to look at
+    the sky, so an empty hash means no protection at all rather than a locked
+    device waiting for a password nobody set.
+    """
+    password_hash: str = ""              # empty = open, the default
+    public_live_view: bool = False       # latest frame without login
+    session_secret: str = ""             # generated when a password is first set
+
+
 class UpdateConfig(BaseModel):
     """In-app updates. Skylapse only — never the OS."""
     channel: str = "release"              # release | dev (dev follows main)
@@ -124,6 +136,7 @@ class UpdateConfig(BaseModel):
 
 class Config(BaseModel):
     setup_complete: bool = False
+    auth: AuthConfig = Field(default_factory=AuthConfig)
     location: LocationConfig = Field(default_factory=LocationConfig)
     network: NetworkConfig = Field(default_factory=NetworkConfig)
     notifications: NotifyConfig = Field(default_factory=NotifyConfig)
