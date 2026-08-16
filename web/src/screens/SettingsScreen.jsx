@@ -13,6 +13,15 @@ const EVENT_LABELS = {
   timelapse_ready: 'Timelapse ready',
 }
 
+// A pixel budget rather than a width: h264 level follows macroblock count, so
+// on a 4:3 or square sensor a "3840 wide" render is still level 6.0 and still
+// unplayable. Measured on this rig.
+const TIMELAPSE_RES_OPTIONS = [
+  { value: '4k', label: '4K — plays everywhere (default)' },
+  { value: '1080p', label: '1080p — smallest, streams best' },
+  { value: 'full', label: 'Full sensor — may not play' },
+]
+
 const QUALITY_OPTIONS = [
   { value: 'standard', label: 'Standard' },
   { value: 'high', label: 'High' },
@@ -428,9 +437,25 @@ function CameraSettings({ id, cam, storage, onCamera, onProfile }) {
             options={QUALITY_OPTIONS}
             onChange={(quality) =>
               onCamera({ timelapse: { ...cam.timelapse, quality } })} />
+          <Select
+            label="Resolution" value={cam.timelapse?.resolution ?? '4k'}
+            options={TIMELAPSE_RES_OPTIONS}
+            onChange={(resolution) =>
+              onCamera({ timelapse: { ...cam.timelapse, resolution } })} />
+          {(cam.timelapse?.resolution ?? '4k') === 'full' && (
+            <p className="rounded-lg bg-amber-950 p-3 text-sm text-amber-300">
+              Full sensor resolution encodes to h264 level 6.0, which phone and
+              browser hardware decoders refuse — measured on this rig, a native
+              render played back as garbage in both VLC and the browser while
+              being a perfectly valid file. It is also several times larger and
+              slower to render. Use it only if you are editing the result on a
+              desktop.
+            </p>
+          )}
           <p className="text-xs text-zinc-500">
             Frame rate is derived from the night’s frame count to hit that length,
-            clamped to 12–60 fps.
+            clamped to 12–60 fps. Resolution is a pixel budget, not a width, so
+            it works out the same on a square sensor as on a wide one.
           </p>
         </div>
       </Card>
