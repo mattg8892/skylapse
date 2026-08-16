@@ -108,3 +108,129 @@ def test_user_try_again_clears_the_blacklist():
     sm.ctx.auth_failures["yourmomshouse"] = 99
     sm.on_user_try_again()
     assert not sm.ctx.network_blacklisted("yourmomshouse")
+
+
+# -- the two faults the first hardware run exposed ---------------------------
+#
+# Both were invisible to every test written before the code met a real radio,
+# and both defeated the same thing: a camera that fell back to its hotspot
+# could not get itself home again.
+
+class FakeRadio:
+    """Enough of nmcli/iw to drive the service through a fallback and back.
+
+    Deliberately models the two behaviours that broke it: a profile only joins
+    when `con up` is called on it by name (NetworkManager will not autoconnect
+    a device it has flagged as user-disconnected), and time only advances when
+    something blocks.
+    """
+
+    def __init__(self, clock):
+        self.clock = clock
+        self.mode = "managed"        # managed | AP
+        self.joined = ""
+        self.joinable = True         # whether the house network will accept us
+        self.fail_delay = 90         # a doomed join burns the whole grace window
+        self.activations = []        # every `con up` this test provoked
+
+    def nmcli(self, *args, **kw):
+        import subprocess
+        if args[:2] == ("con", "up"):
+            self.activations.append(args[2])
+            if args[2] == "Skylapse-Setup":
+                self.clock.advance(2)
+                self.mode, self.joined = "AP", ""
+            elif self.joinable:
+                self.clock.advance(2)
+                self.mode, self.joined = "managed", args[2]
+            else:
+                self.clock.advance(self.fail_delay)
+                return subprocess.CompletedProcess(args, 4, "",
+                                                   "Error: Connection activation failed.\n")
+        elif args[:2] == ("con", "down"):
+            self.mode, self.joined = "managed", ""
+        elif args[:1] == ("dev",) and "wifi" in args and "list" in args:
+            return subprocess.CompletedProcess(args, 0, "yourmomshouse\n", "")
+        elif "802-11-wireless.ssid" in args:
+            return subprocess.CompletedProcess(args, 0, "yourmomshouse\n", "")
+        elif args[:2] == ("-t", "-f") and args[2] == "NAME,TYPE":
+            return subprocess.CompletedProcess(
+                args, 0, "netplan-wlan0-yourmomshouse:802-11-wireless\n", "")
+        elif args[:2] == ("-t", "-f") and args[2] == "DEVICE,TYPE":
+            return subprocess.CompletedProcess(args, 0, "wlan0:wifi\n", "")
+        elif args[:2] == ("-t", "-f") and args[2] == "DEVICE,CONNECTION":
+            name = self.joined or ("Skylapse-Setup" if self.mode == "AP" else "")
+            return subprocess.CompletedProcess(args, 0, f"wlan0:{name}\n", "")
+        elif args[:2] == ("-t", "-f") and args[2] == "DEVICE,TYPE,STATE":
+            state = "connected" if self.joined or self.mode == "AP" else "disconnected"
+            return subprocess.CompletedProcess(
+                args, 0, f"wlan0:wifi:{state}\n", "")
+        return subprocess.CompletedProcess(args, 0, "", "")
+
+    def iw(self, *args, **kw):
+        if "info" in args:
+            return f"Interface wlan0\n\ttype {self.mode}\n"
+        return ""      # no stations attached
+
+
+class FakeClock:
+    def __init__(self, start=1_000_000.0):
+        self.t = start
+
+    def time(self):
+        return self.t
+
+    def advance(self, seconds):
+        self.t += seconds
+
+    def sleep(self, seconds):
+        self.t += seconds
+
+
+def _service(monkeypatch, radio, clock):
+    from skylapse.netwatch import service as svc
+
+    monkeypatch.setattr(svc.time, "time", clock.time)
+    monkeypatch.setattr(svc.time, "sleep", clock.sleep)
+    monkeypatch.setattr(svc.subprocess, "run",
+                        lambda cmd, **kw: radio.nmcli(*cmd[1:], **kw)
+                        if cmd[0] == "nmcli" else radio.iw(*cmd[1:]))
+    monkeypatch.setattr(svc, "_iw", lambda *a, **kw: radio.iw(*a))
+    # Activation is a Popen in production so the watchdog keeps getting fed;
+    # the outcome is all this test cares about.
+    monkeypatch.setattr(svc.NetwatchService, "_activate",
+                        lambda self, name, deadline: radio.nmcli("con", "up", name),
+                        raising=False)
+    return svc.NetwatchService()
+
+
+def test_hotspot_dwell_is_measured_from_when_the_hotspot_started(monkeypatch):
+    """Guard 1's 300s dwell used to start counting from the beginning of the
+    failed Wi-Fi attempt, not from the moment the hotspot came up.
+
+    The attempt blocks for up to WIFI_GRACE and the machine's clock was
+    stamped once per poll, so the recorded start time was ~90s in the past.
+    Measured on the rig, a 300s guard released the hotspot after 209s — which
+    means a phone mid-setup can have the network pulled out from under it.
+    """
+    from skylapse.netwatch.statemachine import HOTSPOT_MIN_DWELL
+
+    clock, radio = FakeClock(), FakeRadio(FakeClock())
+    radio.clock = clock
+    radio.joinable = False                       # the house network is gone
+    service = _service(monkeypatch, radio, clock)
+
+    attempt_began = clock.time()
+    service._now()
+    service._execute(service.sm.on_boot())       # tries, fails, raises hotspot
+
+    started = service.sm.ctx.hotspot_started_at
+    assert started >= attempt_began + radio.fail_delay, (
+        f"the hotspot's start time predates the end of the attempt that "
+        f"provoked it by {attempt_began + radio.fail_delay - started:.0f}s, so "
+        f"the dwell guard is already that far spent before the AP is even up")
+
+    service.sm.ctx.now = started + HOTSPOT_MIN_DWELL - 1
+    assert not service.sm.ctx.hotspot_dwell_ok()
+    service.sm.ctx.now = started + HOTSPOT_MIN_DWELL
+    assert service.sm.ctx.hotspot_dwell_ok()

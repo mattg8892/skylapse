@@ -110,11 +110,25 @@ class NetwatchService:
         self.hotspot_ssid = cfg.network.hotspot_ssid
         self._retry_at = 0.0          # non-blocking backoff deadline
 
+    def _now(self) -> float:
+        """Stamp the state machine's clock, immediately before an event.
+
+        Every guard in the machine is a duration, and several events are raised
+        from inside a call that just blocked for most of WIFI_GRACE. A snapshot
+        taken once per poll is therefore up to 90s stale at exactly the moments
+        that set and read timestamps. Measured on the rig: the hotspot recorded
+        its start time as the moment the *attempt* began, so the 300s dwell
+        guard released it after 209s.
+        """
+        self.sm.ctx.now = time.time()
+        return self.sm.ctx.now
+
     def run(self) -> None:
         _sd_notify("READY=1")
+        self._now()
         self._execute(self.sm.on_boot())
         while True:
-            self.sm.ctx.now = time.time()
+            self._now()
             self._poll_events()
             self._poll_commands()
             self._write_status()
@@ -134,6 +148,7 @@ class NetwatchService:
             if now < self._retry_at:
                 return
             self._retry_at = 0.0
+            self._now()
             self._execute(self.sm.on_connection_lost())
             return
 
@@ -166,6 +181,7 @@ class NetwatchService:
             cmd = json.loads(cmd_file.read_text())
         finally:
             cmd_file.unlink(missing_ok=True)
+        self._now()
         if cmd.get("cmd") == "retry":
             self._execute(self.sm.on_user_try_again())
         elif cmd.get("cmd") == "standalone":
@@ -192,6 +208,7 @@ class NetwatchService:
         deadline = time.time() + WIFI_GRACE
         while time.time() < deadline:
             if self._wifi_connected():
+                self._now()
                 self._execute(self.sm.on_wifi_connected())
                 return
             # Keep the watchdog fed: this wait is three times WatchdogSec, so
@@ -200,6 +217,7 @@ class NetwatchService:
             time.sleep(3)
         # TODO(issue #2): read NM's per-connection failure reason to pass
         # auth_failure/ssid accurately instead of a generic failure.
+        self._now()
         self._execute(self.sm.on_wifi_attempt_failed())
 
     def _join(self, ssid: str, password: str) -> None:
@@ -222,9 +240,11 @@ class NetwatchService:
                                        "password", password, timeout=WIFI_GRACE)
         except subprocess.TimeoutExpired:
             log.warning("Join of %r timed out", ssid)
+            self._now()
             self._execute(self.sm.on_wifi_attempt_failed(ssid=ssid))
             return
 
+        self._now()
         if self._wifi_connected():
             self._execute(self.sm.on_wifi_connected())
             return
