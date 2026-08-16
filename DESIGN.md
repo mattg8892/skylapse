@@ -151,11 +151,54 @@ Selection is config-level only. There is no Settings control yet — it is a
 one-line config edit and belongs with the wizard's camera step rather than as a
 stray dropdown.
 
-### Pi camera: what the bench session established (2026-08-15)
+### Pi camera: what first light changed (2026-08-15)
 
-`drivers/picam.py` remains **unverified against hardware**. An Arducam UC-517
-(IMX477-class) was fitted but never enumerated, so first light did not happen.
-Two things were nonetheless settled:
+`drivers/picam.py` was a stub that had never touched hardware. Against an
+Arducam UC-517 (IMX477, 4056x3040) on a Pi 5 it was wrong in five ways, each
+measured rather than reasoned about.
+
+1. **The default raw stream is not raw.** `create_still_configuration(raw=...)`
+   without an explicit format yields `BGGR_PISP_COMP1` on a Pi 5 — the PiSP
+   compressed format, ~1 byte per pixel. The stub fed that to the debayer as
+   16-bit bayer. Ask for an unpacked format, then read back what libcamera
+   actually provided; the reply is authoritative, not the request.
+2. **Rows are padded.** A 4056-pixel row arrives with an 8128-byte stride —
+   4064 uint16, eight pixels of padding. Reshaping to the nominal width shears
+   the image progressively down the frame.
+3. **Bayer order comes from the configured stream, not the sensor.** The sensor
+   advertises `SRGGB12_CSI2P`; the delivered stream is `SBGGR16`. Reading the
+   order off the sensor swaps red and blue.
+4. **Control limits depend on the configuration and must be read after it.**
+   Before `configure()` this sensor reports a 66ms exposure ceiling; after,
+   694 seconds. The stub hardcoded 200s and gain 22; the sensor reports
+   110µs–694s and 22.3. Frame duration must also be pinned around the exposure
+   or libcamera silently clamps a 30s sub to the current frame rate.
+5. **Controls reach the sensor several frames late.** Measured at seven frames
+   on the IMX477, with the queue serving old-exposure frames meanwhile. Taking
+   the first frame after a change files a 20ms exposure under a 2s label —
+   100ms, 500ms and 2s captures came back byte-for-byte identical. Capture now
+   discards until the metadata matches, judged on a tolerance because the
+   sensor quantises to its line time (100000µs is honoured as 99954µs), and
+   frames record what the sensor reports rather than what was asked.
+
+Measured and deliberately unchanged: 12-bit samples arrive **left-shifted**
+into the 16-bit container (max 65520 = 4095 << 4, low nibble always clear), so
+the pipeline's existing full-range scaling is already correct — the opposite of
+what "12-bit sensor" suggests.
+
+A consequence worth its own note: profile defaults are ZWO-shaped, with gains in
+the hundreds. AE spills into gain once exposure is capped, so a 22x sensor
+carrying a 300 ceiling would keep asking for gain it cannot reach and never see
+brightness respond — fine by day on exposure alone, stalled after dark. Profiles
+are now clamped to the camera's reported limits on every open, downward only.
+
+Verified end to end on the module: own registry entry and image folder,
+4056x3040 JPEGs with thumbnails and sidecars, a DNG that parses with
+`CFAPattern` BGGR, and AE converging on a real scene (254.9 → 140.1 toward a
+target of 120). **Not yet verified: the star-count path**, which is skipped in
+daylight — it needs a night on this module.
+
+Two things settled while getting there:
 
 - **The venv must be built with `--system-site-packages`.** `picamera2` comes
   from apt with no wheel, so without that flag it is invisible to the venv and
@@ -165,19 +208,16 @@ Two things were nonetheless settled:
   rather than skipping any venv that merely exists. Verified afterwards that the
   project's own pinned numpy/OpenCV/FastAPI still take precedence over the
   system copies.
-- **Enumeration is a hardware precondition, and its absence is diagnosable.**
-  With `dtoverlay=imx477` targeting both Pi 5 ports, the driver bound and the
-  CSI subsystem found both subdevices, but the chip-ID read failed:
-  `-121 EREMOTEIO` on CAM1 and `-110 ETIMEDOUT` on CAM0. Driver and device tree
-  correct, sensor not answering — a cable or seating fault, not software. Worth
-  keeping as the signature to look for: a *missing* overlay produces no imx477
-  lines at all, whereas a *connection* fault produces a failed chip-ID read.
-
-Still expected to be wrong when hardware does arrive, and unfixable until then:
-the stub's `bit_depth=16` (IMX477 raw is 12-bit, and picamera2 delivers
-`SRGGB12_CSI2P` **packed** — it must be measured and unpacked, not assumed), the
-hardcoded `max_exposure_us=200_000_000` and `max_gain=22` (both should come from
-the sensor's own `ExposureTimeLimits`/`AnalogueGainLimits`), and the bayer order.
+- **Enumeration needs a cold power cycle, not a reboot.** The module failed to
+  answer across several reboots — `imx477: failed to read chip id 477` with
+  `-121 EREMOTEIO` on one port and `-110 ETIMEDOUT` on the other — with the
+  driver bound and the device tree correct. A full power-off restored it
+  immediately; the sensor regulator does not drain across a warm reboot. Worth
+  keeping as the diagnostic ladder: no `imx477` lines at all means a missing
+  overlay, a failed chip-ID read means the sensor is not answering, and if
+  reseating does not fix that, try a cold boot before suspecting the cable.
+  `i2cdetect` on the sensor's bus is the tiebreaker — `UU` at 0x1a means the
+  driver holds a live device.
 
 An IR-CUT accessory, if fitted, would be a GPIO-switched day/night filter — a
 future feature, deliberately not wired.
