@@ -154,6 +154,31 @@ class NetwatchService:
         except subprocess.TimeoutExpired:
             self._execute(self.sm.on_wifi_attempt_failed(ssid=ssid))
 
+    def _ensure_hotspot_profile(self, iface: str) -> str:
+        """Build the hotspot profile to match config. Returns the password.
+
+        Written out explicitly rather than using `nmcli dev wifi hotspot`,
+        because that convenience command *always* applies WPA with a key it
+        generates itself. With the documented default of no password, the
+        camera broadcast a network whose passphrase existed only inside
+        NetworkManager — visible to a phone, joinable by nobody. That is the
+        worst possible failure for the one feature whose entire job is to let
+        you reach a camera you otherwise cannot.
+        """
+        password = config.load().network.hotspot_password
+        # Recreated each time so a changed SSID or password actually applies.
+        if self.hotspot_ssid in _nmcli("-t", "-f", "NAME", "con", "show").splitlines():
+            _nmcli("con", "delete", self.hotspot_ssid)
+        _nmcli("con", "add", "type", "wifi", "ifname", iface,
+               "con-name", self.hotspot_ssid, "autoconnect", "no",
+               "ssid", self.hotspot_ssid,
+               "802-11-wireless.mode", "ap", "802-11-wireless.band", "bg",
+               "ipv4.method", "shared", "ipv6.method", "ignore")
+        if password:
+            _nmcli("con", "modify", self.hotspot_ssid,
+                   "wifi-sec.key-mgmt", "wpa-psk", "wifi-sec.psk", password)
+        return password
+
     def _start_hotspot(self) -> None:
         if self._in_ap_mode():
             return                        # already broadcasting; idempotent
@@ -161,12 +186,10 @@ class NetwatchService:
         if not iface:
             log.error("No Wi-Fi interface; cannot start the hotspot")
             return
-        # con-name matters: without it NetworkManager names the profile
-        # "Hotspot" regardless of SSID, and every later lookup by SSID misses —
-        # which meant the hotspot could be raised but never torn down.
-        _nmcli("dev", "wifi", "hotspot", "ifname", iface,
-               "con-name", self.hotspot_ssid, "ssid", self.hotspot_ssid)
-        log.info("Hotspot %s up on %s", self.hotspot_ssid, iface)
+        password = self._ensure_hotspot_profile(iface)
+        _nmcli("con", "up", self.hotspot_ssid)
+        log.info("Hotspot %s up on %s (%s)", self.hotspot_ssid, iface,
+                 "password protected" if password else "open")
 
     def _stop_hotspot(self) -> None:
         """Bring down whatever connection is holding the radio in AP mode.
