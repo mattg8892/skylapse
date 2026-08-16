@@ -170,7 +170,7 @@ class NetwatchService:
                                   self.sm.ctx.hotspot_dwell_ok())
                     else:
                         log.info("Rescan found %r; leaving hotspot", ssid)
-                    self._execute(action)
+                    self._execute(action, preferred=ssid)
                     break
 
     def _poll_commands(self) -> None:
@@ -191,34 +191,93 @@ class NetwatchService:
 
     # -- execute -----------------------------------------------------------
 
-    def _execute(self, action: Action) -> None:
+    def _execute(self, action: Action, preferred: str = "") -> None:
         if action != Action.NONE:
             log.info("state=%s action=%s", self.sm.ctx.state.value, action.value)
         if action == Action.START_WIFI_ATTEMPT:
-            self._try_known_networks()
+            self._try_known_networks(preferred)
         elif action == Action.START_HOTSPOT:
             self._start_hotspot()
         elif action == Action.STOP_HOTSPOT:
             self._stop_hotspot()
 
-    def _try_known_networks(self) -> None:
-        # nmcli autoconnects saved profiles when radio is in client mode.
+    def _activate(self, name: str, deadline: float):
+        """Run `nmcli con up` without ever going quiet longer than the watchdog
+        allows.
+
+        Activation blocks for as long as it takes — up to the whole grace
+        window — and the unit sets WatchdogSec=30, so it cannot simply be
+        awaited. Returns the finished process, or None if the deadline cut it
+        short.
+        """
+        proc = subprocess.Popen(["nmcli", "con", "up", name],
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                text=True)
+        while True:
+            try:
+                out, err = proc.communicate(timeout=3)
+                return subprocess.CompletedProcess(proc.args, proc.returncode,
+                                                   out, err)
+            except subprocess.TimeoutExpired:
+                _sd_notify("WATCHDOG=1")
+                if time.time() >= deadline:
+                    proc.kill()
+                    proc.communicate()
+                    log.warning("Activation of %r ran out of grace window", name)
+                    return None
+
+    def _try_known_networks(self, preferred: str = "") -> None:
+        """Bring up known networks explicitly, best candidate first.
+
+        This used to lower the hotspot and then simply wait for NetworkManager
+        to autoconnect a saved profile. It cannot work, and the reason is
+        circular: the wait is preceded by `nmcli con down`, which leaves the
+        device flagged "disconnected by user or client" (reason 39), and NM
+        does not autoconnect a device in that state. Measured on the rig, the
+        full 90s grace window passed with NM logging nothing whatsoever, so a
+        camera that had fallen back to its hotspot could never come home by
+        itself — precisely the failure this subsystem exists to prevent.
+
+        Activating explicitly also gives us NM's own error text per attempt,
+        which is what guard 3 needs to tell a wrong password apart from a
+        network that is merely out of range.
+        """
         self._stop_hotspot()
-        log.info("Trying known networks (up to %ss)", WIFI_GRACE)
+        if self._wifi_connected():
+            self._now()
+            self._execute(self.sm.on_wifi_connected())
+            return
+
+        known = self._known_networks()
+        order = [preferred] if preferred in known else []
+        order += [s for s in self._visible_known_networks() if s not in order]
+        # Saved-but-unseen networks are still worth a try: a scan taken
+        # seconds after the radio came up is not evidence of absence, and at
+        # boot an empty scan would otherwise drop straight to the hotspot.
+        order += [s for s in known
+                  if s not in order and not self.sm.ctx.network_blacklisted(s)]
+        log.info("Trying %s (up to %ss)", order or "no known networks", WIFI_GRACE)
+
         deadline = time.time() + WIFI_GRACE
-        while time.time() < deadline:
+        last_ssid, auth_failure = preferred or None, False
+        for ssid in order:
+            if time.time() >= deadline:
+                log.info("Grace window expired before trying %r", ssid)
+                break
+            result = self._activate(known[ssid], deadline)
             if self._wifi_connected():
+                log.info("Joined %r", ssid)
                 self._now()
                 self._execute(self.sm.on_wifi_connected())
                 return
-            # Keep the watchdog fed: this wait is three times WatchdogSec, so
-            # a silent sleep here gets the service killed mid-attempt.
-            _sd_notify("WATCHDOG=1")
-            time.sleep(3)
-        # TODO(issue #2): read NM's per-connection failure reason to pass
-        # auth_failure/ssid accurately instead of a generic failure.
+            last_ssid = ssid
+            if result is not None:
+                reason = classify_join_failure(result.stdout + result.stderr)
+                log.warning("Join of %r failed (%s)", ssid, reason)
+                auth_failure = reason == "auth"
         self._now()
-        self._execute(self.sm.on_wifi_attempt_failed())
+        self._execute(self.sm.on_wifi_attempt_failed(
+            ssid=last_ssid, auth_failure=auth_failure))
 
     def _join(self, ssid: str, password: str) -> None:
         """Join a network with a user-supplied password.

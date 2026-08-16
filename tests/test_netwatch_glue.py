@@ -110,11 +110,9 @@ def test_user_try_again_clears_the_blacklist():
     assert not sm.ctx.network_blacklisted("yourmomshouse")
 
 
-# -- the two faults the first hardware run exposed ---------------------------
+# -- faults the first hardware run exposed -----------------------------------
 #
-# Both were invisible to every test written before the code met a real radio,
-# and both defeated the same thing: a camera that fell back to its hotspot
-# could not get itself home again.
+# Invisible to every test written before the code met a real radio.
 
 class FakeRadio:
     """Enough of nmcli/iw to drive the service through a fallback and back.
@@ -234,3 +232,45 @@ def test_hotspot_dwell_is_measured_from_when_the_hotspot_started(monkeypatch):
     assert not service.sm.ctx.hotspot_dwell_ok()
     service.sm.ctx.now = started + HOTSPOT_MIN_DWELL
     assert service.sm.ctx.hotspot_dwell_ok()
+
+
+def test_recovery_activates_the_profile_instead_of_waiting_for_autoconnect(monkeypatch):
+    """The route home has to call `con up` by name.
+
+    Bringing the hotspot down leaves the device flagged "disconnected by user
+    or client", and NetworkManager will not autoconnect a device in that
+    state. The old code lowered the hotspot and waited out the grace window
+    for an autoconnect that provably never came — verified against the NM
+    journal, which logged nothing at all for the full 92 seconds.
+    """
+    from skylapse.netwatch.statemachine import State
+
+    clock, radio = FakeClock(), FakeRadio(FakeClock())
+    radio.clock = clock
+    radio.joinable = False
+    service = _service(monkeypatch, radio, clock)
+
+    service._now()
+    service._execute(service.sm.on_boot())
+    assert service.sm.ctx.state is State.HOTSPOT
+
+    radio.joinable = True                        # the house network is back
+    radio.activations.clear()
+    service._now()
+    service._try_known_networks(preferred="yourmomshouse")
+
+    assert "netplan-wlan0-yourmomshouse" in radio.activations, \
+        "recovery waited for an autoconnect that NetworkManager never issues"
+    assert service.sm.ctx.state is State.CONNECTED
+
+
+def test_the_network_the_rescan_found_is_tried_first(monkeypatch):
+    """The rescan knows which SSID it saw; spending grace window on the others
+    first is how a short window gets used up before reaching the right one."""
+    clock, radio = FakeClock(), FakeRadio(FakeClock())
+    radio.clock = clock
+    service = _service(monkeypatch, radio, clock)
+
+    service._now()
+    service._try_known_networks(preferred="yourmomshouse")
+    assert radio.activations[0] == "netplan-wlan0-yourmomshouse"
