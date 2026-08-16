@@ -95,3 +95,38 @@ def test_fallback_is_logged(attached, caplog):
     with caplog.at_level("WARNING", logger=base.__name__):
         detect_camera("picam-imx477")
     assert any("falling back" in r.getMessage() for r in caplog.records)
+
+
+# -- new-camera registration ------------------------------------------------
+
+def test_new_camera_profiles_are_fitted_to_its_limits(tmp_path, monkeypatch):
+    """A Pi module tops out near gain 22 while the profile defaults are
+    ZWO-shaped (hundreds). AE spills into gain once exposure is capped, so an
+    unreachable ceiling means it asks for more and never sees brightness move.
+    """
+    from skylapse import config
+    from skylapse.daemon.drivers.base import CameraInfo, BayerPattern
+
+    monkeypatch.setattr(config, "CONFIG_PATH", tmp_path / "config.yaml")
+    cfg = config.Config()
+    entry = cfg.camera("picam-imx477")
+    assert entry.night.max_gain == 300, "precondition: ZWO-shaped default"
+
+    info = CameraInfo(name="Pi Camera (imx477)", camera_id="picam-imx477",
+                      driver="picam", width=4056, height=3040,
+                      bayer=BayerPattern.BGGR, bit_depth=16,
+                      max_exposure_us=694_422_939, min_exposure_us=110,
+                      max_gain=22)
+
+    # The clamp the daemon applies on first sight of a camera.
+    entry.driver, entry.model = info.driver, info.name
+    for profile in (entry.day, entry.night):
+        profile.max_gain = min(profile.max_gain, info.max_gain)
+        profile.gain = min(profile.gain, info.max_gain)
+        profile.max_exposure_us = min(profile.max_exposure_us, info.max_exposure_us)
+
+    assert entry.night.max_gain == 22
+    assert entry.night.gain <= 22
+    assert entry.day.max_gain <= 22
+    # A limit the camera comfortably exceeds must not be raised to meet it.
+    assert entry.day.max_exposure_us == 100_000
