@@ -57,7 +57,8 @@ OS (64-bit)**, Bookworm or newer.
 
 In Imager's **customisation** settings (the gear icon), before writing:
 
-- set a **hostname** — `skylapse` is a good choice
+- set a **hostname** — `skylapse` is a good choice, but give a second camera a
+  different one: two `skylapse.local` on one network resolve to whichever answers first
 - **enable SSH** and add your public key (or set a password)
 - enter your **Wi-Fi** credentials and country
 
@@ -118,11 +119,12 @@ Set `ZWO_ASI_LIB` if you install the library somewhere else.
 http://skylapse.local
 ```
 
-That is it — no login, no account, nothing in the cloud. The dashboard shows the latest
-frame, whether capture is healthy, and a countdown to the next frame.
+The first visit runs a short setup: network, camera (with a test shot), where the camera
+is, what to capture, and optionally a password. A couple of minutes on a phone, and
+everything in it can be changed later in Settings.
 
-Set your **latitude and longitude** first (Settings), because day/night scheduling and
-aurora alerts both depend on knowing where the camera is.
+After that the dashboard shows the latest frame, whether capture is healthy, and a
+countdown to the next one. No login, no account, nothing in the cloud.
 
 ## Using it
 
