@@ -492,7 +492,9 @@ class CaptureDaemon:
         saved: list[str] = []
         for frame in buffered:
             try:
-                saved.append(process.save_dng(frame, self.camera_id).name)
+                saved.append(process.save_dng(
+                    frame, self.camera_id,
+                    self._wb(self.cfg.camera(self.camera_id))).name)
             except Exception:
                 # Per-frame and non-fatal: one bad frame must not cost the rest.
                 log.warning("Keeper: DNG save failed for frame at %.0f",
