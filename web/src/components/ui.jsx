@@ -93,6 +93,21 @@ export function Select({ label, value, onChange, options }) {
   )
 }
 
+export function Slider({ label, value, min, max, step, display, onChange }) {
+  return (
+    <label className="block text-sm">
+      <span className="flex justify-between">
+        <span className="text-zinc-400">{label}</span>
+        <span className="tabular-nums text-zinc-300">{display}</span>
+      </span>
+      {/* h-6 gives the thumb a bigger hit area than the default track */}
+      <input type="range" min={min} max={max} step={step} value={value}
+        onChange={(e) => onChange(Number(e.target.value))}
+        className="mt-1 h-6 w-full accent-sky-500" />
+    </label>
+  )
+}
+
 /** Transient confirmation for fire-and-forget actions (keeper, render, resume). */
 export function useToast() {
   const [message, setMessage] = useState(null)

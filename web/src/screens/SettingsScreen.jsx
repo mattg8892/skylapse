@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import {
-  Button, Card, ConfirmDialog, NumberField, Segmented, Select, Toggle,
+  Button, Card, ConfirmDialog, NumberField, Segmented, Select, Slider, Toggle,
 } from '../components/ui.jsx'
 
 // Capture / timelapse / overlay are per-camera (config.cameras is a registry
@@ -440,6 +440,8 @@ function CameraSettings({ id, cam, storage, onCamera, onProfile }) {
       {/* RawCard is defined below; kept out of this component so the capture,
           timelapse and RAW cards stay independently readable. */}
 
+      <WhiteBalanceCard id={id} cam={cam} onCamera={onCamera} />
+
       <Card title="Image overlay"
         right={<Toggle checked={cam.overlay ?? false} label="Burn overlay into JPEGs"
           onChange={(overlay) => onCamera({ overlay })} />}>
@@ -449,6 +451,119 @@ function CameraSettings({ id, cam, storage, onCamera, onProfile }) {
         </p>
       </Card>
     </>
+  )
+}
+
+/* -- white balance --------------------------------------------------------- */
+
+const WB_MIN = 0.5
+const WB_MAX = 3.0
+// Long enough that dragging the slider does not queue a render per pixel of
+// travel — each one debayers a frame on a Pi — short enough to feel live.
+const WB_PREVIEW_DEBOUNCE_MS = 250
+
+/**
+ * Per-camera colour multipliers, green fixed at 1.0.
+ *
+ * Auto is a seed, not an answer: grey-world assumes the scene averages to
+ * grey, which a sky at dusk or a room lit by one warm lamp does not. So the
+ * button moves the sliders and stops there, and nothing reaches the camera
+ * until Apply.
+ */
+function WhiteBalanceCard({ id, cam, onCamera }) {
+  const applied = { r: cam.wb_r ?? 1.0, b: cam.wb_b ?? 1.0 }
+  const [pending, setPending] = useState(applied)
+  const [preview, setPreview] = useState(pending)
+  const [suggestion, setSuggestion] = useState(null)
+  const [noFrame, setNoFrame] = useState(false)
+
+  // The preview lags the slider by a debounce; `pending` is what the numbers
+  // and the Apply button read, `preview` is what the image is rendered from.
+  useEffect(() => {
+    const t = setTimeout(() => setPreview(pending), WB_PREVIEW_DEBOUNCE_MS)
+    return () => clearTimeout(t)
+  }, [pending.r, pending.b])
+
+  const dirty = pending.r !== applied.r || pending.b !== applied.b
+  const neutral = pending.r === 1.0 && pending.b === 1.0
+
+  const autoSeed = async () => {
+    const r = await fetch(`/api/wb/suggest?camera_id=${encodeURIComponent(id)}`)
+      .catch(() => null)
+    if (!r?.ok) return setSuggestion({ error: true })
+    const s = await r.json()
+    setSuggestion(s)
+    setPending({ r: s.r, b: s.b })
+  }
+
+  return (
+    <Card title="White balance"
+      right={<span className="text-sm text-zinc-500">{cam.label || id}</span>}>
+      <p className="mt-1 text-sm text-zinc-400">
+        Red and blue multipliers, with green as the reference. Both sensors read
+        green high — two of every four photosites are green — so frames arrive
+        with a green cast until these are set. RAW/DNG pixels are never changed;
+        the multipliers are recorded in the file for your raw editor to apply.
+      </p>
+
+      <div className="mt-4 space-y-3">
+        <Slider label="Red" value={pending.r} min={WB_MIN} max={WB_MAX} step={0.01}
+          display={pending.r.toFixed(2)}
+          onChange={(r) => setPending((p) => ({ ...p, r }))} />
+        <Slider label="Blue" value={pending.b} min={WB_MIN} max={WB_MAX} step={0.01}
+          display={pending.b.toFixed(2)}
+          onChange={(b) => setPending((p) => ({ ...p, b }))} />
+      </div>
+
+      {!noFrame && (
+        <figure className="mt-4">
+          <img
+            src={`/api/wb/preview?r=${preview.r}&b=${preview.b}`}
+            alt="Current frame with the pending white balance applied"
+            onError={() => setNoFrame(true)}
+            className="w-full rounded-lg bg-zinc-800" />
+          <figcaption className="mt-1 text-xs text-zinc-500">
+            The most recent frame, rendered with the settings above. Reduced
+            resolution — judge colour, not focus.
+          </figcaption>
+        </figure>
+      )}
+      {noFrame && (
+        <p className="mt-4 rounded-lg bg-zinc-800/60 p-3 text-sm text-zinc-500">
+          No frame captured yet, so there is nothing to preview.
+        </p>
+      )}
+
+      <div className="mt-4 flex flex-wrap gap-2">
+        <Button onClick={autoSeed} className="flex-1">Auto from current frame</Button>
+        <Button onClick={() => setPending({ r: 1.0, b: 1.0 })}
+          disabled={neutral} className="flex-1">
+          Reset to neutral
+        </Button>
+        <Button tone="accent" disabled={!dirty} className="w-full"
+          onClick={() => onCamera({ wb_r: pending.r, wb_b: pending.b })}>
+          {dirty ? 'Apply — takes effect from the next frame' : 'Applied'}
+        </Button>
+      </div>
+
+      {suggestion?.error && (
+        <p className="mt-3 text-sm text-amber-400">
+          Couldn’t read a frame from this camera to measure.
+        </p>
+      )}
+      {suggestion && !suggestion.error && (
+        <p className="mt-3 text-sm text-zinc-500">
+          Measured R {suggestion.means.r} / G {suggestion.means.g} /
+          B {suggestion.means.b}, suggesting {suggestion.raw_r.toFixed(2)} and{' '}
+          {suggestion.raw_b.toFixed(2)}.
+          {suggestion.clamped
+            ? ' That is beyond the slider range and has been limited — worth'
+              + ' checking the lens and lighting before accepting it.'
+            : ' A starting point: it assumes the scene averages to grey, so'
+              + ' adjust from here on what you can see.'}
+        </p>
+      )}
+    </Card>
   )
 }
 
