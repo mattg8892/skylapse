@@ -283,7 +283,29 @@ def download_config():
 
 @app.put("/api/config")
 def put_config(body: dict) -> dict:
+    """Patch config. Top-level keys are replaced; the camera registry merges.
+
+    model_copy(update=) replaces a key wholesale, which for `cameras` means a
+    patch naming one camera deletes every other one. The settings screen works
+    around it by resending the entire registry with every edit, but that is a
+    workaround for a sharp edge rather than a design — and anything else that
+    touches this endpoint, a script or the wizard to come, gets no such
+    protection. Setting one multiplier on one camera cost this rig its second
+    camera's registry entry, which is how the edge was found.
+
+    Merging is per camera, not deep within a camera: the settings screen sends
+    a whole camera entry and a partial merge there would make it impossible to
+    ever clear a field.
+    """
     current = config.load()
+    body = dict(body)
+    if isinstance(body.get("cameras"), dict):
+        merged = dict(current.cameras)
+        for cam_id, patch in body["cameras"].items():
+            existing = merged.get(cam_id)
+            merged[cam_id] = config.CameraEntry.model_validate(
+                {**(existing.model_dump() if existing else {}), **patch})
+        body["cameras"] = merged
     updated = current.model_copy(update=body, deep=True)
     config.save(config.Config.model_validate(updated.model_dump()))
     return {"ok": True}
