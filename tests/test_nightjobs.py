@@ -3,6 +3,8 @@ import subprocess
 from pathlib import Path
 from unittest import mock
 
+import pytest
+
 from skylapse.daemon import nightjobs
 
 
@@ -15,6 +17,32 @@ def fake_night(tmp_path, name, frames=20, with_mp4=False):
     if with_mp4:
         (night / f"timelapse_{name}.mp4").write_bytes(b"m" * 100)
     return night
+
+
+def rendering(night, frames):
+    """Patch the two subprocess calls a render now makes.
+
+    ffmpeg is faked into creating its output file, and the probe reports the
+    frame count it was given — because render_night now refuses to call a
+    render finished until it has counted the frames in the result.
+    """
+    def fake_run(cmd, *a, **kw):
+        if cmd and cmd[0] == "ffmpeg":
+            Path(cmd[-1]).write_bytes(b"mp4")
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    return (mock.patch.object(subprocess, "run", side_effect=fake_run),
+            mock.patch.object(nightjobs, "_probe",
+                              return_value={"nb_read_frames": str(frames),
+                                            "width": "100", "height": "100"}))
+
+
+def ffmpeg_argv(run):
+    """The ffmpeg invocation out of a run mock that also saw ffprobe."""
+    for call in run.call_args_list:
+        if call[0][0] and call[0][0][0] == "ffmpeg":
+            return call[0][0]
+    raise AssertionError("ffmpeg was never invoked")
 
 
 def test_render_skips_tiny_folders(tmp_path):
@@ -32,18 +60,20 @@ def test_render_is_idempotent(tmp_path):
 
 def test_force_rerenders_existing_mp4(tmp_path):
     night = fake_night(tmp_path, "2026-08-13", frames=100, with_mp4=True)
-    with mock.patch.object(subprocess, "run") as run, \
+    runner, prober = rendering(night, 100)
+    with runner as run, prober, \
          mock.patch("skylapse.daemon.nightjobs.notify.notify"):
         nightjobs.render_night(night, force=True)
-    run.assert_called_once()                      # existing mp4 deleted, re-rendered
+    ffmpeg_argv(run)                              # existing mp4 deleted, re-rendered
 
 
 def test_render_fps_scales_with_frame_count(tmp_path):
     night = fake_night(tmp_path, "2026-08-13", frames=900)
-    with mock.patch.object(subprocess, "run") as run, \
+    runner, prober = rendering(night, 900)
+    with runner as run, prober, \
          mock.patch("skylapse.daemon.nightjobs.notify.notify") as note:
         nightjobs.render_night(night)
-        args = run.call_args[0][0]
+        args = ffmpeg_argv(run)
         fps = int(args[args.index("-r") + 1])
         assert fps == 30                          # 900 frames / 30s target
         note.assert_called_once()                 # fires timelapse_ready
@@ -78,18 +108,197 @@ def test_cleanup_never_touches_newest_night(tmp_path):
 def test_clip_seconds_setting_changes_fps(tmp_path):
     from skylapse.config import TimelapseConfig
     night = fake_night(tmp_path, "2026-08-13", frames=900)
-    with mock.patch.object(subprocess, "run") as run, \
+    runner, prober = rendering(night, 900)
+    with runner as run, prober, \
          mock.patch("skylapse.daemon.nightjobs.notify.notify"):
         nightjobs.render_night(night, TimelapseConfig(clip_seconds=60))
-        args = run.call_args[0][0]
+        args = ffmpeg_argv(run)
         assert int(args[args.index("-r") + 1]) == 15   # 900/60, not 900/30
 
 
 def test_quality_setting_maps_to_crf(tmp_path):
     from skylapse.config import TimelapseConfig
     night = fake_night(tmp_path, "2026-08-13", frames=100)
-    with mock.patch.object(subprocess, "run") as run, \
+    runner, prober = rendering(night, 100)
+    with runner as run, prober, \
          mock.patch("skylapse.daemon.nightjobs.notify.notify"):
         nightjobs.render_night(night, TimelapseConfig(quality="max"))
-        args = run.call_args[0][0]
+        args = ffmpeg_argv(run)
         assert args[args.index("-crf") + 1] == "17"
+
+
+# -- what the corrupt-timelapse investigation found --------------------------
+#
+# A 328-frame night rendered as a 17-frame, 1.4-second clip that reported
+# success and notified a phone. Three separate faults lined up:
+# one zero-byte JPEG, a concat demuxer that stops at the first input it cannot
+# open while still exiting 0, and a render that trusted that exit code.
+
+def test_a_zero_byte_frame_does_not_cost_the_rest_of_the_night(tmp_path):
+    night = fake_night(tmp_path, "2026-08-13", frames=100)
+    (night / "img_20260813_000042.jpg").write_bytes(b"")
+
+    assert len(nightjobs.usable_frames(night)) == 100, \
+        "the empty frame was handed to ffmpeg, which stops dead at it"
+    assert all(f.stat().st_size > 0 for f in nightjobs.usable_frames(night))
+
+
+def test_the_render_uses_only_the_usable_frames(tmp_path):
+    night = fake_night(tmp_path, "2026-08-13", frames=60)
+    for i in range(5):
+        (night / f"img_20260813_9000{i:02d}.jpg").write_bytes(b"")
+
+    runner, prober = rendering(night, 60)
+    with runner as run, prober, \
+         mock.patch("skylapse.daemon.nightjobs.notify.notify"):
+        nightjobs.render_night(night)
+    listed = (night / ".frames.txt")
+    assert not listed.exists()                    # cleaned up
+    args = ffmpeg_argv(run)
+    assert int(args[args.index("-r") + 1]) == 12  # 60 usable, not 65
+
+
+# -- post-render validation --------------------------------------------------
+
+def test_a_short_render_is_not_success(tmp_path):
+    out = tmp_path / "t.mp4"
+    out.write_bytes(b"mp4")
+    with mock.patch.object(nightjobs, "_probe", return_value={"nb_read_frames": "17"}):
+        assert "17 of 328" in nightjobs.validate_render(out, 328)
+
+
+def test_a_complete_render_passes(tmp_path):
+    out = tmp_path / "t.mp4"
+    out.write_bytes(b"mp4")
+    with mock.patch.object(nightjobs, "_probe", return_value={"nb_read_frames": "328"}):
+        assert nightjobs.validate_render(out, 328) == ""
+
+
+def test_a_missing_or_empty_output_is_not_success(tmp_path):
+    assert nightjobs.validate_render(tmp_path / "nope.mp4", 10) == "no output file"
+    empty = tmp_path / "empty.mp4"
+    empty.write_bytes(b"")
+    assert nightjobs.validate_render(empty, 10) == "no output file"
+
+
+def test_an_unprobeable_output_is_not_success(tmp_path):
+    out = tmp_path / "t.mp4"
+    out.write_bytes(b"not actually video")
+    with mock.patch.object(nightjobs, "_probe", return_value={}):
+        assert nightjobs.validate_render(out, 10) != ""
+
+
+def test_a_failed_render_never_notifies(tmp_path):
+    """The notification is the whole reason nobody looked at the journal. A
+    phone saying "timelapse ready" for a file that is not is worse than
+    silence."""
+    night = fake_night(tmp_path, "2026-08-13", frames=100)
+
+    def fake_run(cmd, *a, **kw):
+        if cmd and cmd[0] == "ffmpeg":
+            Path(cmd[-1]).write_bytes(b"mp4")
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    with mock.patch.object(subprocess, "run", side_effect=fake_run), \
+         mock.patch.object(nightjobs, "_probe", return_value={"nb_read_frames": "17"}), \
+         mock.patch("skylapse.daemon.nightjobs.notify.notify") as note:
+        result = nightjobs.render_night(night)
+
+    assert result is None
+    note.assert_not_called()
+    assert not list(night.glob("timelapse_*.mp4")), "left a bad file in place"
+
+
+def test_a_failed_render_is_retried_once_smaller(tmp_path):
+    """A render that dies at 12 MP is far likelier to survive at 4K than to
+    survive being tried again identically."""
+    night = fake_night(tmp_path, "2026-08-13", frames=100)
+    sizes = []
+
+    def fake_run(cmd, *a, **kw):
+        if cmd and cmd[0] == "ffmpeg":
+            sizes.append(cmd[cmd.index("-vf") + 1])
+            Path(cmd[-1]).write_bytes(b"mp4")
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    with mock.patch.object(subprocess, "run", side_effect=fake_run), \
+         mock.patch.object(nightjobs, "_probe", return_value={"nb_read_frames": "1"}), \
+         mock.patch("skylapse.daemon.nightjobs.notify.notify"):
+        nightjobs.render_night(night)
+
+    assert len(sizes) == 2, f"expected one retry, got {len(sizes)} attempts"
+    assert sizes[0] != sizes[1], "retried at the same size"
+
+
+# -- output resolution -------------------------------------------------------
+
+def test_the_default_budget_stays_inside_a_playable_level():
+    """Measured on the rig: 3840x2878 encodes as h264 level 6.0, which no phone
+    or browser hardware decoder will touch, while the same 4K *pixel budget* at
+    3328x2494 comes out level 5.1 and plays. Level follows macroblock count, so
+    a width alone decides nothing on a sensor that is not 16:9."""
+    for w, h in ((4056, 3040), (3552, 3552), (4096, 2160)):
+        ow, oh = nightjobs.output_size(w, h, "4k")
+        assert ow * oh <= nightjobs.RESOLUTIONS["4k"], f"{w}x{h} -> {ow}x{oh}"
+
+
+def test_the_aspect_ratio_survives():
+    ow, oh = nightjobs.output_size(4056, 3040, "4k")
+    assert abs((ow / oh) - (4056 / 3040)) < 0.01
+
+
+@pytest.mark.parametrize("resolution", ["4k", "1080p", "full"])
+def test_dimensions_are_always_even(resolution):
+    """h264 with yuv420p cannot encode an odd edge; ffmpeg fails outright."""
+    for w, h in ((4055, 3039), (3553, 3551), (101, 99)):
+        ow, oh = nightjobs.output_size(w, h, resolution)
+        assert ow % 2 == 0 and oh % 2 == 0, f"{w}x{h} -> {ow}x{oh}"
+
+
+def test_small_sensors_are_never_upscaled():
+    """A 640x480 camera is not improved by being stretched to fill 4K, and the
+    file would be many times larger for no added detail."""
+    assert nightjobs.output_size(640, 480, "4k") == (640, 480)
+
+
+def test_full_means_native():
+    assert nightjobs.output_size(4056, 3040, "full") == (4056, 3040)
+
+
+def test_an_unknown_resolution_falls_back_to_the_safe_default():
+    """A hand-edited config must not produce a file nothing can play."""
+    assert nightjobs.output_size(4056, 3040, "nonsense") == \
+        nightjobs.output_size(4056, 3040, "4k")
+
+
+# -- stale renders -----------------------------------------------------------
+
+def test_a_timelapse_older_than_the_night_is_re_rendered(tmp_path):
+    """Folders roll at local noon but the render fires at dawn, so on the rig
+    every clip was missing its morning frames — the 08-15 one was written at
+    07:31 and 252 frames arrived afterwards."""
+    import os
+
+    night = fake_night(tmp_path, "2026-08-13", frames=100, with_mp4=True)
+    mp4 = night / "timelapse_2026-08-13.mp4"
+    os.utime(mp4, (1_000_000, 1_000_000))         # older than every frame
+
+    runner, prober = rendering(night, 100)
+    with runner as run, prober, \
+         mock.patch("skylapse.daemon.nightjobs.notify.notify"):
+        nightjobs.render_night(night)
+    ffmpeg_argv(run)                              # it re-rendered
+
+
+def test_a_current_timelapse_is_left_alone(tmp_path):
+    """Idempotency still holds when nothing has arrived since."""
+    import os
+
+    night = fake_night(tmp_path, "2026-08-13", frames=100, with_mp4=True)
+    mp4 = night / "timelapse_2026-08-13.mp4"
+    os.utime(mp4, (2_000_000_000, 2_000_000_000))  # newer than every frame
+
+    with mock.patch.object(subprocess, "run") as run:
+        out = nightjobs.render_night(night)
+    run.assert_not_called()
+    assert out == mp4

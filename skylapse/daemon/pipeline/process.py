@@ -270,12 +270,34 @@ def save_jpeg(frame: Frame, camera_id: str, quality: int = 92,
     folder = day_folder(frame.timestamp, camera_id)
     stamp = datetime.fromtimestamp(frame.timestamp).strftime("%Y%m%d_%H%M%S")
     path = folder / f"img_{stamp}.jpg"
-    cv2.imwrite(str(path), img, [cv2.IMWRITE_JPEG_QUALITY, quality])
+    _write_jpeg(img, path, quality)
     # Thumbnail now, while the debayered array is already in memory. Generating
     # these on demand meant the first scrub of a 1200-frame night made a phone
     # wait on 1200 full-res decodes; here it costs a resize we have paid for.
     write_thumb(img, thumb_path(path))
     _write_sidecar(path, frame)
+    return path
+
+
+def _write_jpeg(img: np.ndarray, path: Path, quality: int) -> Path:
+    """Encode to a temp file, then rename into place.
+
+    A frame that exists must be a frame that decodes. Writing straight to the
+    final name leaves a zero-length or half-written file behind if the encode
+    fails or the process dies mid-write, and nothing downstream is expecting
+    that: measured on the rig, twelve zero-byte JPEGs across three nights, one
+    of which truncated a whole night's timelapse to seventeen frames because
+    ffmpeg's concat demuxer stops at the first input it cannot open — and
+    exits 0 while doing it.
+
+    cv2.imwrite returns False rather than raising, so the result is checked
+    here. That is how a failed write became an empty file in the first place.
+    """
+    tmp = path.with_suffix(".tmp.jpg")
+    if not cv2.imwrite(str(tmp), img, [cv2.IMWRITE_JPEG_QUALITY, quality]):
+        tmp.unlink(missing_ok=True)
+        raise OSError(f"JPEG encode failed for {path.name}")
+    tmp.replace(path)
     return path
 
 
@@ -292,8 +314,7 @@ def write_thumb(img_bgr: np.ndarray, path: Path) -> Path:
         img_bgr = cv2.resize(
             img_bgr, (max(1, int(w * scale)), max(1, int(h * scale))),
             interpolation=cv2.INTER_AREA)
-    cv2.imwrite(str(path), img_bgr, [cv2.IMWRITE_JPEG_QUALITY, THUMB_QUALITY])
-    return path
+    return _write_jpeg(img_bgr, path, THUMB_QUALITY)
 
 
 def write_dng(frame: Frame, path: Path,

@@ -49,6 +49,11 @@ class TimelapseConfig(BaseModel):
     auto_render: bool = True             # render at dawn automatically
     clip_seconds: int = 30               # target length; fps derived, clamped 12-60
     quality: str = "high"                # standard | high | max -> CRF 23/20/17
+    # Output size as a pixel budget. "4k" is the default because it is the
+    # largest that reliably plays: h264 level is set by macroblock count, so a
+    # 12 MP native render comes out at level 6.0 and no phone or browser
+    # hardware decoder will touch it. "full" is offered, and warned about.
+    resolution: str = "4k"               # 4k | 1080p | full
 
 
 class NetworkConfig(BaseModel):
