@@ -7,6 +7,7 @@ mid-write can never leave a corrupt or half-written config, so flags like
 from __future__ import annotations
 
 import os
+import stat
 import tempfile
 from pathlib import Path
 
@@ -141,8 +142,35 @@ def load() -> Config:
     return Config()
 
 
+def _inherit_ownership(tmp: str, target: Path) -> None:
+    """Give `tmp` the mode and owner of `target`, so replacing it is invisible.
+
+    Falls back to 0644 for a file being created, because the readers of this
+    config are services that do not run as root.
+    """
+    try:
+        st = os.stat(target)
+    except FileNotFoundError:
+        os.chmod(tmp, 0o644)
+        return
+    os.chmod(tmp, stat.S_IMODE(st.st_mode))
+    try:
+        os.chown(tmp, st.st_uid, st.st_gid)     # no-op for a non-root writer
+    except (AttributeError, PermissionError, OSError):
+        pass
+
+
 def save(cfg: Config) -> None:
-    """Atomic: write tmp in same dir, fsync, rename over the original."""
+    """Atomic: write tmp in same dir, fsync, rename over the original.
+
+    The replacement inherits the original's mode and owner. mkstemp creates
+    0600 owned by whoever is writing, and netwatch writes this file as root —
+    so on the rig an expiring hotspot session left /etc/skylapse/config.yaml
+    root-only, and the api and daemon, which run as an ordinary user, could no
+    longer read their own config. Every page returned 500 and capture stopped.
+    An atomic write that silently changes who may read the file afterwards is
+    not atomic in any sense that matters.
+    """
     CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=CONFIG_PATH.parent, suffix=".tmp")
     try:
@@ -150,6 +178,7 @@ def save(cfg: Config) -> None:
             yaml.safe_dump(cfg.model_dump(), fh, sort_keys=False)
             fh.flush()
             os.fsync(fh.fileno())
+        _inherit_ownership(tmp, CONFIG_PATH)
         os.replace(tmp, CONFIG_PATH)
     finally:
         if os.path.exists(tmp):
