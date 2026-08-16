@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import shutil
 import subprocess
 import time
@@ -399,8 +400,12 @@ def main() -> None:
     # guard in this subsystem is a duration (backoff, dwell, grace), so a log
     # without times cannot show whether any of them actually held. journald
     # stamps its own, but this also runs in the foreground during bring-up.
-    logging.basicConfig(level=logging.INFO,
-                        format="%(asctime)s %(levelname)s %(message)s")
+    # SKYLAPSE_LOG_LEVEL=DEBUG surfaces the per-poll guard decisions, which is
+    # the only way to tell "the rescan is holding the hotspot on purpose" apart
+    # from "the rescan is not running" — they look identical at INFO.
+    logging.basicConfig(
+        level=os.environ.get("SKYLAPSE_LOG_LEVEL", "INFO").upper(),
+        format="%(asctime)s %(levelname)s %(message)s")
     NetwatchService().run()
 
 
