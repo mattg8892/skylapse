@@ -310,6 +310,69 @@ def time_sync(body: TimeSync) -> dict:
     return {"applied_eligible": drift > MAX_CLOCK_DRIFT_S, **offer}
 
 
+# -- white balance ----------------------------------------------------------
+#
+# Both endpoints read the preview buffer the capture loop leaves in /run: the
+# most recent frame's raw mosaic, decimated but still a mosaic. The saved JPEG
+# cannot answer either question — it already has the applied multipliers baked
+# in, and whatever the previous setting clipped is gone for good.
+
+WB_MIN, WB_MAX = 0.5, 3.0
+
+
+def _clamp_wb(value: float) -> float:
+    return max(WB_MIN, min(WB_MAX, float(value)))
+
+
+@app.get("/api/wb/suggest")
+def wb_suggest(camera_id: str = "") -> dict:
+    """Grey-world multipliers from the current frame. Suggested, never applied.
+
+    A seed rather than an answer: grey-world assumes the scene averages to
+    grey, which a sky at dusk or a room lit by one warm lamp does not. The
+    manual override is the feature; this is the starting point for it.
+    """
+    preview = process.read_wb_preview(config.RUN_DIR)
+    if preview is None:
+        raise HTTPException(404, "no frame captured yet")
+    mosaic, meta = preview
+    if camera_id and meta.get("camera_id") != camera_id:
+        raise HTTPException(409, "the latest frame is from a different camera")
+
+    means = process.plane_means(process.preview_frame(mosaic, meta))
+    r, b = process.gray_world(means)
+    return {
+        "r": round(_clamp_wb(r), 3), "b": round(_clamp_wb(b), 3),
+        # Unclamped alongside, so a suggestion that ran into the slider's end
+        # is visible as such rather than looking like a considered answer.
+        "raw_r": round(r, 3), "raw_b": round(b, 3),
+        "clamped": r != _clamp_wb(r) or b != _clamp_wb(b),
+        "means": dict(zip("rgb", (round(m, 1) for m in means))),
+        "camera_id": meta.get("camera_id", ""),
+        "frame_at": meta.get("timestamp"),
+    }
+
+
+@app.get("/api/wb/preview")
+def wb_preview(r: float = 1.0, b: float = 1.0) -> Response:
+    """The current frame rendered with the given multipliers, as a JPEG.
+
+    Rendered from the raw mosaic through the same code the pipeline uses, so
+    what the slider shows is what the next frame will be — including the
+    highlights a stronger multiplier clips, which no amount of scaling the
+    saved JPEG could reproduce.
+    """
+    preview = process.read_wb_preview(config.RUN_DIR)
+    if preview is None:
+        raise HTTPException(404, "no frame captured yet")
+    mosaic, meta = preview
+    jpeg = process.render_wb_preview(mosaic, meta, (_clamp_wb(r), _clamp_wb(b)))
+    # No caching: the slider requests one of these per change, and a stale
+    # render is worse than no render when the whole job is judging colour.
+    return Response(jpeg, media_type="image/jpeg",
+                    headers={"Cache-Control": "no-store"})
+
+
 # -- network actions --------------------------------------------------------
 
 class WifiJoin(BaseModel):

@@ -193,14 +193,20 @@ def read_wb_preview(run_dir: Path) -> tuple[np.ndarray, dict] | None:
         return data["mosaic"], json.loads(bytes(data["meta"]).decode())
 
 
+def preview_frame(mosaic: np.ndarray, meta: dict) -> Frame:
+    """Wrap a stashed mosaic back into a Frame, so every consumer of the
+    preview buffer goes through the same debayer and metering code a real
+    capture does instead of reimplementing it."""
+    return Frame(data=mosaic.tobytes(), width=mosaic.shape[1],
+                 height=mosaic.shape[0], bit_depth=int(meta["bit_depth"]),
+                 bayer=BayerPattern(meta["bayer"]), exposure_us=0, gain=0,
+                 timestamp=float(meta.get("timestamp", 0.0)))
+
+
 def render_wb_preview(mosaic: np.ndarray, meta: dict, wb: tuple[float, float],
                       quality: int = 85) -> bytes:
     """Debayer the stashed mosaic with the given multipliers, as a JPEG."""
-    frame = Frame(data=mosaic.tobytes(), width=mosaic.shape[1],
-                  height=mosaic.shape[0], bit_depth=int(meta["bit_depth"]),
-                  bayer=BayerPattern(meta["bayer"]), exposure_us=0, gain=0,
-                  timestamp=float(meta.get("timestamp", 0.0)))
-    ok, buf = cv2.imencode(".jpg", to_bgr(frame, wb),
+    ok, buf = cv2.imencode(".jpg", to_bgr(preview_frame(mosaic, meta), wb),
                            [cv2.IMWRITE_JPEG_QUALITY, quality])
     if not ok:
         raise RuntimeError("JPEG encode failed for the white balance preview")
