@@ -104,19 +104,27 @@ class CaptureDaemon:
                 # filling identity fields on first sight of this hardware.
                 cfg = config.load()
                 entry = cfg.camera(self.camera_id)
+                changed = False
                 if not entry.model:
                     entry.driver, entry.model = info.driver, info.name
                     entry.label = entry.label or info.name
-                    # Profile defaults are ZWO-shaped (gains in the hundreds).
-                    # A Pi module tops out around 22, and AE spills into gain
-                    # once exposure is capped — against an unreachable ceiling
-                    # it would keep asking for more and never see brightness
-                    # move. Fit the new camera's own limits on first sight.
-                    for profile in (entry.day, entry.night):
-                        profile.max_gain = min(profile.max_gain, info.max_gain)
-                        profile.gain = min(profile.gain, info.max_gain)
-                        profile.max_exposure_us = min(profile.max_exposure_us,
-                                                      info.max_exposure_us)
+                    changed = True
+                # Fit the profiles to what this hardware can actually do, on
+                # every open rather than only on first sight. Profile defaults
+                # are ZWO-shaped (gains in the hundreds); a Pi module stops at
+                # 22, and AE spills into gain once exposure is capped, so an
+                # unreachable ceiling means it keeps asking for more and never
+                # sees brightness move. A limit beyond the sensor's capability
+                # is not a preference the user expressed — it is impossible —
+                # so clamping it is not overriding a choice. Only ever downward.
+                for profile in (entry.day, entry.night):
+                    for field, ceiling in (("max_gain", info.max_gain),
+                                           ("gain", info.max_gain),
+                                           ("max_exposure_us", info.max_exposure_us)):
+                        if getattr(profile, field) > ceiling:
+                            setattr(profile, field, ceiling)
+                            changed = True
+                if changed:
                     config.save(cfg)
                 self.cfg = cfg
                 self._write_status({"camera": info.name,

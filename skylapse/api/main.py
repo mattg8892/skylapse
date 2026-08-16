@@ -173,8 +173,12 @@ def _current(daemon: dict, cfg: config.Config) -> dict:
     # invent a registry entry on every status poll for an unknown id.
     entry = cfg.cameras.get(camera_id)
     depth = entry.raw.keeper_buffer_frames if entry else 3
+    # The camera's name comes from the registry, not the daemon status: the
+    # daemon records it once on open and every per-frame write since replaces
+    # it, so the dashboard would show "None" for a rig that is capturing fine.
+    name = (entry.label or entry.model) if entry else ""
     return {"camera_id": camera_id, "night": night, "timelapse": has_timelapse,
-            "keeper_depth": depth}
+            "keeper_depth": depth, "camera_name": name}
 
 
 # Counting a night's frames is a directory scan; frames arrive minutes apart at

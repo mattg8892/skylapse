@@ -135,6 +135,9 @@ function LiveStatus({ status }) {
       <span className={`rounded-full px-2.5 py-0.5 ${PILL_CLASS[pill.tone]}`}>
         <span aria-hidden="true">●</span> {pill.label}{dusk ? ` at ${dusk}` : ''}
       </span>
+      {status?.current?.camera_name && (
+        <span className="text-zinc-500">{status.current.camera_name}</span>
+      )}
       {countdown && <span className="tabular-nums text-zinc-500">{countdown}</span>}
       {frames > 0 && (
         <span className="text-zinc-500">
