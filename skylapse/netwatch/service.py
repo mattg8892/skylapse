@@ -191,12 +191,17 @@ class NetwatchService:
 
         state = self.sm.ctx.state
         wifi_up = self._wifi_connected()
+        # Counted on every poll, including the ones where we are not an access
+        # point. Updating it only while the hotspot was up left the last count
+        # standing after the hotspot came down, so the camera went on reporting
+        # a phone attached to a network that no longer existed — and the
+        # client-freeze guard reads this field.
+        self.sm.on_hotspot_client_change(self._hotspot_client_count())
         if state == State.CONNECTED and not wifi_up:
             delay = self.sm.ctx.backoff_delay()
             log.info("Connection lost; retrying in %ss", delay)
             self._retry_at = now + delay
         elif state in (State.HOTSPOT, State.STANDALONE):
-            self.sm.on_hotspot_client_change(self._hotspot_client_count())
             if state == State.HOTSPOT:
                 for ssid in self._visible_known_networks():
                     action = self.sm.on_background_rescan_found_network(ssid)

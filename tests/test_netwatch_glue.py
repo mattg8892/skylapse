@@ -129,6 +129,7 @@ class FakeRadio:
         self.joined = ""
         self.joinable = True         # whether the house network will accept us
         self.fail_delay = 90         # a doomed join burns the whole grace window
+        self.stations = 0            # phones attached, while we are an AP
         self.activations = []        # every `con up` this test provoked
 
     def nmcli(self, *args, **kw):
@@ -168,7 +169,11 @@ class FakeRadio:
     def iw(self, *args, **kw):
         if "info" in args:
             return f"Interface wlan0\n\ttype {self.mode}\n"
-        return ""      # no stations attached
+        # `station dump` only ever lists anything on an access point; on a
+        # client interface it lists the AP we joined, which is why the real
+        # probe gates on the radio's mode.
+        return "".join(f"Station aa:bb:cc:dd:ee:{i:02x}\n"
+                       for i in range(self.stations if self.mode == "AP" else 0))
 
 
 class FakeClock:
@@ -315,3 +320,30 @@ def test_wifi_only_mode_backs_off_instead_of_retrying_flat_out(monkeypatch):
     assert delays == sorted(delays), f"backoff did not escalate: {delays}"
     assert max(delays) == BACKOFF_STEPS[-1], f"never reached the cap: {delays}"
     assert delays[-1] == BACKOFF_STEPS[-1], f"grew past its cap: {delays}"
+
+
+def test_the_client_count_is_cleared_when_the_hotspot_comes_down(monkeypatch):
+    """Reported from the rig: the camera was back on Wi-Fi, in managed mode,
+    and still reporting one device attached to the access point.
+
+    The count was only refreshed while the hotspot was up, so the last reading
+    stood forever afterwards. It is not cosmetic -- the client-freeze guard
+    reads this field to decide whether it may leave the hotspot.
+    """
+    clock, radio = FakeClock(), FakeRadio(FakeClock())
+    radio.clock = clock
+    service = _service(monkeypatch, radio, clock)
+
+    service._now()
+    service._execute(service.sm.on_user_pick_standalone())
+    radio.stations = 1
+    service._poll_events()
+    assert service.sm.ctx.hotspot_clients == 1
+
+    # Back to Wi-Fi: the phone is gone with the network it was attached to.
+    service._now()
+    service._execute(service.sm.on_user_try_again())
+    service._poll_events()
+
+    assert service.sm.ctx.hotspot_clients == 0, \
+        "still reporting a phone attached to a network that no longer exists"
