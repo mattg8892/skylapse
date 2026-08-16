@@ -440,9 +440,14 @@ class CaptureDaemon:
         if not request.exists():
             return
         request.unlink(missing_ok=True)
+        # Controls are set on the driver, not passed to capture(). Getting this
+        # wrong took the whole capture daemon down with a TypeError, which is
+        # the one thing a wizard convenience must never be able to do — hence
+        # the broad except below rather than only CameraError.
         try:
-            frame = self.driver.capture(*self._focus_controls())
-        except CameraError:
+            self.driver.set_controls(*self._focus_controls())
+            frame = self.driver.capture()
+        except Exception:
             log.exception("Setup test shot failed")
             return
         cam = self.cfg.camera(self.camera_id)

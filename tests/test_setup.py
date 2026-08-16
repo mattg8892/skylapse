@@ -210,3 +210,50 @@ def test_the_ip_estimate_fails_cleanly_with_no_internet(configured, monkeypatch)
 
     monkeypatch.setattr(urllib.request, "urlopen", no_internet)
     assert configured.get("/api/setup/location/estimate").status_code == 503
+
+
+# -- the test shot must never be able to take the capture daemon down --------
+
+def test_a_failing_test_shot_does_not_kill_the_daemon(tmp_path, monkeypatch):
+    """It did. A wrong call signature raised TypeError out of the capture
+    loop, systemd restarted the daemon, and the wizard's convenience feature
+    had stopped the one job the device exists to do.
+
+    Nothing reachable from a button may escape this handler.
+    """
+    from skylapse.daemon.main import CaptureDaemon
+
+    monkeypatch.setattr(config, "RUN_DIR", tmp_path)
+    daemon = CaptureDaemon.__new__(CaptureDaemon)
+    daemon.cfg = config.Config()
+    daemon.camera_id = "picam-imx477"
+
+    class Exploding:
+        def set_controls(self, *a):
+            raise TypeError("capture() takes 1 positional argument")
+
+    daemon.driver = Exploding()
+    daemon._focus_controls = lambda: (1000, 1)
+    (tmp_path / "focus_cmd.json").write_text("{}")
+
+    daemon._poll_setup_shot()             # must not raise
+    assert not (tmp_path / "focus_cmd.json").exists(), "command left to loop forever"
+
+
+def test_the_request_is_consumed_even_when_it_fails(tmp_path, monkeypatch):
+    """Otherwise a failing shot is retried on every pass of the capture loop,
+    for as long as the camera is broken."""
+    from skylapse.daemon.main import CaptureDaemon
+
+    monkeypatch.setattr(config, "RUN_DIR", tmp_path)
+    daemon = CaptureDaemon.__new__(CaptureDaemon)
+    daemon.cfg = config.Config()
+    daemon.camera_id = "picam-imx477"
+    daemon.driver = type("D", (), {"set_controls": lambda *a: None,
+                                   "capture": lambda *a: (_ for _ in ()).throw(
+                                       RuntimeError("no camera"))})()
+    daemon._focus_controls = lambda: (1000, 1)
+    (tmp_path / "focus_cmd.json").write_text("{}")
+
+    daemon._poll_setup_shot()
+    assert not (tmp_path / "focus_cmd.json").exists()
