@@ -147,6 +147,11 @@ class NetStateMachine:
         c.state = State.TRY_WIFI
         c.reconnect_attempts = 0              # fresh user intent resets backoff
         c.auth_failures.clear()               # they may have fixed the password
+        # Asking to try again revokes an earlier "use standalone for now".
+        # Leaving guard 5 set would land the failed retry back in HOTSPOT with
+        # the background rescan permanently disabled — a camera that looks like
+        # it is waiting for its network to return, and never checks.
+        c.session_standalone = False
         return Action.START_WIFI_ATTEMPT
 
     def on_user_pick_standalone(self, always: bool = False) -> Action:

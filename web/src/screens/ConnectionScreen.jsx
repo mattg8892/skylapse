@@ -1,8 +1,8 @@
 import { useState } from 'react'
 
 // Implements the flow from DESIGN.md: saved networks with reasons, three
-// actions (Try again / Connect new / Standalone), "always standalone"
-// checkbox, and the time-sync card that appears only when the camera's
+// actions (Try again / Connect new / Access point), "always" checkbox,
+// and the time-sync card that appears only when the camera's
 // clock source is browser-only.
 
 export default function ConnectionScreen({ status }) {
@@ -18,7 +18,7 @@ export default function ConnectionScreen({ status }) {
   const tryAgain = async () => {
     if (!window.confirm(
       'This disconnects your phone from the camera for up to 90 seconds while ' +
-      'it tries your Wi-Fi. If it fails, rejoin the Skylapse-Setup hotspot.')) return
+      'it tries your Wi-Fi. If it fails, rejoin the Skylapse-Setup access point.')) return
     setBusy('retry')
     await fetch('/api/network/retry', { method: 'POST' }).catch(() => {})
     setBusy(null)
@@ -78,19 +78,19 @@ export default function ConnectionScreen({ status }) {
           </button>
           <button onClick={pickStandalone} disabled={busy}
             className="rounded-lg border-2 border-sky-600 py-2.5 text-sm hover:bg-zinc-800">
-            Use in standalone mode
+            Use in access point mode
           </button>
           <label className="mt-1 flex items-center gap-2 text-sm text-zinc-400">
             <input type="checkbox" checked={alwaysStandalone}
               onChange={(e) => setAlwaysStandalone(e.target.checked)} />
-            Always use standalone mode
+            Always use access point mode
           </label>
         </div>
       </div>
 
       {showStandalone && drift > 5 && (
         <div className="w-full max-w-sm rounded-2xl border border-zinc-800 bg-zinc-900 p-5">
-          <h2 className="font-medium">Standalone mode</h2>
+          <h2 className="font-medium">Access point mode</h2>
           <p className="mt-1 text-sm text-zinc-400">
             Without internet, the camera can't set its own clock. Timestamps and
             day/night switching depend on it.
