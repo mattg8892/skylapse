@@ -114,3 +114,31 @@ export function Toast({ message }) {
     </div>
   )
 }
+
+/**
+ * Blocking confirmation for actions that cost the user their own connection.
+ *
+ * Switching to the access point disconnects whoever is looking at this page,
+ * which is not something a toast can take back. `consequence` is stated in the
+ * dialog rather than trusted to the button label, because the person who most
+ * needs to read it is the one tapping quickly on a phone.
+ */
+export function ConfirmDialog({ open, title, consequence, confirmLabel,
+                               tone = 'warn', onConfirm, onCancel }) {
+  if (!open) return null
+  return (
+    <div role="dialog" aria-modal="true" aria-label={title}
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
+      <div className="w-full max-w-sm rounded-2xl border border-zinc-700 bg-zinc-900 p-5">
+        <h3 className="font-medium">{title}</h3>
+        <p className="mt-2 text-sm text-zinc-400">{consequence}</p>
+        <div className="mt-5 flex gap-2">
+          <Button onClick={onCancel} className="flex-1">Cancel</Button>
+          <Button onClick={onConfirm} tone={tone} className="flex-1">
+            {confirmLabel}
+          </Button>
+        </div>
+      </div>
+    </div>
+  )
+}

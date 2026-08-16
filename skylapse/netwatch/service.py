@@ -109,6 +109,7 @@ class NetwatchService:
         self.sm = NetStateMachine(NetContext(mode=Mode(cfg.network.mode)))
         self.hotspot_ssid = cfg.network.hotspot_ssid
         self._retry_at = 0.0          # non-blocking backoff deadline
+        self.hotspot_deadline = cfg.network.hotspot_until or 0.0
 
     def _now(self) -> float:
         """Stamp the state machine's clock, immediately before an event.
@@ -129,6 +130,7 @@ class NetwatchService:
         self._execute(self.sm.on_boot())
         while True:
             self._now()
+            self._poll_config()
             self._poll_events()
             self._poll_commands()
             self._write_status()
@@ -136,6 +138,41 @@ class NetwatchService:
             time.sleep(POLL_S)
 
     # -- observe -----------------------------------------------------------
+
+    def _poll_config(self) -> None:
+        """Apply a mode chosen from Settings, and expire a timed AP session.
+
+        The mode lives in the config file rather than in a command, because it
+        has to survive a restart: someone who put the camera into access-point
+        mode to work on it in the field must not find it back on Wi-Fi after a
+        power cut. Reading it every poll is what makes the Settings switch take
+        effect without restarting the service — and restarting the service to
+        change network mode is precisely the thing this control exists to avoid.
+        """
+        cfg = config.load()
+        desired = Mode(cfg.network.mode)
+        until = cfg.network.hotspot_until or 0.0
+
+        if desired == Mode.STANDALONE and until and time.time() >= until:
+            log.info("Timed access-point session expired; returning to auto")
+            cfg.network.mode, cfg.network.hotspot_until = "auto", 0.0
+            config.save(cfg)
+            desired, until = Mode.AUTO, 0.0
+
+        self.hotspot_deadline = until
+        if desired == self.sm.ctx.mode:
+            return
+
+        log.info("Mode changed: %s -> %s", self.sm.ctx.mode.value, desired.value)
+        self.sm.ctx.mode = desired
+        self._now()
+        if desired == Mode.STANDALONE:
+            self._execute(self.sm.on_user_pick_standalone())
+        else:
+            # Leaving AP mode is user intent, so it clears the session-only
+            # standalone flag and the auth strikes along with it.
+            self.sm.ctx.session_standalone = False
+            self._execute(self.sm.on_user_try_again())
 
     def _poll_events(self) -> None:
         # A pending backoff is served by returning early, never by sleeping.
@@ -470,6 +507,8 @@ class NetwatchService:
             "state": c.state.value, "mode": c.mode.value,
             "session_standalone": c.session_standalone,
             "hotspot_clients": c.hotspot_clients,
+            "hotspot_until": self.hotspot_deadline,
+            "hotspot_ssid": self.hotspot_ssid,
             "auth_failures": c.auth_failures, "updated": time.time(),
         }))
 

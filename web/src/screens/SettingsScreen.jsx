@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import {
-  Button, Card, NumberField, Segmented, Select, Toggle,
+  Button, Card, ConfirmDialog, NumberField, Segmented, Select, Toggle,
 } from '../components/ui.jsx'
 
 // Capture / timelapse / overlay are per-camera (config.cameras is a registry
@@ -176,6 +176,9 @@ export default function SettingsScreen({ showToast, storage }) {
         </p>
       </Card>
 
+      {/* Network */}
+      <NetworkCard showToast={showToast} />
+
       {/* Remote access */}
       <Card title="Remote access">
         <p className="mt-1 text-sm text-zinc-400">
@@ -208,6 +211,114 @@ export default function SettingsScreen({ showToast, storage }) {
         )}
       </Card>
     </div>
+  )
+}
+
+/* -- network --------------------------------------------------------------- */
+
+const AP_DURATIONS = [
+  { value: 'hotspot', label: 'Until I switch it back' },
+  { value: '60', label: '1 hour' },
+  { value: '120', label: '2 hours' },
+  { value: '480', label: '8 hours' },
+]
+
+/**
+ * Manual access-point mode.
+ *
+ * The automatic fallback already covers "Wi-Fi broke". This covers the case it
+ * cannot: someone standing at the camera who wants the access point now, with
+ * no working Wi-Fi to break first and no timeout to wait out. Sticky is the
+ * default duration because that is the one you want while you are working.
+ */
+function NetworkCard({ showToast }) {
+  const [net, setNet] = useState(null)
+  const [choice, setChoice] = useState('hotspot')
+  const [pending, setPending] = useState(null)
+
+  const refresh = useCallback(() => {
+    fetch('/api/network').then((r) => r.json()).then(setNet).catch(() => {})
+  }, [])
+
+  useEffect(() => {
+    refresh()
+    const id = setInterval(refresh, 10000)
+    return () => clearInterval(id)
+  }, [refresh])
+
+  if (!net) return null
+  const ap = net.mode === 'hotspot' || net.mode === 'hotspot_timed'
+
+  const apply = async (body) => {
+    setPending(null)
+    const r = await fetch('/api/network/mode', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }).catch(() => null)
+    if (!r?.ok) return showToast?.('Could not change network mode')
+    // The switch takes a few seconds and may well take this page's connection
+    // with it, so say what is about to happen rather than reporting success.
+    showToast?.((await r.json()).note)
+    setTimeout(refresh, 8000)
+  }
+
+  return (
+    <Card title="Network">
+      <p className="mt-1 text-sm text-zinc-400">
+        {ap
+          ? `The camera is its own access point, ${net.hotspot_ssid}.`
+          : net.ssid
+            ? `Connected to ${net.ssid}.`
+            : 'Not connected to Wi-Fi.'}
+        {net.remaining_s != null && ap && ' It returns to Wi-Fi when the time is up.'}
+      </p>
+
+      {ap ? (
+        <>
+          <p className="mt-3 text-sm text-zinc-500">
+            {net.clients > 0
+              ? `${net.clients} device${net.clients > 1 ? 's' : ''} connected.`
+              : 'No devices connected yet.'}
+            {' '}Join {net.hotspot_ssid}
+            {net.hotspot_secured ? ' with your hotspot password' : ' (no password)'}
+            , then open http://10.42.0.1
+          </p>
+          <Button tone="accent" className="mt-3 w-full"
+            onClick={() => setPending({ mode: 'auto' })}>
+            Switch back to Wi-Fi
+          </Button>
+        </>
+      ) : (
+        <div className="mt-4 space-y-3">
+          <Select label="Stay in access-point mode for" value={choice}
+            onChange={setChoice} options={AP_DURATIONS} />
+          <Button tone="warn" className="w-full"
+            onClick={() => setPending(choice === 'hotspot'
+              ? { mode: 'hotspot' }
+              : { mode: 'hotspot_timed', minutes: Number(choice) })}>
+            Switch to access-point mode
+          </Button>
+        </div>
+      )}
+
+      <ConfirmDialog
+        open={!!pending}
+        title={pending?.mode === 'auto'
+          ? 'Switch back to Wi-Fi?'
+          : 'Switch to access-point mode?'}
+        consequence={pending?.mode === 'auto'
+          ? `The ${net.hotspot_ssid} network will disappear and any device on it — `
+            + 'including this one — will be disconnected. The camera rejoins your '
+            + 'Wi-Fi within about a minute.'
+          : `This device will lose its connection to the camera. To get back, `
+            + `join the ${net.hotspot_ssid} network from your Wi-Fi settings and `
+            + 'open http://10.42.0.1'}
+        confirmLabel={pending?.mode === 'auto' ? 'Rejoin Wi-Fi' : 'Switch anyway'}
+        tone={pending?.mode === 'auto' ? 'accent' : 'warn'}
+        onCancel={() => setPending(null)}
+        onConfirm={() => apply(pending)} />
+    </Card>
   )
 }
 

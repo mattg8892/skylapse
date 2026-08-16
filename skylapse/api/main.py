@@ -340,6 +340,80 @@ def network_standalone(always: bool = False) -> dict:
     return {"ok": True}
 
 
+# Access-point mode is a manual override, distinct from the automatic fallback:
+# the camera stays an access point until it is switched back, rather than
+# waiting out a connect timeout. That is the whole point — someone standing at
+# the camera with a phone should not have to wait for Wi-Fi to fail first.
+AP_MODES = {"hotspot", "hotspot_timed"}
+
+
+class NetworkMode(BaseModel):
+    mode: str                    # auto | hotspot | hotspot_timed
+    minutes: int = 120           # only read for hotspot_timed
+
+
+@app.get("/api/network")
+def network_state() -> dict:
+    """Everything the UI needs to render the network card and badge."""
+    status = _read_status("netwatch") or {}
+    cfg = config.load()
+    until = float(status.get("hotspot_until") or cfg.network.hotspot_until or 0)
+    ap = status.get("state") in ("hotspot", "standalone")
+    return {
+        "state": status.get("state", "unknown"),
+        # The UI speaks of access-point mode; "standalone" is the state
+        # machine's name for the same thing and is not worth exposing.
+        "mode": ("hotspot_timed" if cfg.network.mode == "standalone" and until
+                 else "hotspot" if cfg.network.mode == "standalone" else "auto"),
+        "access_point": ap,
+        "hotspot_ssid": cfg.network.hotspot_ssid,
+        "hotspot_secured": bool(cfg.network.hotspot_password),
+        "clients": status.get("hotspot_clients", 0),
+        "hotspot_until": until,
+        "remaining_s": max(0, int(until - time.time())) if until else None,
+        "ssid": _wifi_ssid(),
+        "updated": status.get("updated"),
+    }
+
+
+def _wifi_ssid() -> str:
+    """The network we are joined to, or "" when we are the access point."""
+    try:
+        out = subprocess.run(["nmcli", "-t", "-f", "ACTIVE,SSID", "dev", "wifi"],
+                             capture_output=True, text=True, timeout=10).stdout
+    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+        return ""
+    for line in out.splitlines():
+        if line.startswith("yes:"):
+            return line.split(":", 1)[1]
+    return ""
+
+
+@app.post("/api/network/mode")
+def network_set_mode(body: NetworkMode) -> dict:
+    """Switch access-point mode on or off by hand.
+
+    Persisted to config rather than sent as a command, so it survives a reboot
+    and so netwatch applies it on its next poll without a restart.
+    """
+    if body.mode not in AP_MODES | {"auto"}:
+        raise HTTPException(400, f"unknown mode {body.mode!r}")
+    cfg = config.load()
+    if body.mode == "auto":
+        cfg.network.mode, cfg.network.hotspot_until = "auto", 0.0
+    else:
+        cfg.network.mode = "standalone"
+        cfg.network.hotspot_until = (
+            time.time() + max(1, body.minutes) * 60
+            if body.mode == "hotspot_timed" else 0.0)
+    config.save(cfg)
+    return {"ok": True, "mode": body.mode,
+            "hotspot_until": cfg.network.hotspot_until,
+            "note": ("Switching to the access point drops Wi-Fi within a few seconds"
+                     if body.mode in AP_MODES else
+                     "Rejoining Wi-Fi; the access point drops within a few seconds")}
+
+
 @app.post("/api/network/retry")
 def network_retry() -> dict:
     (config.RUN_DIR / "netwatch_cmd.json").write_text(json.dumps({"cmd": "retry"}))

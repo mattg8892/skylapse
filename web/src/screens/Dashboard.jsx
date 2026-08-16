@@ -8,6 +8,7 @@ import { Button, Card, Toast, useToast } from '../components/ui.jsx'
 import {
   countdownFor, countdownText, idleDetail, pillFor, serverNow,
 } from '../lib/capture.js'
+import { networkBadge } from '../lib/network.js'
 
 // One entry per navigable screen. Focus is deliberately absent: it is entered
 // from the dashboard, not navigated to, and leaving it must stop the session.
@@ -25,8 +26,9 @@ export default function Dashboard({ status }) {
   const [toast, showToast] = useToast()
   const d = status.daemon ?? {}
   const current = status.current ?? {}
-  const standalone =
-    status.network?.mode === 'standalone' || status.network?.session_standalone
+  // A camera serving its own access point looks identical whether someone
+  // chose that or Wi-Fi failed, so the badge has to say which.
+  const badge = networkBadge(status.network, status.server_time)
 
   return (
     <div className="mx-auto min-h-screen max-w-3xl px-4 py-6">
@@ -36,9 +38,11 @@ export default function Dashboard({ status }) {
           <LiveStatus status={status} />
         </div>
         <div className="flex shrink-0 items-center gap-3 text-sm">
-          {standalone && (
-            <span className="rounded-full bg-amber-950 px-3 py-1 text-amber-400">
-              Network: Standalone
+          {badge && (
+            <span title={badge.detail}
+              className={`rounded-full px-3 py-1 ${badge.tone === 'red'
+                ? 'bg-red-950 text-red-400' : 'bg-amber-950 text-amber-400'}`}>
+              {badge.label}
             </span>
           )}
           <span className="text-zinc-400">

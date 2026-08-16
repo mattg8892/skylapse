@@ -54,6 +54,10 @@ class NetworkConfig(BaseModel):
     mode: str = "auto"                   # auto | standalone | wifi_only
     hotspot_ssid: str = "Skylapse-Setup"
     hotspot_password: str = ""           # open by default; wizard can set one
+    # Deadline for a timed access-point session, or 0 for "until turned off".
+    # Persisted rather than held in memory so a power cut in the field cannot
+    # quietly put the camera back on Wi-Fi while someone is still working on it.
+    hotspot_until: float = 0.0
 
 
 class DewHeaterConfig(BaseModel):
