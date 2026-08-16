@@ -1,0 +1,69 @@
+name: SD image
+
+# The flashable image is the product; a git clone is the developer path. This
+# builds it on GitHub's arm64 runners, which are free for public repositories —
+# the project's hard constraint is that nothing may cost the maintainer or the
+# user anything, ever, and a paid build minute would break that as surely as a
+# hosted backend would.
+#
+# Native arm64 means the chroot needs no qemu and no binfmt, which is the
+# difference between a build measured in minutes and one measured in hours.
+
+on:
+  workflow_dispatch:          # build one on demand, to test without tagging
+  release:
+    types: [published]        # and attach one to every release automatically
+
+permissions:
+  contents: write             # to upload the asset to the release
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 90
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The image ships its own .git so the in-app updater works, and the
+          # updater compares against origin/main and tags. A shallow clone
+          # would put a camera in a state where it could never update itself.
+          fetch-depth: 0
+
+      - name: Install build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xz-utils parted e2fsprogs rsync curl
+
+      - name: Build the image
+        run: sudo image/build.sh "$GITHUB_WORKSPACE/skylapse.img"
+
+      - name: Compress
+        run: |
+          # -T0 uses every core; the runner has several and this is the
+          # slowest step otherwise.
+          xz -T0 -9 "$GITHUB_WORKSPACE/skylapse.img"
+          ls -lh "$GITHUB_WORKSPACE/skylapse.img.xz"
+
+      - name: Checksum
+        run: |
+          cd "$GITHUB_WORKSPACE"
+          sha256sum skylapse.img.xz | tee skylapse.img.xz.sha256
+
+      # Kept for workflow_dispatch runs, where there is no release to attach
+      # to. Artifacts expire; a release asset does not.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: skylapse-image
+          path: |
+            skylapse.img.xz
+            skylapse.img.xz.sha256
+          retention-days: 14
+
+      - name: Attach to the release
+        if: github.event_name == 'release'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release upload "${{ github.event.release.tag_name }}" \
+            skylapse.img.xz skylapse.img.xz.sha256 --clobber

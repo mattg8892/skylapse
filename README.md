@@ -50,51 +50,41 @@ Weatherproof housing, dew heater and lens are up to you; this is the software ha
 
 ## Getting started
 
-### 1. Flash Raspberry Pi OS
+### 1. Write the card
 
-Use [Raspberry Pi Imager](https://www.raspberrypi.com/software/). Choose **Raspberry Pi
-OS (64-bit)**, Bookworm or newer.
+Download **`skylapse.img.xz`** from the
+[latest release](https://github.com/mattg8892/skylapse/releases/latest), open
+[Raspberry Pi Imager](https://www.raspberrypi.com/software/), choose **Use custom** and
+select the file you downloaded.
 
-In Imager's **customisation** settings (the gear icon), before writing:
+Then open Imager's **customisation** settings (the gear icon) before writing:
 
-- set a **hostname** — `skylapse` is a good choice, but give a second camera a
-  different one: two `skylapse.local` on one network resolve to whichever answers first
-- **enable SSH** and add your public key (or set a password)
 - enter your **Wi-Fi** credentials and country
+- set a **hostname** if you like — the image already answers to `skylapse`, but give a
+  second camera a different name: two `skylapse.local` on one network resolve to
+  whichever answers first
+- **enable SSH** if you ever want a terminal. You do not need it.
 
-That customisation step is what makes the rest of this headless. Write the card, put it
-in the Pi, and power up.
+Write the card, put it in the Pi, and power up. The first boot expands the filesystem and
+takes a minute or two longer than later ones.
 
-### 2. Log in and get the code
+### 2. Open it
 
-```bash
-ssh <you>@skylapse.local          # or the Pi's IP address
-git clone https://github.com/mattg8892/skylapse
-cd skylapse
+```
+http://skylapse.local
 ```
 
-### 3. Run the installer
+Setup runs on the first visit: network, camera with a live test shot, where the camera is,
+what to capture, and optionally a password. A couple of minutes on a phone, and every
+answer can be changed later in Settings.
 
-```bash
-sudo ./install.sh
-```
+That is the whole install. No terminal, no config files, no account, nothing in the cloud.
 
-It installs system packages, creates a Python environment, builds the web interface, and
-enables the services. It is safe to re-run — every step checks what is already there and
-skips it — so this is also how you apply changes after a `git pull`.
+### ZWO cameras: one extra step
 
-> The installer runs Skylapse **from this checkout**, not from a copy elsewhere. Updating
-> is `git pull && sudo systemctl restart skylapse-daemon`, or just the Updates card in
-> Settings.
-
-### 4. ZWO cameras only: install the SDK
-
-Skipping this if you are using a Pi camera module — it needs nothing extra.
-
-ZWO's SDK cannot be downloaded by a script (their portal is browser-only), so the
-installer detects it and tells you if it is missing. The
-[INDI project](https://github.com/indilib/indi-3rdparty/tree/master/libasi) redistributes
-the same vendor binaries and is the easiest source:
+Pi camera modules need nothing. ZWO's SDK cannot be redistributed in the image — their
+licence does not allow it and their download portal is browser-only — so a ZWO rig needs
+the library installed once over SSH:
 
 ```bash
 # from https://github.com/indilib/indi-3rdparty/tree/master/libasi
@@ -106,25 +96,11 @@ sudo ln -sf libASICamera2.so.1    /usr/local/lib/libASICamera2.so
 sudo ldconfig
 sudo install -m 644 99-asi.rules /etc/udev/rules.d/
 sudo udevadm control --reload-rules && sudo udevadm trigger
+sudo systemctl restart skylapse-daemon
 ```
 
 Those udev rules matter for more than permissions: they raise the USB buffer limit that
 large frames need. Replug the camera afterwards, or reboot.
-
-Set `ZWO_ASI_LIB` if you install the library somewhere else.
-
-### 5. Open the web interface
-
-```
-http://skylapse.local
-```
-
-The first visit runs a short setup: network, camera (with a test shot), where the camera
-is, what to capture, and optionally a password. A couple of minutes on a phone, and
-everything in it can be changed later in Settings.
-
-After that the dashboard shows the latest frame, whether capture is healthy, and a
-countdown to the next one. No login, no account, nothing in the cloud.
 
 ## Using it
 
@@ -227,6 +203,12 @@ SKYLAPSE_RUN=./dev/run \
 ```
 
 The web interface builds with `npm --prefix web install && npm --prefix web run build`.
+
+**Installing onto a Pi you already have**, rather than flashing the image: clone the repo
+onto it and run `sudo ./install.sh`. It installs system packages, builds the frontend and
+enables the three services, running Skylapse in place from the checkout — so updating is
+`git pull && sudo systemctl restart skylapse-daemon`. It is safe to re-run. The SD image
+is this same script, run inside the image at build time (`image/build.sh`).
 
 Three environment variables relocate everything: `SKYLAPSE_CONFIG`, `SKYLAPSE_IMAGES`,
 `SKYLAPSE_RUN`. On a rig they default to `/etc/skylapse/config.yaml`,

@@ -1,0 +1,9 @@
+# Shell scripts must be LF in the index. A CRLF shebang is "bad interpreter" on
+# Linux, and every one of these runs on a Pi. This is not hypothetical: an
+# editor pass normalised install.sh to CRLF, which would have broken the first
+# fresh clone and the SD image build with it.
+*.sh text eol=lf
+
+# Systemd units and the CI workflow are read by Linux tooling too.
+*.service text eol=lf
+*.yml text eol=lf

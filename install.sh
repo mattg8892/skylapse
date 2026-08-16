@@ -16,10 +16,17 @@ set -euo pipefail
 [ "$(id -u)" -eq 0 ] || { echo "Run with sudo"; exit 1; }
 
 ROOT="$(cd "$(dirname "$0")" && pwd)"
-RUN_USER="${SUDO_USER:-}"
+
+# SKYLAPSE_IMAGE_BUILD=1 is the SD image build (image/build.sh), running inside
+# a chroot with no systemd, no SUDO_USER and nothing to start. It changes
+# exactly two things: the service user is named rather than inherited, and
+# units are enabled without being started.
+IMAGE_BUILD="${SKYLAPSE_IMAGE_BUILD:-0}"
+RUN_USER="${SKYLAPSE_USER:-${SUDO_USER:-}}"
 if [ -z "$RUN_USER" ] || [ "$RUN_USER" = "root" ]; then
     echo "Run via sudo from your normal login account (needs a non-root owner"
-    echo "for the checkout, the venv and the capture process)."
+    echo "for the checkout, the venv and the capture process), or set"
+    echo "SKYLAPSE_USER to the account the services should run as."
     exit 1
 fi
 as_user() { sudo -u "$RUN_USER" "$@"; }
@@ -114,13 +121,24 @@ for unit in skylapse-daemon skylapse-api skylapse-netwatch; do
     sed -e "s|@SKYLAPSE_ROOT@|$ROOT|g" -e "s|@SKYLAPSE_USER@|$RUN_USER|g" \
         "$ROOT/systemd/$unit.service" > "/etc/systemd/system/$unit.service"
 done
-systemctl daemon-reload
-
 # All three, netwatch included: verified on hardware 2026-08-16, down to the
 # client-connected freeze with a real phone attached. It was held back until
 # then because its failure mode is taking down a working Wi-Fi link, and on a
 # headless rig that costs you the box.
-systemctl enable --now skylapse-daemon skylapse-api skylapse-netwatch
+UNITS="skylapse-daemon skylapse-api skylapse-netwatch"
+if [ "$IMAGE_BUILD" = "1" ]; then
+    # A chroot has no running systemd, so daemon-reload and --now both fail.
+    # Enabling is only symlink work, and does apply.
+    systemctl enable $UNITS
+else
+    systemctl daemon-reload
+    systemctl enable --now $UNITS
+fi
+
+if [ "$IMAGE_BUILD" = "1" ]; then
+    echo "==> Image build: installed and enabled, not started."
+    exit 0
+fi
 
 echo "==> Done."
 echo "    capture: systemctl status skylapse-daemon"
