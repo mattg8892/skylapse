@@ -133,6 +133,55 @@ Known upstream annoyance, not patched: zwoasi 0.2.0's `Camera.__del__` raises
 torn down before the finaliser runs). It is noise in the log after the capture loop has
 already exited, and it is a library bug rather than ours.
 
+### Choosing between two cameras
+
+Probe order is simulator → ZWO USB → Pi CSI. ZWO leads because it is the
+primary target: a rig with both attached is almost always a ZWO imaging camera
+on a Pi that happens to have a module fitted.
+
+`config.active_camera` overrides that for the rig where the Pi module *is* the
+sky-facing camera. It holds a `camera_id`, and the driver is taken from the part
+before the first dash — every id is built as `<driver>-<hardware identity>`
+(`zwo-asi676mc`, `picam-imx477`), so the config needs no second field that could
+disagree with the id. A preference naming a camera that is not attached logs a
+warning and falls back to the probe order: unplugging the preferred camera
+should degrade to capturing with the other one, not stop the night.
+
+Selection is config-level only. There is no Settings control yet — it is a
+one-line config edit and belongs with the wizard's camera step rather than as a
+stray dropdown.
+
+### Pi camera: what the bench session established (2026-08-15)
+
+`drivers/picam.py` remains **unverified against hardware**. An Arducam UC-517
+(IMX477-class) was fitted but never enumerated, so first light did not happen.
+Two things were nonetheless settled:
+
+- **The venv must be built with `--system-site-packages`.** `picamera2` comes
+  from apt with no wheel, so without that flag it is invisible to the venv and
+  `PiCamDriver.probe()` returns `False` on hardware that is working perfectly —
+  a silent, camera-shaped failure with no error anywhere. The rig's venv had
+  been created by hand without the flag; `install.sh` now repairs that case
+  rather than skipping any venv that merely exists. Verified afterwards that the
+  project's own pinned numpy/OpenCV/FastAPI still take precedence over the
+  system copies.
+- **Enumeration is a hardware precondition, and its absence is diagnosable.**
+  With `dtoverlay=imx477` targeting both Pi 5 ports, the driver bound and the
+  CSI subsystem found both subdevices, but the chip-ID read failed:
+  `-121 EREMOTEIO` on CAM1 and `-110 ETIMEDOUT` on CAM0. Driver and device tree
+  correct, sensor not answering — a cable or seating fault, not software. Worth
+  keeping as the signature to look for: a *missing* overlay produces no imx477
+  lines at all, whereas a *connection* fault produces a failed chip-ID read.
+
+Still expected to be wrong when hardware does arrive, and unfixable until then:
+the stub's `bit_depth=16` (IMX477 raw is 12-bit, and picamera2 delivers
+`SRGGB12_CSI2P` **packed** — it must be measured and unpacked, not assumed), the
+hardcoded `max_exposure_us=200_000_000` and `max_gain=22` (both should come from
+the sensor's own `ExposureTimeLimits`/`AnalogueGainLimits`), and the bayer order.
+
+An IR-CUT accessory, if fitted, would be a GPIO-switched day/night filter — a
+future feature, deliberately not wired.
+
 ### Camera registry
 
 Every camera reports a stable `camera_id` (ZWO flash id/serial, or model for Pi cams).

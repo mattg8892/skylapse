@@ -54,7 +54,17 @@ install -d -o "$RUN_USER" -g "$RUN_USER" /var/lib/skylapse/images
 
 echo "==> Python environment"
 if [ -x "$ROOT/venv/bin/python" ]; then
-    echo "    venv present, skipping creation"
+    echo "    venv present"
+    # Existence is not enough. picamera2 is apt-only with no wheel, so a venv
+    # built without --system-site-packages can never see it — and the Pi camera
+    # driver's probe() then returns False on hardware that is working perfectly.
+    # A venv created by hand before running this script is exactly that case,
+    # so repair the flag rather than skipping over it.
+    if grep -q "^include-system-site-packages = false" "$ROOT/venv/pyvenv.cfg" 2>/dev/null; then
+        echo "    repairing: enabling system site-packages (needed for picamera2)"
+        as_user sed -i 's/^include-system-site-packages = false/include-system-site-packages = true/' \
+            "$ROOT/venv/pyvenv.cfg"
+    fi
 else
     # --system-site-packages so python3-picamera2 (apt-only, no wheel) is importable.
     as_user python3 -m venv --system-site-packages "$ROOT/venv"

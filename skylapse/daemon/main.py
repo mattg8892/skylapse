@@ -95,7 +95,9 @@ class CaptureDaemon:
         attempt = 0
         while self.running:
             try:
-                self.driver = detect_camera()
+                # active_camera lets a rig with both a ZWO and a Pi module pick
+                # which one is the imaging camera; empty means the probe order.
+                self.driver = detect_camera(self.cfg.active_camera)
                 info = self.driver.open()
                 self.camera_id = info.camera_id
                 # Register in the config-file camera registry (fetch-or-create),
