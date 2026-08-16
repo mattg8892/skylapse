@@ -257,3 +257,44 @@ def test_the_request_is_consumed_even_when_it_fails(tmp_path, monkeypatch):
 
     daemon._poll_setup_shot()
     assert not (tmp_path / "focus_cmd.json").exists()
+
+
+# -- Wi-Fi is optional -------------------------------------------------------
+
+def test_a_camera_can_be_set_up_to_never_use_wifi(fresh):
+    """Plenty of cameras never join a network: a shed with no coverage, a
+    dark-sky site, a rig someone simply walks up to. Making that an explicit
+    choice in the wizard is the difference between unsupported and supported."""
+    fresh.patch("/api/setup/draft", json={"network": {"mode": "standalone"}})
+    fresh.post("/api/setup/complete")
+    assert config.load().network.mode == "standalone"
+
+
+def test_the_wifi_choice_defaults_to_joining_a_network(fresh):
+    fresh.post("/api/setup/complete")
+    assert config.load().network.mode == "auto"
+
+
+def test_the_network_choice_seeds_from_what_the_camera_is_doing(fresh):
+    cfg = config.load()
+    cfg.network.mode = "standalone"
+    config.save(cfg)
+    draft = fresh.get("/api/setup/draft").json()["draft"]
+    assert draft["network"]["mode"] == "standalone"
+
+
+def test_a_nonsense_network_mode_is_ignored(fresh):
+    """Hand-edited drafts and future modes must not write a value netwatch
+    would refuse to parse."""
+    fresh.patch("/api/setup/draft", json={"network": {"mode": "wifi_only_maybe"}})
+    fresh.post("/api/setup/complete")
+    assert config.load().network.mode == "auto"
+
+
+def test_the_summary_says_how_to_reach_an_access_point_camera(fresh):
+    """The one screen where someone is about to lose their connection on
+    purpose has to say what to join next."""
+    fresh.patch("/api/setup/draft", json={"network": {"mode": "standalone"}})
+    summary = fresh.post("/api/setup/complete").json()["summary"]
+    assert summary["network_mode"] == "standalone"
+    assert summary["hotspot_ssid"]

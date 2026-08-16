@@ -212,6 +212,8 @@ def _setup_summary(cfg: config.Config) -> dict:
         "schedule": entry.capture_schedule if entry else "always",
         "raw_mode": entry.raw.mode if entry else "off",
         "protected": bool(cfg.auth.password_hash),
+        "network_mode": cfg.network.mode,
+        "hotspot_ssid": cfg.network.hotspot_ssid,
         "kp_threshold": kp_threshold(cfg.location.latitude),
     }
 

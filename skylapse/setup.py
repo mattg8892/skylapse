@@ -63,6 +63,7 @@ def seed_from_config(cfg: config.Config) -> dict:
                      "longitude": cfg.location.longitude,
                      "timezone": cfg.location.timezone,
                      "source": ""},
+        "network": {"mode": cfg.network.mode},
         "camera": {"camera_id": cfg.active_camera},
         "capture": {"schedule": "always", "raw_mode": "off"},
         "security": {"password": "", "public_live_view": False},
@@ -113,6 +114,14 @@ def apply_draft(draft: dict, cfg: config.Config) -> config.Config:
         updated.location.longitude = float(location.get("longitude") or 0.0)
     if location.get("timezone"):
         updated.location.timezone = location["timezone"]
+
+    # Wi-Fi or access-point-only. Plenty of cameras never join a network at
+    # all — a shed with no coverage, a dark-sky site, a rig someone simply
+    # walks up to — and making that an explicit choice here is the difference
+    # between "unsupported" and "supported".
+    network_mode = (draft.get("network") or {}).get("mode")
+    if network_mode in ("auto", "standalone"):
+        updated.network.mode = network_mode
 
     camera_id = (draft.get("camera") or {}).get("camera_id") or ""
     if camera_id:

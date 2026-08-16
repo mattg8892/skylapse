@@ -192,12 +192,13 @@ function Welcome() {
 
 /* -- 3. network ------------------------------------------------------------ */
 
-function Network({ setError }) {
+function Network({ draft, patch, setError }) {
   const [net, setNet] = useState(null)
   const [scan, setScan] = useState(null)
   const [chosen, setChosen] = useState('')
   const [password, setPassword] = useState('')
   const [expanded, setExpanded] = useState(false)
+  const mode = draft.network?.mode === 'standalone' ? 'standalone' : 'auto'
 
   useEffect(() => {
     fetch('/api/network').then((r) => r.json()).then(setNet).catch(() => setNet({}))
@@ -245,7 +246,34 @@ function Network({ setError }) {
         )}
       </div>
 
-      {!expanded ? (
+      <div className="mt-4 space-y-2">
+        <Choice checked={mode === 'auto'} label="Use this Wi-Fi network"
+          detail="The camera joins your network, and falls back to its own if
+                  yours ever disappears."
+          onSelect={() => patch({ network: { mode: 'auto' } })} />
+        <Choice checked={mode === 'standalone'} label="Don’t use Wi-Fi at all"
+          detail="The camera always serves its own network and never looks for
+                  yours. For a shed with no coverage, or a dark-sky site."
+          onSelect={() => patch({ network: { mode: 'standalone' } })} />
+      </div>
+
+      {mode === 'standalone' ? (
+        <div className="mt-4 space-y-2">
+          <p className="rounded-lg bg-amber-950 p-3 text-sm text-amber-300">
+            {online
+              ? `When you finish setup, the camera will leave ${net.ssid || 'your network'}
+                 and serve its own. To reach it again, join
+                 ${net.hotspot_ssid || 'Skylapse-Setup'} from your Wi-Fi settings
+                 and open http://10.42.0.1`
+              : `The camera will serve its own network,
+                 ${net?.hotspot_ssid || 'Skylapse-Setup'}, and never look for yours.`}
+          </p>
+          <p className="text-sm text-zinc-500">
+            Capture, storage, RAW and the timelapse all work exactly the same
+            with no network. You can switch to Wi-Fi later in Settings.
+          </p>
+        </div>
+      ) : !expanded ? (
         <button onClick={openScan}
           className="mt-4 text-sm text-sky-400 underline">
           Use a different network
@@ -272,15 +300,31 @@ function Network({ setError }) {
           )}
         </div>
       )}
-
-      <p className="mt-6 text-sm text-zinc-500">
-        You can also run it with no network at all. Capture, storage and the
-        timelapse all work; you just reach the camera by joining its own Wi-Fi
-        instead of yours.
-      </p>
     </>
   )
 }
+
+/** A big tappable radio row. Thumb-sized, because this is a phone. */
+function Choice({ checked, label, detail, onSelect }) {
+  return (
+    <button onClick={onSelect} aria-pressed={checked}
+      className={`w-full rounded-xl border p-4 text-left transition ${
+        checked ? 'border-sky-500 bg-sky-600/10' : 'border-zinc-800 bg-zinc-900'}`}>
+      <span className="flex items-start gap-3">
+        <span className={`mt-0.5 grid h-5 w-5 shrink-0 place-items-center
+                          rounded-full border-2 ${
+          checked ? 'border-sky-400' : 'border-zinc-600'}`}>
+          {checked && <span className="h-2.5 w-2.5 rounded-full bg-sky-400" />}
+        </span>
+        <span>
+          <span className="block text-sm">{label}</span>
+          <span className="mt-0.5 block text-sm text-zinc-500">{detail}</span>
+        </span>
+      </span>
+    </button>
+  )
+}
+
 
 /* -- 4. camera ------------------------------------------------------------- */
 
@@ -665,6 +709,8 @@ function Done({ draft }) {
     ['Location', formatCoords(summary.latitude, summary.longitude) || '—'],
     ['Schedule', summary.schedule === 'night_only' ? 'Night only' : '24/7'],
     ['RAW', summary.raw_mode === 'every_frame' ? 'Every frame' : 'Keepers only'],
+    ['Network', summary.network_mode === 'standalone'
+      ? `Its own (${summary.hotspot_ssid || 'Skylapse-Setup'})` : 'Wi-Fi'],
     ['Password', summary.protected ? 'Set' : 'Not set'],
   ]
 
@@ -675,6 +721,13 @@ function Done({ draft }) {
                       sunset: status?.daemon?.dusk,
                       now: status?.server_time })}
       </Heading>
+      {summary.network_mode === 'standalone' && (
+        <p className="mt-4 rounded-lg bg-amber-950 p-3 text-sm text-amber-300">
+          This camera serves its own network. If you lose this page, join{' '}
+          {summary.hotspot_ssid || 'Skylapse-Setup'} from your Wi-Fi settings
+          and open http://10.42.0.1
+        </p>
+      )}
       <Card className="mt-6">
         <dl className="divide-y divide-zinc-800">
           {rows.map(([label, value]) => (
