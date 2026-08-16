@@ -74,11 +74,34 @@ def plane_means(frame: Frame) -> tuple[float, float, float]:
     return r, g, b
 
 
-def mean_brightness(frame: Frame) -> float:
-    """Mean of the raw buffer scaled to 0-255, for the auto-exposure loop."""
-    arr = _as_array(frame)
-    scale = 255.0 / (65535.0 if frame.bit_depth > 8 else 255.0)
-    return float(arr.mean()) * scale
+def metered_brightness(means: tuple[float, float, float], bit_depth: int,
+                       wb: tuple[float, float] = NEUTRAL_WB) -> float:
+    """Auto-exposure's metering value: WB-corrected luminance, scaled to 0-255.
+
+    This used to be the mean of the raw mosaic, which is not a brightness at
+    all. Two of every four photosites in an RGGB quad are green, so a flat mean
+    is half green by construction — before the sensor's response is even
+    considered, and green is the most responsive channel on both cameras here.
+    Measured on the IMX477 the mosaic mean sits far above the red and blue
+    planes, so the loop was servoing on a number that tracks the green channel
+    rather than anything a viewer would call brightness.
+
+    Metering the corrected luminance instead targets what the finished image
+    actually looks like. Note that even at neutral 1.0/1.0 this is not the old
+    number: it is the correctly *weighted* one, so a camera whose white balance
+    has never been set still meters more sensibly than it did.
+    """
+    r, g, b = means
+    wb_r, wb_b = wb
+    scale = 255.0 / (65535.0 if bit_depth > 8 else 255.0)
+    luma = LUMA_R * r * wb_r + LUMA_G * g + LUMA_B * b * wb_b
+    return luma * scale
+
+
+def mean_brightness(frame: Frame, wb: tuple[float, float] = NEUTRAL_WB) -> float:
+    """Metering value for one frame. The capture loop uses the two-step form
+    above, because it needs the plane means for the sidecar anyway."""
+    return metered_brightness(plane_means(frame), frame.bit_depth, wb)
 
 
 def gray_world(means: tuple[float, float, float]) -> tuple[float, float]:

@@ -145,6 +145,78 @@ def test_applying_the_seed_equalises_the_planes():
     assert b * b_mult == pytest.approx(g, rel=1e-6)
 
 
+# -- AE metering -------------------------------------------------------------
+
+def test_correcting_the_cast_raises_the_metered_value():
+    """The direction here is the opposite of the obvious guess, and it is the
+    whole reason the fix works.
+
+    You might expect a green-cast frame to meter *lower* once green stops being
+    double-counted. It does not: green is 2 of 4 photosites, so it is 50% of
+    the mosaic mean, while Rec. 601 luma gives it 59%. Switching to luma at
+    neutral multipliers therefore moves the number by about +2% and nothing
+    useful happens.
+
+    What moves it is the white balance. Correcting the cast lifts red and blue
+    *up to* green, so the corrected frame is genuinely brighter than the
+    uncorrected mosaic mean suggested — measured on the ZWO bench means from
+    DESIGN.md, +17%. Auto-exposure answers that by pulling exposure down, which
+    is the visible fix for frames that were both green and too bright.
+    """
+    arr = mosaic(12258, 18030, 13300)          # the ZWO bench scene
+    f = frame(arr)
+    mosaic_mean = float(arr.mean()) * 255.0 / 65535.0
+    corrected = process.mean_brightness(f, process.gray_world(process.plane_means(f)))
+    assert corrected > mosaic_mean * 1.10, (
+        f"correcting the cast should raise metering well clear of the mosaic "
+        f"mean: {corrected:.1f} vs {mosaic_mean:.1f}")
+
+
+def test_metering_is_a_luminance_not_a_photosite_count():
+    """Each channel moves the metered value by its luma weight, not by how many
+    photosites happen to carry it."""
+    base = process.metered_brightness((10000.0, 10000.0, 10000.0), 16)
+    scale = 255.0 / 65535.0
+    for channel, weight in ((0, process.LUMA_R), (1, process.LUMA_G),
+                            (2, process.LUMA_B)):
+        means = [10000.0, 10000.0, 10000.0]
+        means[channel] += 1000.0
+        moved = process.metered_brightness(tuple(means), 16) - base
+        assert moved == pytest.approx(1000.0 * weight * scale, rel=1e-6)
+
+
+def test_a_neutral_frame_meters_the_same_as_its_mosaic_mean():
+    """The luma weights sum to 1, so on a frame with no cast the correction
+    changes nothing. A metering fix that moved neutral frames too would be
+    silently re-exposing every mono and every already-balanced camera."""
+    arr = mosaic(12000, 12000, 12000)
+    mosaic_mean = float(arr.mean()) * 255.0 / 65535.0
+    assert process.mean_brightness(frame(arr)) == pytest.approx(mosaic_mean, rel=1e-6)
+
+
+def test_metering_follows_the_multipliers():
+    """Once a camera's white balance is set, the metered value is the corrected
+    image's brightness — otherwise applying WB would quietly re-expose the rig."""
+    arr = mosaic(10000, 18000, 13000)
+    f = frame(arr)
+    corrected = process.mean_brightness(f, process.gray_world(process.plane_means(f)))
+    assert corrected > process.mean_brightness(f), \
+        "boosting red and blue must raise the metered brightness"
+
+
+def test_metering_is_unchanged_for_a_camera_still_at_neutral():
+    """Per-camera isolation, at the metering level: a rig that has not set its
+    own multipliers must meter exactly as it did."""
+    arr = mosaic(10000, 18000, 13000)
+    f = frame(arr)
+    assert process.mean_brightness(f, (1.0, 1.0)) == process.mean_brightness(f)
+
+
+def test_eight_bit_frames_scale_correctly():
+    arr = (mosaic(100, 100, 100) // 1).astype(np.uint8)
+    assert process.mean_brightness(frame(arr, bit_depth=8)) == pytest.approx(100, rel=1e-6)
+
+
 # -- per-camera isolation ----------------------------------------------------
 
 def test_each_camera_keeps_its_own_multipliers():
