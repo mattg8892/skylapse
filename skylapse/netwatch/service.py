@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
+import shutil
 import subprocess
 import time
 
@@ -37,10 +38,21 @@ def _nmcli(*args: str, timeout: int = 30) -> str:
 
 
 def _iw(*args: str, timeout: int = 10) -> str:
+    """Run iw, which lives in /usr/sbin and is not on every PATH.
+
+    A missing binary here is silent and total: `_in_ap_mode` would answer False
+    forever, so the service would believe it is never an access point and every
+    hotspot decision would be made backwards. Worth one log line.
+    """
+    binary = shutil.which("iw") or "/usr/sbin/iw"
     try:
-        return subprocess.run(["iw", *args], capture_output=True,
+        return subprocess.run([binary, *args], capture_output=True,
                               text=True, timeout=timeout).stdout
-    except Exception:
+    except FileNotFoundError:
+        log.error("iw not found — cannot determine the radio's mode")
+        return ""
+    except Exception as exc:
+        log.warning("iw %s failed: %s", " ".join(args), exc)
         return ""
 
 
@@ -273,12 +285,33 @@ class NetwatchService:
             return 0
         return _iw("dev", iface, "station", "dump").count("Station ")
 
+    def _known_networks(self) -> dict[str, str]:
+        """Saved Wi-Fi networks, as {ssid: connection name}.
+
+        The SSID must be read out of each profile, because a connection's name
+        is not its SSID. netplan generates names like
+        "netplan-wlan0-yourmomshouse" for the SSID "yourmomshouse", so the
+        previous version — which intersected connection *names* with scan
+        results — found nothing in common on any netplan-managed Pi. The
+        background rescan is the only automatic route from hotspot back to
+        Wi-Fi, so that silently stranded a fallen-back camera in hotspot mode
+        forever: exactly the failure this whole subsystem exists to prevent.
+        """
+        networks: dict[str, str] = {}
+        for line in _nmcli("-t", "-f", "NAME,TYPE", "con", "show").splitlines():
+            name, _, kind = line.rpartition(":")
+            if kind != "802-11-wireless" or not name:
+                continue
+            ssid = _nmcli("-g", "802-11-wireless.ssid", "con", "show", name)
+            if ssid and ssid != self.hotspot_ssid:
+                networks[ssid] = name
+        return networks
+
     def _visible_known_networks(self) -> list[str]:
-        known = set(_nmcli("-t", "-f", "NAME", "con", "show").splitlines())
-        known.discard(self.hotspot_ssid)
-        visible = set(_nmcli("-t", "-f", "SSID", "dev", "wifi", "list").splitlines())
-        return [s for s in known & visible
-                if not self.sm.ctx.network_blacklisted(s)]
+        visible = {line for line in
+                   _nmcli("-t", "-f", "SSID", "dev", "wifi", "list").splitlines() if line}
+        return [ssid for ssid in self._known_networks()
+                if ssid in visible and not self.sm.ctx.network_blacklisted(ssid)]
 
     def _write_status(self) -> None:
         config.RUN_DIR.mkdir(parents=True, exist_ok=True)
