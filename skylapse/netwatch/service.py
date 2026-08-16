@@ -37,6 +37,40 @@ def _nmcli(*args: str, timeout: int = 30) -> str:
     return result.stdout.strip()
 
 
+def _nmcli_result(*args: str, timeout: int = 30) -> subprocess.CompletedProcess:
+    """Like _nmcli but hands back the whole result, for callers that must
+    classify *why* something failed rather than just that it did."""
+    result = subprocess.run(["nmcli", *args], capture_output=True,
+                            text=True, timeout=timeout)
+    if result.returncode != 0:
+        log.info("nmcli %s -> %d: %s", " ".join(args), result.returncode,
+                 (result.stderr or result.stdout or "").strip().splitlines()[:1])
+    return result
+
+
+# Signatures measured against NetworkManager on Bookworm/trixie. A wrong
+# passphrase surfaces as a secrets request, because the supplicant disconnects
+# and NM concludes the stored key must be wrong — it never says "bad password".
+_AUTH_MARKERS = ("secrets were required", "no-secrets", "passwords or encryption keys",
+                 "invalid password", "authentication")
+_NOT_FOUND_MARKERS = ("no network with ssid", "not found")
+
+
+def classify_join_failure(output: str) -> str:
+    """Why a join failed: 'auth', 'not_found', or 'other'.
+
+    Guard 3 blacklists a network after repeated *credential* failures. Treating
+    an out-of-range network as an auth failure would blacklist the network the
+    camera belongs on, so the distinction is load-bearing.
+    """
+    text = (output or "").lower()
+    if any(marker in text for marker in _AUTH_MARKERS):
+        return "auth"
+    if any(marker in text for marker in _NOT_FOUND_MARKERS):
+        return "not_found"
+    return "other"
+
+
 def _iw(*args: str, timeout: int = 10) -> str:
     """Run iw, which lives in /usr/sbin and is not on every PATH.
 
@@ -157,14 +191,39 @@ class NetwatchService:
         self._execute(self.sm.on_wifi_attempt_failed())
 
     def _join(self, ssid: str, password: str) -> None:
+        """Join a network with a user-supplied password.
+
+        Handles the already-saved case explicitly: `nmcli dev wifi connect` on
+        an SSID that already has a profile fails with
+        "802-11-wireless-security.key-mgmt: property is missing" rather than
+        using the new password, so correcting a wrong password from the UI
+        could never have worked.
+        """
+        existing = self._known_networks().get(ssid)
         try:
-            _nmcli("dev", "wifi", "connect", ssid, "password", password, timeout=90)
-            if self._wifi_connected():
-                self._execute(self.sm.on_wifi_connected())
-                return
-            self._execute(self.sm.on_wifi_attempt_failed(ssid=ssid, auth_failure=True))
+            if existing:
+                _nmcli("con", "modify", existing,
+                       "wifi-sec.key-mgmt", "wpa-psk", "wifi-sec.psk", password)
+                result = _nmcli_result("con", "up", existing, timeout=WIFI_GRACE)
+            else:
+                result = _nmcli_result("dev", "wifi", "connect", ssid,
+                                       "password", password, timeout=WIFI_GRACE)
         except subprocess.TimeoutExpired:
+            log.warning("Join of %r timed out", ssid)
             self._execute(self.sm.on_wifi_attempt_failed(ssid=ssid))
+            return
+
+        if self._wifi_connected():
+            self._execute(self.sm.on_wifi_connected())
+            return
+
+        reason = classify_join_failure(result.stdout + result.stderr)
+        log.warning("Join of %r failed (%s)", ssid, reason)
+        # Only a genuine credential rejection counts toward guard 3's strike
+        # limit. Blacklisting a network because it was briefly out of range
+        # would lock the camera out of the network it belongs on.
+        self._execute(self.sm.on_wifi_attempt_failed(
+            ssid=ssid, auth_failure=(reason == "auth")))
 
     def _ensure_hotspot_profile(self, iface: str) -> str:
         """Build the hotspot profile to match config. Returns the password.
