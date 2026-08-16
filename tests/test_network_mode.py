@@ -193,3 +193,24 @@ def test_api_sticky_mode_reports_no_countdown(client, cfg_path, monkeypatch):
     body = client.get("/api/network").json()
     assert body["mode"] == "hotspot"
     assert body["remaining_s"] is None
+
+
+def test_our_own_broadcast_is_not_reported_as_a_wifi_network(monkeypatch, cfg_path):
+    """Measured on the rig: `nmcli dev wifi` marks the hotspot we are serving
+    as active, so the card said "Connected to Skylapse-Setup" while the camera
+    was the access point."""
+    import subprocess
+
+    from skylapse.api import main as api
+
+    monkeypatch.setattr(
+        subprocess, "run",
+        lambda *a, **kw: subprocess.CompletedProcess(
+            a[0], 0, "yes:Skylapse-Setup\nno:yourmomshouse\n", ""))
+    assert api._wifi_ssid() == ""
+
+    monkeypatch.setattr(
+        subprocess, "run",
+        lambda *a, **kw: subprocess.CompletedProcess(
+            a[0], 0, "yes:yourmomshouse\nno:Skylapse-Setup\n", ""))
+    assert api._wifi_ssid() == "yourmomshouse"

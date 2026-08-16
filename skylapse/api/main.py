@@ -377,15 +377,23 @@ def network_state() -> dict:
 
 
 def _wifi_ssid() -> str:
-    """The network we are joined to, or "" when we are the access point."""
+    """The network we are joined to, or "" when we are the access point.
+
+    nmcli lists our own broadcast among the active networks, so serving the
+    hotspot reads back as being joined to it — which had the Settings card
+    reporting the camera was on a Wi-Fi network called Skylapse-Setup while it
+    was in fact serving that name itself.
+    """
     try:
         out = subprocess.run(["nmcli", "-t", "-f", "ACTIVE,SSID", "dev", "wifi"],
                              capture_output=True, text=True, timeout=10).stdout
     except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
         return ""
+    hotspot = config.load().network.hotspot_ssid
     for line in out.splitlines():
         if line.startswith("yes:"):
-            return line.split(":", 1)[1]
+            ssid = line.split(":", 1)[1]
+            return "" if ssid == hotspot else ssid
     return ""
 
 
