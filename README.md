@@ -197,8 +197,11 @@ enumerates but fails to capture is usually power — use the official supply.
    the overlay isn't loading; `failed to read chip id` means the sensor isn't answering,
    which is then genuinely a cable or module fault.
 
-**Frames look green.** Known limitation — the JPEG path has no white-balance stage yet,
-so frames carry the sensor's native green bias. Raw DNG data is unaffected.
+**Frames look green.** Both sensor families read green high — two of every four
+photosites are green, and green is the most sensitive. Settings has red and blue sliders
+per camera, with an "Auto from current frame" button to start from and a live preview. Set
+it once per camera; RAW/DNG pixels are never changed, and the multipliers are recorded in
+the file for your raw editor to apply.
 
 **Capture stopped and you weren't told.** Turn on phone alerts (above). The watchdog
 notices when frames stop arriving, not merely when the process dies.
@@ -253,7 +256,6 @@ Not there yet:
   entered by hand. The access-point fallback works, but the first-boot flow that would
   let you hand the camera your Wi-Fi password through it is designed and not built —
   "Connect to a new network" on that screen is inert. Set Wi-Fi up in Pi Imager instead.
-- **No white balance** in the JPEG path (see troubleshooting).
 - **No access control.** Anyone on your network can reach the interface. Specified in
   [DESIGN.md](DESIGN.md), not yet built — don't port-forward it.
 

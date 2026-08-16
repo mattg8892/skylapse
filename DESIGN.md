@@ -120,8 +120,8 @@ has two green photosites per quad and green QE is highest. So JPEGs went from a 
 at all). The factory defaults were masking a missing pipeline stage. Fixing it belongs in
 the pipeline, not the driver: JPEG encode needs per-camera WB multipliers — measured once
 per sensor, or a grey-world estimate for the sky — while DNG keeps the neutral raw data and
-carries the multipliers as `AsShotNeutral` metadata for Siril/PixInsight to apply. Not yet
-implemented.
+carries the multipliers as `AsShotNeutral` metadata for Siril/PixInsight to apply.
+**Implemented 2026-08-16 — see [White balance](#white-balance) below.**
 
 Verified working as designed, no change needed: 12-bit sensor data arrives scaled to the
 full 16-bit range (low bits populated, max 65534), so `mean_brightness`'s `255/65535`
@@ -231,6 +231,61 @@ and appears in the UI as "New camera found". Image store is namespaced per camer
 (`images/<camera_id>/YYYY-MM-DD/`) so multi-camera support (v2: one daemon instance per
 camera via a systemd template unit, `active_camera` selector in v1 when several are
 attached) never requires a store migration.
+
+## White balance
+
+Per-camera `wb_r` / `wb_b` multipliers in the registry, green fixed at 1.0 as the
+reference. Per camera because they describe a sensor and the lens in front of it. Default
+1.0/1.0 is bit-for-bit the pre-white-balance pipeline, verified by comparing encoded JPEGs
+against the previous commit — a rig that has been running for weeks must not have its
+colour shift under it by a release.
+
+Applied after debayer and before the 8-bit conversion, so the sensor's headroom absorbs
+the multiplication instead of quantising it into 8-bit steps, and clipped at full scale
+rather than wrapping. Thumbnails come off the same array; the focus live view gets the
+same treatment, because judging focus through a green filter is nobody's idea of a live
+view. DNG pixel data is untouched — that is the point of shipping DNG — and the
+multipliers ride along as `AsShotNeutral`, which DNG wants as the neutral *in camera
+space*: the reciprocal, green normalised to 1.
+
+**Auto is a seed, not an answer.** `/api/wb/suggest` returns grey-world multipliers from
+the current frame and applies nothing. Grey-world assumes the scene averages to grey,
+which a sky at dusk and a room lit by one warm lamp both fail to do, so no automatic
+estimate can be right for every camera and lens. The manual sliders are the feature; the
+button is where you start. It reports the unclamped figure alongside the clamped one, so a
+suggestion that ran past the end of the range reads as a lens or lighting problem rather
+than a considered answer.
+
+`/api/wb/preview` renders a *pending* pair from a raw mosaic the capture loop leaves in
+`/run`, decimated by whole 2x2 quads so it is still a mosaic. The saved JPEG cannot serve:
+it has the applied multipliers baked in and whatever the last setting clipped is gone.
+`/run` is a tmpfs, so this costs the card nothing.
+
+### Metering: what the auto-exposure loop actually measures
+
+`mean_brightness` averaged the raw mosaic, which is not a brightness. Two of every four
+photosites in an RGGB quad are green, so a flat mean is half green by construction, before
+the sensor's response is even considered. Metering is now WB-corrected Rec. 601 luminance
+computed from per-plane means.
+
+The direction of the fix is the opposite of the obvious guess and worth recording. Green
+is 50% of the mosaic mean but **59%** of Rec. 601 luma, so switching to luma at neutral
+multipliers moves the number about +2% and achieves nothing on its own. What moves it is
+the white balance: correcting the cast lifts red and blue *up to* green, so the corrected
+frame is genuinely brighter than the mosaic mean implied, and auto-exposure answers by
+pulling exposure down.
+
+Measured on the IMX477, a lit indoor scene, at the moment the multipliers were applied:
+
+| | exposure | metered |
+|---|---|---|
+| last frame before | 52920 us | 127.8 |
+| first frame after (1.78 / 1.111) | 50985 us | **145.9** |
+| converged, 6 frames later | **34736 us** | 123.5 |
+
+Exposure fell 34% and the frame stopped being both green and too bright. A neutral frame
+meters exactly as it did — the luma weights sum to 1 — so mono cameras and any rig still
+at 1.0/1.0 are not re-exposed by this.
 
 ## Capture scheduler
 

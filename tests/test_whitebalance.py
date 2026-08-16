@@ -252,3 +252,30 @@ def test_multipliers_survive_a_save_and_load(tmp_path, monkeypatch):
 
     entry = config.load().cameras["picam-imx477"]
     assert (entry.wb_r, entry.wb_b) == (1.85, 1.32)
+
+
+def test_a_camera_at_neutral_gets_the_pipeline_it_had_before():
+    """No colour stage at all at 1.0/1.0 — not "close enough".
+
+    Verified once against the pre-white-balance commit directly: same frame,
+    byte-identical debayer and byte-identical encoded JPEG. This is the durable
+    form of that check. It matters because the ZWO stays at 1.0/1.0 until
+    somebody moves its own sliders, and a rig that has been running for weeks
+    must not have its output shift under it by a release.
+    """
+    import cv2
+
+    rng = np.random.default_rng(7)
+    arr = rng.integers(0, 65535, (256, 256), dtype=np.uint16)
+    f = frame(arr)
+
+    expected = cv2.demosaicing(arr, process._CV_BAYER[BayerPattern.RGGB])
+    expected = (expected.astype(np.float32) / 257.0).astype(np.uint8)
+    assert np.array_equal(process.to_bgr(f), expected)
+
+
+def test_a_neutral_camera_is_not_charged_for_the_colour_stage():
+    """apply_wb returns the input object untouched at 1.0/1.0, so the frames of
+    every unconfigured rig do not pay for a full-frame float round trip."""
+    arr = np.zeros((64, 64, 3), dtype=np.uint16)
+    assert process.apply_wb(arr, 1.0, 1.0) is arr
