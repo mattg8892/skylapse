@@ -228,6 +228,19 @@ export default function SettingsScreen({ showToast, storage }) {
 
 /* -- network --------------------------------------------------------------- */
 
+// Same list the wizard offers; kept here so an existing install can correct a
+// guessed default without walking setup again.
+const WIFI_COUNTRIES = [
+  ['US', 'United States'], ['GB', 'United Kingdom'], ['DE', 'Germany'],
+  ['FR', 'France'], ['NL', 'Netherlands'], ['CA', 'Canada'],
+  ['AU', 'Australia'], ['NZ', 'New Zealand'], ['IE', 'Ireland'],
+  ['IT', 'Italy'], ['ES', 'Spain'], ['SE', 'Sweden'], ['NO', 'Norway'],
+  ['FI', 'Finland'], ['DK', 'Denmark'], ['PL', 'Poland'], ['CH', 'Switzerland'],
+  ['AT', 'Austria'], ['BE', 'Belgium'], ['PT', 'Portugal'], ['CZ', 'Czechia'],
+  ['JP', 'Japan'], ['IN', 'India'], ['BR', 'Brazil'], ['ZA', 'South Africa'],
+  ['MX', 'Mexico'], ['SG', 'Singapore'],
+].map(([value, label]) => ({ value, label: `${label} (${value})` }))
+
 const AP_DURATIONS = [
   { value: 'hotspot', label: 'Until I switch it back' },
   { value: '60', label: '1 hour' },
@@ -324,6 +337,25 @@ function NetworkCard({ showToast }) {
           </Button>
         </div>
       )}
+
+      <div className="mt-5 border-t border-zinc-800 pt-4">
+        <Select label="Wi-Fi country" value={net.country || ''}
+          options={[{ value: '', label: 'Not set' }, ...WIFI_COUNTRIES]}
+          onChange={async (country) => {
+            if (!country) return
+            await fetch('/api/network/country', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ country }),
+            }).catch(() => showToast?.('Could not save the country'))
+            refresh()
+            showToast?.('Saved — applies next time the access point starts')
+          }} />
+        <p className="mt-2 text-xs text-zinc-500">
+          Radio regulations differ by country. Until this is set the camera may
+          not transmit at all, including the network it serves for setup.
+        </p>
+      </div>
 
       <ConfirmDialog
         open={!!pending}

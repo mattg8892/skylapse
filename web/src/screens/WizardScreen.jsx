@@ -21,6 +21,21 @@ const SCHEDULE_OPTIONS = [
   { value: 'night_only', label: 'Night only — idle while the sun is up' },
 ]
 
+// Enough of the world to cover the overwhelming majority of users, ordered by
+// where Pis actually get sold. The Wi-Fi radio may not legally transmit until
+// one of these is set, so it is not an optional nicety — an unset country is a
+// camera that cannot serve the access point its own setup runs on.
+const COUNTRIES = [
+  ['US', 'United States'], ['GB', 'United Kingdom'], ['DE', 'Germany'],
+  ['FR', 'France'], ['NL', 'Netherlands'], ['CA', 'Canada'],
+  ['AU', 'Australia'], ['NZ', 'New Zealand'], ['IE', 'Ireland'],
+  ['IT', 'Italy'], ['ES', 'Spain'], ['SE', 'Sweden'], ['NO', 'Norway'],
+  ['FI', 'Finland'], ['DK', 'Denmark'], ['PL', 'Poland'], ['CH', 'Switzerland'],
+  ['AT', 'Austria'], ['BE', 'Belgium'], ['PT', 'Portugal'], ['CZ', 'Czechia'],
+  ['JP', 'Japan'], ['IN', 'India'], ['BR', 'Brazil'], ['ZA', 'South Africa'],
+  ['MX', 'Mexico'], ['SG', 'Singapore'],
+].map(([value, label]) => ({ value, label: `${label} (${value})` }))
+
 const RAW_OPTIONS = [
   { value: 'off', label: 'Keepers only (recommended)' },
   { value: 'every_frame', label: 'Every frame' },
@@ -192,6 +207,22 @@ function Welcome() {
 
 /* -- 3. network ------------------------------------------------------------ */
 
+/**
+ * A first guess at the Wi-Fi country, from the phone's own locale.
+ *
+ * The phone is in the same room as the camera, so its region is a far better
+ * default than any constant — and it is only a default: the control is right
+ * there, pre-filled rather than pre-decided.
+ */
+function guessCountry() {
+  try {
+    const region = new Intl.Locale(navigator.language).region
+    if (region && COUNTRIES.some((c) => c.value === region)) return region
+  } catch { /* older browsers: fall through */ }
+  return 'US'
+}
+
+
 function Network({ draft, patch, setError }) {
   const [net, setNet] = useState(null)
   const [scan, setScan] = useState(null)
@@ -244,6 +275,17 @@ function Network({ draft, patch, setError }) {
         ) : (
           <p className="text-zinc-400">Not connected to Wi-Fi.</p>
         )}
+      </div>
+
+      <div className="mt-4">
+        <Select label="Wi-Fi country"
+          value={draft.network?.country || guessCountry()}
+          options={COUNTRIES}
+          onChange={(country) => patch({ network: { country } })} />
+        <p className="mt-1 text-xs text-zinc-500">
+          Radio regulations differ by country, and the camera may not transmit
+          at all until this is set — including the network it serves for setup.
+        </p>
       </div>
 
       <div className="mt-4 space-y-2">

@@ -60,6 +60,12 @@ class NetworkConfig(BaseModel):
     mode: str = "auto"                   # auto | standalone | wifi_only
     hotspot_ssid: str = "Skylapse-Setup"
     hotspot_password: str = ""           # open by default; wizard can set one
+    # Wi-Fi regulatory country, ISO 3166-1 alpha-2. Not cosmetic: until one is
+    # set the radio sits in the world domain, where every channel is flagged
+    # no-IR — no initiating radiation — and starting an access point is exactly
+    # that. An unset country is therefore a camera that cannot serve the
+    # hotspot its own setup depends on.
+    country: str = ""
     # Deadline for a timed access-point session, or 0 for "until turned off".
     # Persisted rather than held in memory so a power cut in the field cannot
     # quietly put the camera back on Wi-Fi while someone is still working on it.

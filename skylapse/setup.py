@@ -63,7 +63,7 @@ def seed_from_config(cfg: config.Config) -> dict:
                      "longitude": cfg.location.longitude,
                      "timezone": cfg.location.timezone,
                      "source": ""},
-        "network": {"mode": cfg.network.mode},
+        "network": {"mode": cfg.network.mode, "country": cfg.network.country},
         "camera": {"camera_id": cfg.active_camera},
         "capture": {"schedule": "always", "raw_mode": "off"},
         "security": {"password": "", "public_live_view": False},
@@ -119,9 +119,12 @@ def apply_draft(draft: dict, cfg: config.Config) -> config.Config:
     # all — a shed with no coverage, a dark-sky site, a rig someone simply
     # walks up to — and making that an explicit choice here is the difference
     # between "unsupported" and "supported".
-    network_mode = (draft.get("network") or {}).get("mode")
-    if network_mode in ("auto", "standalone"):
-        updated.network.mode = network_mode
+    network = draft.get("network") or {}
+    if network.get("mode") in ("auto", "standalone"):
+        updated.network.mode = network["mode"]
+    country = (network.get("country") or "").strip().upper()
+    if len(country) == 2 and country.isalpha():
+        updated.network.country = country
 
     camera_id = (draft.get("camera") or {}).get("camera_id") or ""
     if camera_id:

@@ -22,6 +22,15 @@ log = logging.getLogger("skylapse.netwatch")
 
 POLL_S = 5
 
+# Last-resort Wi-Fi regulatory domain. Only ever used when nothing else has set
+# one — Raspberry Pi Imager's Wi-Fi country wins, and so does an explicit
+# setting in config. Something has to be chosen, because in the world domain
+# ("00") no channel may initiate radiation and the access point simply cannot
+# start, which would leave a camera with no network and no way to reach it.
+# A single 2.4GHz channel is permitted essentially everywhere; the wizard asks
+# for the real country so this is corrected within the first minutes.
+DEFAULT_COUNTRY = "US"
+
 
 def _nmcli(*args: str, timeout: int = 30) -> str:
     """Run nmcli, logging failures.
@@ -420,6 +429,50 @@ class NetwatchService:
                    "wifi-sec.key-mgmt", "wpa-psk", "wifi-sec.psk", password)
         return password
 
+    def _radio_ready(self) -> bool:
+        """Unblock the radio and make sure it has a regulatory domain.
+
+        Two separate things stop a fresh Raspberry Pi from serving an access
+        point, and both are silent. rfkill soft-blocks the radio until
+        something unblocks it, and until a country is set the regulatory domain
+        is `00`, where every channel carries no-IR — no initiating radiation.
+        Starting an AP *is* initiating radiation, so `nmcli con up` simply
+        fails, with nothing anywhere saying why.
+
+        That matters more here than anywhere else: the hotspot is how a camera
+        with no network is reached at all, so a camera that cannot raise it has
+        no way in.
+        """
+        subprocess.run(["rfkill", "unblock", "wifi"],
+                       capture_output=True, timeout=10, check=False)
+
+        current = ""
+        for line in _iw("reg", "get").splitlines():
+            if line.startswith("country"):
+                current = line.split()[1].rstrip(":")
+                break
+        if current not in ("", "00"):
+            return True          # already set, by Raspberry Pi Imager or by us
+
+        # Precedence matters. Whatever the system already has wins — Imager
+        # sets it from the Wi-Fi country the user chose, and overriding a real
+        # answer with our guess would be worse than not guessing at all. Only
+        # when nothing has set one do we fall back.
+        country = (config.load().network.country or "").strip().upper() \
+            or DEFAULT_COUNTRY
+        log.warning(
+            "No Wi-Fi regulatory country was set, so the radio cannot legally "
+            "transmit and the access point could not start. Falling back to "
+            "%s so the camera is reachable — set the right one in Settings.",
+            country)
+        subprocess.run(["iw", "reg", "set", country],
+                       capture_output=True, timeout=10, check=False)
+        for line in _iw("reg", "get").splitlines():
+            if line.startswith("country") and line.split()[1].rstrip(":") not in ("", "00"):
+                return True
+        log.error("Could not set a regulatory domain; the hotspot cannot start.")
+        return False
+
     def _start_hotspot(self) -> None:
         if self._in_ap_mode():
             return                        # already broadcasting; idempotent
@@ -427,6 +480,8 @@ class NetwatchService:
         if not iface:
             log.error("No Wi-Fi interface; cannot start the hotspot")
             return
+        if not self._radio_ready():
+            return                        # _radio_ready has said why
         password = self._ensure_hotspot_profile(iface)
         _nmcli("con", "up", self.hotspot_ssid)
         log.info("Hotspot %s up on %s (%s)", self.hotspot_ssid, iface,

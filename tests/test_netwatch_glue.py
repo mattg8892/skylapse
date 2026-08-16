@@ -130,6 +130,7 @@ class FakeRadio:
         self.joinable = True         # whether the house network will accept us
         self.fail_delay = 90         # a doomed join burns the whole grace window
         self.stations = 0            # phones attached, while we are an AP
+        self.country = "US"          # regulatory domain; "00" = none set
         self.activations = []        # every `con up` this test provoked
 
     def nmcli(self, *args, **kw):
@@ -167,6 +168,10 @@ class FakeRadio:
         return subprocess.CompletedProcess(args, 0, "", "")
 
     def iw(self, *args, **kw):
+        if "reg" in args:
+            # "00" is the world domain a Pi sits in until a country is set, and
+            # every channel in it is no-IR: no access point can start there.
+            return f"country {self.country}: DFS-FCC\n"
         if "info" in args:
             return f"Interface wlan0\n\ttype {self.mode}\n"
         # `station dump` only ever lists anything on an access point; on a
@@ -347,3 +352,78 @@ def test_the_client_count_is_cleared_when_the_hotspot_comes_down(monkeypatch):
 
     assert service.sm.ctx.hotspot_clients == 0, \
         "still reporting a phone attached to a network that no longer exists"
+
+
+# -- the radio has to be legally allowed to transmit -------------------------
+#
+# Two silent blockers stop a fresh Pi serving an access point: rfkill, and the
+# world regulatory domain, where every channel is no-IR — no initiating
+# radiation — which is exactly what an AP does. It matters more here than
+# anywhere else, because the hotspot is how a camera with no network is reached
+# at all. A camera that cannot raise it has no way in.
+
+def test_the_hotspot_refuses_to_start_with_no_country_set(monkeypatch):
+    clock, radio = FakeClock(), FakeRadio(FakeClock())
+    radio.clock, radio.country = clock, "00"        # world domain: no-IR
+    service = _service(monkeypatch, radio, clock)
+
+    service._start_hotspot()
+
+    assert radio.mode != "AP", "tried to transmit in the world domain"
+    assert "Skylapse-Setup" not in radio.activations
+
+
+def test_a_country_lets_the_hotspot_start(monkeypatch):
+    clock, radio = FakeClock(), FakeRadio(FakeClock())
+    radio.clock, radio.country = clock, "US"
+    service = _service(monkeypatch, radio, clock)
+
+    service._start_hotspot()
+    assert radio.mode == "AP"
+
+
+def test_the_configured_country_is_applied_to_the_radio(monkeypatch, tmp_path):
+    """Set once in config, pushed to the radio on every hotspot start — a
+    reboot resets the domain, and the camera must not need a human to reapply
+    it before it can be reached."""
+    from skylapse import config
+    from skylapse.netwatch import service as svc
+
+    monkeypatch.setattr(config, "CONFIG_PATH", tmp_path / "config.yaml")
+    cfg = config.Config()
+    cfg.network.country = "GB"
+    config.save(cfg)
+
+    clock, radio = FakeClock(), FakeRadio(FakeClock())
+    radio.clock, radio.country = clock, "00"
+    service = _service(monkeypatch, radio, clock)
+
+    applied = []
+    real_run = svc.subprocess.run
+    def spy(cmd, *a, **kw):
+        if cmd and cmd[0].endswith("iw") and "reg" in cmd and "set" in cmd:
+            applied.append(cmd[-1])
+            radio.country = cmd[-1]
+        return real_run(cmd, *a, **kw)
+    monkeypatch.setattr(svc.subprocess, "run", spy)
+
+    service._start_hotspot()
+    assert applied == ["GB"], f"country was not pushed to the radio: {applied}"
+
+
+def test_the_radio_is_unblocked_before_anything_else(monkeypatch):
+    """rfkill soft-blocks Wi-Fi on a fresh image. Nothing else works until it
+    is cleared, and nothing reports it."""
+    from skylapse.netwatch import service as svc
+
+    clock, radio = FakeClock(), FakeRadio(FakeClock())
+    radio.clock = clock
+    service = _service(monkeypatch, radio, clock)
+
+    seen = []
+    real_run = svc.subprocess.run
+    monkeypatch.setattr(svc.subprocess, "run",
+                        lambda cmd, *a, **kw: (seen.append(cmd[0]),
+                                               real_run(cmd, *a, **kw))[1])
+    service._start_hotspot()
+    assert "rfkill" in seen, "never unblocked the radio"

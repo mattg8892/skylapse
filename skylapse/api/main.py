@@ -783,6 +783,7 @@ def network_state() -> dict:
         "access_point": ap,
         "hotspot_ssid": cfg.network.hotspot_ssid,
         "hotspot_secured": bool(cfg.network.hotspot_password),
+        "country": cfg.network.country,
         "clients": status.get("hotspot_clients", 0),
         "hotspot_until": until,
         "remaining_s": max(0, int(until - time.time())) if until else None,
@@ -842,6 +843,30 @@ def network_set_mode(body: NetworkMode) -> dict:
             "note": ("Switching to the access point drops Wi-Fi within a few seconds"
                      if body.mode in AP_MODES else
                      "Rejoining Wi-Fi; the access point drops within a few seconds")}
+
+
+class WifiCountry(BaseModel):
+    country: str
+
+
+@app.post("/api/network/country")
+def network_set_country(body: WifiCountry) -> dict:
+    """The Wi-Fi regulatory country.
+
+    Its own endpoint rather than a config PUT because it is the one setting a
+    camera may be unreachable without: until it is set the radio sits in the
+    world domain, where no channel may transmit, and the access point that
+    setup itself runs on cannot start.
+    """
+    country = (body.country or "").strip().upper()
+    if len(country) != 2 or not country.isalpha():
+        raise HTTPException(400, "expected a two-letter country code")
+    cfg = config.load()
+    cfg.network.country = country
+    config.save(cfg)
+    # Applied on the next hotspot start; pushing it now would mean touching the
+    # radio out from under whatever it is currently doing.
+    return {"ok": True, "country": country}
 
 
 @app.post("/api/network/retry")
