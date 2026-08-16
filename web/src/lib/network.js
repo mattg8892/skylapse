@@ -45,3 +45,20 @@ export function networkBadge(net, now) {
   return { key: 'fallback', tone: 'red', label: 'Wi-Fi unavailable',
            detail: `Couldn't reach your network, so the camera is serving ${ssid}.` }
 }
+
+
+/**
+ * Whether to replace the whole app with the "No Wi-Fi connection" screen.
+ *
+ * Only the automatic fallback earns it. Reaching the camera through its own
+ * access point is not by itself a problem to report: 'standalone' means
+ * somebody chose this, and answering their choice with a failure screen is
+ * both wrong and alarming.
+ *
+ * It is also what made that screen's own "Use in standalone mode" button look
+ * dead: choosing standalone moves the state underneath, and the screen used to
+ * stay up regardless, so nothing appeared to happen.
+ */
+export function showsConnectionScreen(net) {
+  return net?.state === 'hotspot'
+}

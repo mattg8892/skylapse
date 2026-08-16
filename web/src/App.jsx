@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import ConnectionScreen from './screens/ConnectionScreen.jsx'
 import Dashboard from './screens/Dashboard.jsx'
+import { showsConnectionScreen } from './lib/network.js'
 
 const POLL_MS = 5000
 
@@ -40,10 +41,9 @@ export default function App() {
     )
   }
 
-  const netState = status.network?.state
-  const showConnection = netState === 'hotspot' || netState === 'standalone'
+  const showConnection = showsConnectionScreen(status.network)
 
-  return showConnection && !status.network?.session_standalone_dismissed ? (
+  return showConnection ? (
     <ConnectionScreen status={status} />
   ) : (
     <Dashboard status={status} />

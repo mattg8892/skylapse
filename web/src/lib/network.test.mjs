@@ -5,7 +5,7 @@
 // camera serving the same SSID, and if the badge conflates them, a fallback
 // looks like a setting and nobody investigates.
 import assert from 'node:assert'
-import { networkBadge, remainingText } from './network.js'
+import { networkBadge, remainingText, showsConnectionScreen } from './network.js'
 
 const NOW = 1_786_000_000
 

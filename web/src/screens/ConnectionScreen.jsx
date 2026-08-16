@@ -31,6 +31,8 @@ export default function ConnectionScreen({ status }) {
     }).catch(() => {})
     setBusy(null)
     setShowStandalone(true)
+    // netwatch moves to 'standalone' on its next poll, at which point App
+    // stops rendering this screen. Until then the button must not look idle.
   }
 
   const syncTime = async () => {
@@ -69,9 +71,10 @@ export default function ConnectionScreen({ status }) {
             className="rounded-lg border border-zinc-700 py-2.5 text-sm hover:bg-zinc-800">
             {busy === 'retry' ? 'Trying…' : 'Try again'}
           </button>
-          <button
-            className="rounded-lg border border-zinc-700 py-2.5 text-sm hover:bg-zinc-800">
-            Connect to a new network
+          <button disabled title="Not built yet — see the setup wizard in DESIGN.md"
+            className="rounded-lg border border-zinc-800 py-2.5 text-sm
+                       text-zinc-600 cursor-not-allowed">
+            Connect to a new network (not built yet)
           </button>
           <button onClick={pickStandalone} disabled={busy}
             className="rounded-lg border-2 border-sky-600 py-2.5 text-sm hover:bg-zinc-800">
