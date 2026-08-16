@@ -274,6 +274,96 @@ Modes (config): `auto` (default) | `standalone` ("always use standalone mode" ch
 | 5 | Session standalone must self-heal | "Use in standalone mode" sets a session flag only. Reboot returns to TRY_WIFI unless config mode is `standalone`. |
 | 6 | Watchdog of last resort | systemd `WatchdogSec=30` on netwatch; any hang → restart → deterministic BOOT state. Daemon unaffected. |
 
+### What first contact with a real radio changed (2026-08-16)
+
+The state machine above was right. Everything that drove NetworkManager on its behalf was
+wrong, in ways no unit test written against it could have caught — the tests asserted the
+decisions, and every fault was in the layer that observes and executes. Verified end to
+end on the rig with Ethernet plugged in as a safety line, which turned out to be the only
+reason two of these were survivable.
+
+**The radio's mode is not its connection state.** `nmcli dev` reports wlan0 "connected"
+whether it has joined a network or is serving one, so `_wifi_connected()` answered True
+while the camera *was* the access point. The state machine was told the house network was
+fine at the exact moment it was not. `iw dev wlan0 info` reports the operating mode
+directly; every probe now goes through it.
+
+**`iw station dump` lists the AP you are joined to.** On a client interface it therefore
+counts 1 permanently, which would have frozen guard 2 forever — a hotspot that could
+never be torn down, for a reason nobody would ever have guessed from the code.
+
+**A connection's name is not its SSID.** netplan generates `netplan-wlan0-yourmomshouse`
+for the SSID `yourmomshouse`, and the background rescan intersected connection *names*
+with scan results. On any netplan-managed Pi that set is always empty, so the one
+automatic route from hotspot back to Wi-Fi silently never fired: a camera that fell back
+stayed fallen back forever. Exactly the failure the subsystem exists to prevent.
+
+**`nmcli dev wifi hotspot` always applies WPA**, with a key it generates itself. With the
+documented default of no password, the camera broadcast a network whose passphrase
+existed only inside NetworkManager — visible to a phone, joinable by nobody. Found by
+trying to join it from a real phone. The profile is now built explicitly.
+
+**`nmcli con down` blocks autoconnect on the device.** It leaves it flagged "disconnected
+by user or client" (reason 39), and NM will not autoconnect a device in that state. The
+route home lowered the hotspot and then waited for an autoconnect that provably never
+came — measured, the whole 90s grace window passed with the NM journal logging nothing at
+all. Candidates are now activated by name, which as a side effect finally gave guard 3
+the per-attempt error text it needs to tell a wrong password from an absent network.
+
+**Every guard is a duration, so the clock has to be stamped per event.** The context took
+its reading once per poll, and the event that records "the hotspot came up" is raised from
+inside a call that has just blocked for the full 90s connect grace. The recorded start
+time was ~90s in the past before the AP existed: a 300s dwell guard lasted 209s. Measured
+again after the fix: 305.0s.
+
+**Nothing reconciled the picture against the radio.** The service executed each action
+once, at the transition, and never looked again. NetworkManager restarted — which
+modifying a netplan-generated connection is enough to trigger — nmcli was unavailable for
+about two seconds, the hotspot failed to come up, and nothing retried. Netwatch sat in
+HOTSPOT reporting an access point that did not exist, and went on reporting it after NM
+came back and autoconnected the radio underneath it. With no known network in range, that
+camera is unreachable until someone power-cycles it. The poll now reconciles: a fallback
+accepts Wi-Fi that appeared underneath it, and an access point that should be up and is
+not gets raised again.
+
+**A root-owned atomic write is not atomic.** netwatch runs as root because it drives
+NetworkManager, and `tempfile.mkstemp` creates 0600 owned by the writer. One expiring
+access-point session replaced `/etc/skylapse/config.yaml` with a root-only copy; the api
+and daemon run as an ordinary user, so every page returned 500 and capture stopped.
+`config.save()` now carries the original mode and owner across the replace.
+
+**Guard 5 had no way out short of a reboot.** "Use in access point mode" sets a session
+flag, and Try Again did not clear it — so a retry that failed landed back in HOTSPOT with
+the background rescan permanently switched off, looking for all the world like a camera
+waiting for its network to return that never once checks.
+
+**The UI conflated a chosen access point with a failed one.** Both leave the camera
+serving the same SSID. Switching to access-point mode from Settings therefore landed on
+the "No Wi-Fi connection" screen, whose own "use in access point mode" button then
+appeared to do nothing — it was dismissed by a flag nothing had ever set, so the state
+moved underneath and the screen stayed on top of it. Reported from the rig as "i click use
+in standalone mode it does nothing im just stuck".
+
+### Manual access-point mode — IMPLEMENTED
+
+The fallback covers "Wi-Fi broke". It cannot cover someone standing at the camera who
+wants the access point *now*: there is no failure to wait out, and making them wait out a
+connect timeout to reach a camera in front of them is absurd.
+
+`POST /api/network/mode` takes `auto` | `hotspot` | `hotspot_timed(minutes)`. Sticky is
+the default and the one that matters — it is what you want while you are working. It is
+persisted to config rather than sent as a command, because a power cut in the field must
+not quietly put the camera back on Wi-Fi while somebody is still working on it, and
+netwatch re-reads it every poll because restarting the network service is precisely what
+you cannot ask someone to do from a phone that is about to lose its connection. A timed
+session's deadline is cleared from the file when it lapses, so a stale one cannot
+resurrect access-point mode at the next boot.
+
+Setting `auto` also issues the retry command, since the camera may be an access point by
+session choice with the config never having said so — clearing a mode that was never set
+would make "switch back to Wi-Fi" inert in exactly the case it is most likely to be
+pressed.
+
 ### Time sync trust hierarchy
 
 NTP (chrony, when internet) > RTC (DS3231 if detected) > browser time (sent by frontend

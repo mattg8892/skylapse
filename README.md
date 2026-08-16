@@ -28,6 +28,9 @@ without SSHing in every night.
 - **USB export** — copy nights to a stick, with a config backup alongside them.
 - **Phone alerts** over [ntfy](https://ntfy.sh) when the camera stops capturing, and
   again when it recovers.
+- **Falls back to its own Wi-Fi** if your network disappears, so a camera you cannot
+  reach is still a camera you can walk up to — and an **access-point mode** you can
+  switch on by hand when you are standing at it.
 - **In-app updates** with automatic rollback if the new version doesn't come up healthy.
 
 Capture, the web UI, and networking are three separate services, so a problem in one
@@ -147,6 +150,23 @@ work, use a high-endurance card or an external SSD.
 Skylapse deletes the oldest nights automatically when free space runs low, frames first
 and timelapses last.
 
+### When the Wi-Fi goes away
+
+If the camera can't reach a known network, it starts serving its own instead —
+`Skylapse-Setup`, open by default — so a camera you can't reach over Wi-Fi is still one
+you can walk up to. Join it and open **http://10.42.0.1**. When your network comes back,
+the camera returns to it by itself.
+
+It will not do that while your phone is connected to it. Rejoining Wi-Fi means dropping
+the access point, and doing that halfway through somebody's setup is worse than waiting.
+It also stays put for at least five minutes regardless, so a network that is flapping
+can't leave you chasing it.
+
+You can also switch to access-point mode by hand, from **Settings → Network** — useful
+when you're standing at the camera and don't want to wait for anything to time out. That
+choice sticks until you switch it back, and survives a reboot; there are timed options if
+you'd rather it return to Wi-Fi on its own.
+
 ### Phone alerts
 
 Settings → Notifications generates a private [ntfy](https://ntfy.sh) topic and shows you
@@ -213,7 +233,7 @@ Three environment variables relocate everything: `SKYLAPSE_CONFIG`, `SKYLAPSE_IM
 |---|---|
 | `skylapse-daemon` | Capture loop, camera drivers, JPEG/DNG pipeline, scheduling |
 | `skylapse-api` | REST API and web interface (FastAPI + React) |
-| `skylapse-netwatch` | Network state machine — **not enabled by default**, see below |
+| `skylapse-netwatch` | Wi-Fi/access-point state machine, and the fallback when Wi-Fi is gone |
 
 They share only a config file and status files, so none can take another down.
 [DESIGN.md](DESIGN.md) has the full reasoning, including what each camera taught us on
@@ -223,15 +243,16 @@ first contact.
 
 Working and verified on hardware: capture, both camera drivers, auto-exposure, hot-pixel
 correction, DNG, timelapses, the nights browser, focus assist, USB export, phone alerts,
-and self-updating with rollback.
+self-updating with rollback, and the Wi-Fi fallback and access-point mode — including the
+guard that refuses to drop the access point while a phone is connected to it, which was
+tested with a real phone because there is no other way to test it.
 
 Not there yet:
 
 - **No setup wizard.** Configuration is the Settings screen, and location has to be
-  entered by hand. The hotspot-based first-boot flow is designed but not built.
-- **`skylapse-netwatch` is installed but disabled.** The Wi-Fi/hotspot state machine is
-  unit-tested but unverified on hardware, and its failure mode is dropping the network on
-  a headless box. Enable it deliberately.
+  entered by hand. The access-point fallback works, but the first-boot flow that would
+  let you hand the camera your Wi-Fi password through it is designed and not built —
+  "Connect to a new network" on that screen is inert. Set Wi-Fi up in Pi Imager instead.
 - **No white balance** in the JPEG path (see troubleshooting).
 - **No access control.** Anyone on your network can reach the interface. Specified in
   [DESIGN.md](DESIGN.md), not yet built — don't port-forward it.

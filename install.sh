@@ -108,14 +108,14 @@ for unit in skylapse-daemon skylapse-api skylapse-netwatch; do
 done
 systemctl daemon-reload
 
-# netwatch is installed but deliberately NOT enabled. The network state machine
-# is unverified on hardware and its failure mode is taking down a working Wi-Fi
-# link — on a headless rig that costs you the box. Enable it deliberately:
-#   sudo systemctl enable --now skylapse-netwatch
-systemctl enable --now skylapse-daemon skylapse-api
+# All three, netwatch included: verified on hardware 2026-08-16, down to the
+# client-connected freeze with a real phone attached. It was held back until
+# then because its failure mode is taking down a working Wi-Fi link, and on a
+# headless rig that costs you the box.
+systemctl enable --now skylapse-daemon skylapse-api skylapse-netwatch
 
 echo "==> Done."
 echo "    capture: systemctl status skylapse-daemon"
 echo "    frames:  journalctl -u skylapse-daemon -f"
 echo "    web:     http://$(hostname).local/"
-echo "    netwatch installed but NOT enabled (unverified — see comment above)"
+echo "    network: systemctl status skylapse-netwatch"
