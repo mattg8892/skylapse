@@ -20,19 +20,20 @@ export default function ConnectionScreen({ status }) {
       'This disconnects your phone from the camera for up to 90 seconds while ' +
       'it tries your Wi-Fi. If it fails, rejoin the Skylapse-Setup access point.')) return
     setBusy('retry')
-    await fetch('/api/network/retry', { method: 'POST' }).catch(() => {})
-    setBusy(null)
+    await fetch('/api/network/retry', { method: 'POST' })
+      .catch(() => setBusy(null))
   }
 
   const pickStandalone = async () => {
     setBusy('standalone')
     await fetch(`/api/network/standalone?always=${alwaysStandalone}`, {
       method: 'POST',
-    }).catch(() => {})
-    setBusy(null)
+    }).catch(() => setBusy(null))
     setShowStandalone(true)
-    // netwatch moves to 'standalone' on its next poll, at which point App
-    // stops rendering this screen. Until then the button must not look idle.
+    // Busy stays set on success: netwatch moves to 'standalone' on its next
+    // poll and App stops rendering this screen, so there is nothing to clear
+    // it for. Clearing it here just makes the button look idle for the few
+    // seconds before anything visibly happens.
   }
 
   const syncTime = async () => {
@@ -69,7 +70,7 @@ export default function ConnectionScreen({ status }) {
         <div className="mt-4 flex flex-col gap-2">
           <button onClick={tryAgain} disabled={busy}
             className="rounded-lg border border-zinc-700 py-2.5 text-sm hover:bg-zinc-800">
-            {busy === 'retry' ? 'Trying…' : 'Try again'}
+            {busy === 'retry' ? 'Trying (up to 90s)…' : 'Try again'}
           </button>
           <button disabled title="Not built yet — see the setup wizard in DESIGN.md"
             className="rounded-lg border border-zinc-800 py-2.5 text-sm
@@ -78,7 +79,7 @@ export default function ConnectionScreen({ status }) {
           </button>
           <button onClick={pickStandalone} disabled={busy}
             className="rounded-lg border-2 border-sky-600 py-2.5 text-sm hover:bg-zinc-800">
-            Use in access point mode
+            {busy === 'standalone' ? 'Switching…' : 'Use in access point mode'}
           </button>
           <label className="mt-1 flex items-center gap-2 text-sm text-zinc-400">
             <input type="checkbox" checked={alwaysStandalone}

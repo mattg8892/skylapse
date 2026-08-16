@@ -235,6 +235,7 @@ function NetworkCard({ showToast }) {
   const [net, setNet] = useState(null)
   const [choice, setChoice] = useState('hotspot')
   const [pending, setPending] = useState(null)
+  const [busy, setBusy] = useState(false)
 
   const refresh = useCallback(() => {
     fetch('/api/network').then((r) => r.json()).then(setNet).catch(() => {})
@@ -247,20 +248,30 @@ function NetworkCard({ showToast }) {
   }, [refresh])
 
   if (!net) return null
-  const ap = net.mode === 'hotspot' || net.mode === 'hotspot_timed'
+  // What the camera *is*, not what was persisted. "Use in access point mode"
+  // on the fallback screen is a session choice that deliberately leaves the
+  // config alone, so reading the mode here had the card offering to switch to
+  // access-point mode while the camera was already serving one.
+  const ap = net.access_point
 
   const apply = async (body) => {
     setPending(null)
+    setBusy(true)
     const r = await fetch('/api/network/mode', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
     }).catch(() => null)
-    if (!r?.ok) return showToast?.('Could not change network mode')
+    if (!r?.ok) {
+      setBusy(false)
+      return showToast?.('Could not change network mode')
+    }
     // The switch takes a few seconds and may well take this page's connection
     // with it, so say what is about to happen rather than reporting success.
     showToast?.((await r.json()).note)
-    setTimeout(refresh, 8000)
+    // The switch takes a few seconds; leaving the buttons live until then is
+    // how the fallback screen's equivalent got pressed six times in a row.
+    setTimeout(() => { setBusy(false); refresh() }, 8000)
   }
 
   return (
@@ -284,20 +295,20 @@ function NetworkCard({ showToast }) {
             {net.hotspot_secured ? ' with your hotspot password' : ' (no password)'}
             , then open http://10.42.0.1
           </p>
-          <Button tone="accent" className="mt-3 w-full"
+          <Button tone="accent" className="mt-3 w-full" disabled={busy}
             onClick={() => setPending({ mode: 'auto' })}>
-            Switch back to Wi-Fi
+            {busy ? 'Switching…' : 'Switch back to Wi-Fi'}
           </Button>
         </>
       ) : (
         <div className="mt-4 space-y-3">
           <Select label="Stay in access-point mode for" value={choice}
             onChange={setChoice} options={AP_DURATIONS} />
-          <Button tone="warn" className="w-full"
+          <Button tone="warn" className="w-full" disabled={busy}
             onClick={() => setPending(choice === 'hotspot'
               ? { mode: 'hotspot' }
               : { mode: 'hotspot_timed', minutes: Number(choice) })}>
-            Switch to access-point mode
+            {busy ? 'Switching…' : 'Switch to access-point mode'}
           </Button>
         </div>
       )}

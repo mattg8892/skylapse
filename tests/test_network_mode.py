@@ -214,3 +214,36 @@ def test_our_own_broadcast_is_not_reported_as_a_wifi_network(monkeypatch, cfg_pa
         lambda *a, **kw: subprocess.CompletedProcess(
             a[0], 0, "yes:yourmomshouse\nno:Skylapse-Setup\n", ""))
     assert api._wifi_ssid() == "yourmomshouse"
+
+
+def test_switching_back_to_wifi_also_revokes_a_session_choice(client, cfg_path):
+    """The camera can be an access point without the config saying so.
+
+    "Use in access point mode" on the fallback screen is a session choice that
+    deliberately leaves the config alone. Clearing a persisted mode that was
+    never set does nothing, so "switch back to Wi-Fi" would be inert in exactly
+    the situation someone is most likely to press it.
+    """
+    import json
+
+    client.post("/api/network/mode", json={"mode": "auto"})
+    cmd = json.loads((config.RUN_DIR / "netwatch_cmd.json").read_text())
+    assert cmd["cmd"] == "retry"
+
+
+def test_the_card_reads_the_state_not_the_persisted_mode(client, cfg_path,
+                                                         monkeypatch):
+    """Reported from the rig: after the fallback and "use in access point
+    mode", Settings offered to switch *to* access-point mode while the camera
+    was already serving one."""
+    import json
+
+    monkeypatch.setattr("skylapse.api.main._wifi_ssid", lambda: "")
+    config.RUN_DIR.mkdir(parents=True, exist_ok=True)
+    (config.RUN_DIR / "netwatch.json").write_text(json.dumps(
+        {"state": "standalone", "hotspot_clients": 1}))
+
+    body = client.get("/api/network").json()
+    assert body["mode"] == "auto", "the session choice must not touch the mode"
+    assert body["access_point"] is True, \
+        "the card would offer to switch to a mode the camera is already in"

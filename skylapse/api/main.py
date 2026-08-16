@@ -409,6 +409,15 @@ def network_set_mode(body: NetworkMode) -> dict:
     cfg = config.load()
     if body.mode == "auto":
         cfg.network.mode, cfg.network.hotspot_until = "auto", 0.0
+        # A camera can also be an access point by *session* choice — the
+        # fallback screen's "use in access point mode" deliberately leaves the
+        # config alone. Clearing the persisted mode does nothing about that, so
+        # "switch back to Wi-Fi" would silently do nothing at all in exactly
+        # the case someone is most likely to press it. The retry command is
+        # what revokes a session choice.
+        config.RUN_DIR.mkdir(parents=True, exist_ok=True)
+        (config.RUN_DIR / "netwatch_cmd.json").write_text(
+            json.dumps({"cmd": "retry"}))
     else:
         cfg.network.mode = "standalone"
         cfg.network.hotspot_until = (
