@@ -202,6 +202,30 @@ class NetwatchService:
             log.info("Connection lost; retrying in %ss", delay)
             self._retry_at = now + delay
         elif state in (State.HOTSPOT, State.STANDALONE):
+            # Reconcile against the radio before acting on anything. The state
+            # machine says what should be true; nothing was checking whether it
+            # still was.
+            #
+            # Measured on the rig: NetworkManager restarted, nmcli was
+            # unavailable for about two seconds, the hotspot failed to come up
+            # with "No Wi-Fi interface", and nothing ever tried again. Netwatch
+            # sat in HOTSPOT reporting an access point that did not exist. With
+            # no known network in range — the exact case the hotspot is the only
+            # way in for — that camera is unreachable until someone power-cycles
+            # it, which is the entire failure this subsystem exists to prevent.
+            if not self._in_ap_mode():
+                if state == State.HOTSPOT and wifi_up:
+                    # Something else joined a network for us; NetworkManager
+                    # restarting and autoconnecting is the usual way. Take the
+                    # good news rather than keep serving a stale picture.
+                    log.info("Wi-Fi came up underneath us; leaving hotspot state")
+                    self._now()
+                    self._execute(self.sm.on_wifi_connected())
+                    return
+                # In standalone the access point is a deliberate choice, so it
+                # wins even against a Wi-Fi connection that appeared by itself.
+                log.warning("Access point should be up but is not; raising it")
+                self._start_hotspot()
             if state == State.HOTSPOT:
                 for ssid in self._visible_known_networks():
                     action = self.sm.on_background_rescan_found_network(ssid)
