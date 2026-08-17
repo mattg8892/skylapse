@@ -2,9 +2,10 @@
 # The one privileged thing Skylapse is allowed to do to its own host.
 #
 # The services run unprivileged. A few operations genuinely need root — editing
-# /boot/firmware/config.txt to enable a camera overlay, restarting units, and
-# rebooting — and the alternative to this script is a sudoers rule with a
-# wildcard, which is just root with extra steps.
+# /boot/firmware/config.txt to enable a camera overlay, installing the ZWO SDK
+# into /usr/local/lib, restarting units, and rebooting — and the alternative to
+# this script is a sudoers rule with a wildcard, which is just root with extra
+# steps.
 #
 # So: one entry in /etc/sudoers.d/skylapse pointing here, no wildcards, and
 # every argument validated below rather than by sudo's pattern matching.
@@ -22,7 +23,49 @@ CONFIG="${SKYLAPSE_CONFIG_TXT:-/boot/firmware/config.txt}"
 # pole and the only feedback is that it did not come back.
 SENSORS="imx477 imx708 imx219 imx296 imx519 ov5647 ov9281 imx290 imx378"
 
-usage() { echo "usage: skylapse-admin {camera-overlay <sensor>|reboot}" >&2; exit 2; }
+# -- ZWO SDK ----------------------------------------------------------------
+#
+# ZWO's licence does not allow their SDK to be redistributed, and their download
+# portal is browser-only, so the shared library cannot ship inside the SD image.
+# That left a ZWO rig as the one setup needing SSH — the single thing this whole
+# appliance exists to avoid. Fetching it on demand, once, with the user
+# accepting ZWO's terms, closes that gap without redistributing anything.
+#
+# The INDI project mirrors the same vendor binaries. Pinned to a tag and
+# checksummed rather than tracking a branch: this is an unsigned binary from a
+# third party landing in /usr/local/lib as root, so "whatever is at that URL
+# today" is not good enough. Update the ref and both hashes together.
+ZWO_REF="v2.2.4.1"
+ZWO_SDK_VERSION="1.41"                  # ASICAM_VERSION at that ref
+ZWO_LIB_SHA256="3ecf511979ed571131e7d7f4a467112aba21940b4dc91d63bd109b9683bf67c4"
+ZWO_RULES_SHA256="93a2f52cf4849359d94754e702a3ab0fd667ea8548c87d3f6805cafd340569a7"
+
+# Overridable so the tests can drive the real script — same reasoning as
+# CONFIG above. sudo does not pass the environment through, so nothing reachable
+# from the API can set any of these.
+ZWO_BASE_URL="${SKYLAPSE_ZWO_BASE_URL:-https://raw.githubusercontent.com/indilib/indi-3rdparty/$ZWO_REF/libasi}"
+ZWO_LIB_SHA256="${SKYLAPSE_ZWO_LIB_SHA256:-$ZWO_LIB_SHA256}"
+ZWO_RULES_SHA256="${SKYLAPSE_ZWO_RULES_SHA256:-$ZWO_RULES_SHA256}"
+LIB_DIR="${SKYLAPSE_LIB_DIR:-/usr/local/lib}"
+UDEV_DIR="${SKYLAPSE_UDEV_DIR:-/etc/udev/rules.d}"
+ARCH="${SKYLAPSE_ARCH:-$(uname -m)}"
+
+usage() { echo "usage: skylapse-admin {camera-overlay <sensor>|zwo-sdk|reboot}" >&2; exit 2; }
+
+# Fetch one file and refuse it unless it hashes to what we expect.
+fetch_verified() {
+    url="$1"; dest="$2"; want="$3"
+    curl -fsSL --retry 3 --connect-timeout 15 --max-time 600 -o "$dest" "$url" || {
+        echo "download failed: $url" >&2; return 1; }
+    got="$(sha256sum "$dest" | cut -d' ' -f1)"
+    if [ "$got" != "$want" ]; then
+        rm -f "$dest"
+        echo "checksum mismatch for $url" >&2
+        echo "  expected $want" >&2
+        echo "  got      $got" >&2
+        return 1
+    fi
+}
 
 case "${1:-}" in
   camera-overlay)
@@ -53,6 +96,65 @@ case "${1:-}" in
         grep -qxF "$line" "$CONFIG" || printf '%s\n' "$line" >> "$CONFIG"
     done
     echo "enabled $sensor on cam0 and cam1"
+    ;;
+
+  zwo-sdk)
+    # aarch64 only. The mirror also carries armv6/armv7 builds, but the SD
+    # image is 64-bit Pi OS and shipping a path nobody here has ever run is
+    # worse than saying plainly that it is not covered.
+    if [ "$ARCH" != "aarch64" ]; then
+        echo "ZWO support needs 64-bit Raspberry Pi OS (this system is $ARCH)" >&2
+        exit 4
+    fi
+    command -v curl >/dev/null 2>&1 || { echo "curl is not installed" >&2; exit 5; }
+
+    # Staged in a temp dir and verified before anything reaches /usr/local: a
+    # half-downloaded library installed under the real name would be found by
+    # the loader and fail at dlopen, which reads as broken hardware.
+    tmp="$(mktemp -d)"
+    trap 'rm -rf "$tmp"' EXIT
+
+    lib="$LIB_DIR/libASICamera2.so.$ZWO_SDK_VERSION"
+    if [ -f "$lib" ] && \
+       [ "$(sha256sum "$lib" | cut -d' ' -f1)" = "$ZWO_LIB_SHA256" ]; then
+        echo "libASICamera2 $ZWO_SDK_VERSION already installed"
+    else
+        fetch_verified "$ZWO_BASE_URL/armv8/libASICamera2.bin" \
+                       "$tmp/libASICamera2.so" "$ZWO_LIB_SHA256" || exit 6
+        mkdir -p "$LIB_DIR"
+        install -m 0644 "$tmp/libASICamera2.so" "$lib"
+        # soname first, then the development link the driver's search path uses.
+        ln -sf "libASICamera2.so.$ZWO_SDK_VERSION" "$LIB_DIR/libASICamera2.so.1"
+        ln -sf "libASICamera2.so.1" "$LIB_DIR/libASICamera2.so"
+        echo "installed libASICamera2 $ZWO_SDK_VERSION"
+    fi
+
+    # Without these the camera enumerates but opens as root only, and the USB
+    # buffer stays at the 16MB default — too small for a 12-bit full-frame
+    # capture, which then fails partway through rather than at open.
+    rules="$UDEV_DIR/99-asi.rules"
+    if [ -f "$rules" ] && \
+       [ "$(sha256sum "$rules" | cut -d' ' -f1)" = "$ZWO_RULES_SHA256" ]; then
+        echo "udev rules already installed"
+    else
+        fetch_verified "$ZWO_BASE_URL/99-asi.rules" \
+                       "$tmp/99-asi.rules" "$ZWO_RULES_SHA256" || exit 6
+        mkdir -p "$UDEV_DIR"
+        install -m 0644 "$tmp/99-asi.rules" "$rules"
+        echo "installed udev rules"
+    fi
+
+    # Guarded: the tests run this script on a machine with neither, and a rig
+    # that has both files in place is already better off than one that aborted
+    # here. `if` rather than `&&` — under `set -e` a false `&&` would end the
+    # script one line short of reporting success.
+    if command -v ldconfig >/dev/null 2>&1; then
+        ldconfig
+    fi
+    if command -v udevadm >/dev/null 2>&1; then
+        udevadm control --reload-rules && udevadm trigger
+    fi
+    echo "zwo-sdk ready"
     ;;
 
   reboot)

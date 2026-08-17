@@ -50,8 +50,10 @@ MISSING=""
 # regulatory domain. network-manager brings nmcli but not those, and Pi OS Lite
 # ships neither — which on the first SD image meant netwatch could not raise
 # its access point, so a camera with no Wi-Fi could not be reached at all.
+# curl is what the ZWO SDK installer fetches with. Pi OS ships it, but the
+# helper's failure without it is a button in the web UI that does nothing.
 for p in python3-venv python3-dev build-essential python3-picamera2 \
-         network-manager iw rfkill git ffmpeg nodejs npm; do
+         network-manager iw rfkill git curl ffmpeg nodejs npm; do
     dpkg -s "$p" >/dev/null 2>&1 || MISSING="$MISSING $p"
 done
 if [ -n "$MISSING" ]; then
@@ -91,24 +93,24 @@ fi
 as_user "$ROOT/venv/bin/pip" install --quiet --upgrade pip
 # Editable: the running service imports straight from the checkout, so a
 # `git pull` takes effect on restart with no reinstall.
+#
+# The [zwo] extra is the Python bindings only — a small pure-Python package, no
+# vendor code. They go in unconditionally so that installing ZWO support later
+# is one download rather than a rebuild of the venv on a camera in the field.
 as_user "$ROOT/venv/bin/pip" install --quiet -e "$ROOT[zwo]"
 
-echo "==> ZWO SDK"
+echo "==> ZWO SDK (optional)"
+# Not installed here, and not installed by default anywhere: Skylapse targets Pi
+# camera modules, and ZWO is a best-effort second. The library also cannot be
+# redistributed, so it is fetched on request — from Settings -> Cameras, which
+# is the path a flashed card has and this one may as well share rather than
+# maintaining a second way to do the same thing.
 if /sbin/ldconfig -p | grep -q libASICamera2; then
-    echo "    libASICamera2 already installed, skipping"
+    echo "    libASICamera2 already installed"
 else
-    echo "    libASICamera2 NOT found."
-    echo "    ZWO's download portal is browser-only and cannot be scripted."
-    echo "    Fetch the aarch64 binary + udev rules, e.g. from the INDI mirror:"
-    echo "      https://github.com/indilib/indi-3rdparty/tree/master/libasi"
-    echo "      armv8/libASICamera2.bin -> /usr/local/lib/libASICamera2.so.<ver>"
-    echo "      (symlink .so.1 and .so, then run ldconfig)"
-    echo "      99-asi.rules            -> /etc/udev/rules.d/"
-    echo "      then: udevadm control --reload-rules && udevadm trigger"
-    echo "    Continuing — the daemon will use a Pi camera if one is present."
-fi
-if [ -f /etc/udev/rules.d/99-asi.rules ]; then
-    echo "    udev rules already present, skipping"
+    echo "    not installed. Pi camera modules need nothing; if you have a ZWO"
+    echo "    camera, install support from Settings -> Cameras in the web UI,"
+    echo "    or run: sudo $ROOT/scripts/skylapse-admin zwo-sdk"
 fi
 
 echo "==> Web frontend"

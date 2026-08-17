@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import {
   Button, Card, ConfirmDialog, NumberField, Segmented, Select, Slider, Toggle,
 } from '../components/ui.jsx'
+import { CameraPanel, useCameras } from '../components/camera.jsx'
 
 // Capture / timelapse / overlay are per-camera (config.cameras is a registry
 // keyed by hardware id). Notifications and remote access are global.
@@ -55,6 +56,7 @@ export default function SettingsScreen({ showToast, storage }) {
   const [topic, setTopic] = useState(null)
   const [remote, setRemote] = useState(null)
   const [testResult, setTestResult] = useState(null)
+  const [cameraInfo, refreshCameras] = useCameras()
 
   useEffect(() => {
     fetch('/api/config').then((r) => r.json()).then(setCfg).catch(() => {})
@@ -110,13 +112,29 @@ export default function SettingsScreen({ showToast, storage }) {
 
   return (
     <div className="mt-6 flex flex-col gap-5">
-      {cameras.length === 0 && (
-        <Card title="Camera">
-          <p className="mt-1 text-sm text-zinc-500">
-            No camera has been seen yet. Capture settings appear once one is detected.
+      {/* Cameras: the same panel the wizard uses. Settings used to have no way
+          to add a camera at all — you plugged one in and hoped the daemon
+          noticed — so a second camera, or a first one the Pi cannot auto-detect,
+          meant walking setup again or reaching for SSH. */}
+      <Card title="Cameras">
+        <p className="mt-1 text-sm text-zinc-400">
+          {cameras.length > 1
+            ? 'Which camera is pointed at the sky, and how to add another.'
+            : 'What’s attached, a test shot to prove it works, and how to add '
+              + 'a camera the Pi can’t find by itself.'}
+        </p>
+        <div className="mt-4">
+          <CameraPanel info={cameraInfo} refresh={refreshCameras}
+            selected={cfg.active_camera}
+            onSelect={(active_camera) =>
+              save({ active_camera }, { ...cfg, active_camera })} />
+        </div>
+        {cameras.length === 0 && (
+          <p className="mt-4 text-xs text-zinc-500">
+            Capture settings appear below once a camera has been seen.
           </p>
-        </Card>
-      )}
+        )}
+      </Card>
 
       {cameras.map(([id, cam]) => (
         <CameraSettings

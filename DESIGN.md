@@ -14,8 +14,12 @@ setups with something anyone can install, point at the sky, and manage from a ph
    may depend on a backend that could be shut down.
 1. **Zero-code setup.** Flash SD image, boot, join hotspot, finish a wizard on your phone.
    No SSH, no config files, no terminal — ever.
-2. **Dual camera support.** ZWO ASI (USB) and Raspberry Pi camera modules (CSI) behind one
-   driver interface. ZWO is the primary target; Pi cam ships behind the same interface.
+2. **Raspberry Pi cameras first.** Pi camera modules over CSI — the HQ/IMX477 in
+   particular — are the primary target: no vendor library, supportable end to end from
+   the SD image, and what every feature is developed against. ZWO ASI (USB) ships behind
+   the same driver interface as a **best-effort second**, verified on one model and not
+   guaranteed to work on others. (This was the other way round until 2026-08-17; see
+   [Choosing between two cameras](#choosing-between-two-cameras).)
 3. **JPEG + RAW (DNG).** Full-res JPEG every frame for timelapse; DNG on demand, on
    schedule, or triggered — for editing keepers in Lightroom/Siril/PixInsight.
 4. **Capture never depends on network.** Wi-Fi can flap, hotspot can cycle, the imaging
@@ -76,12 +80,13 @@ more ways, mid-write), or striping a store across several drives.
 
 ```
 CameraDriver (ABC)
-├── ZwoDriver    zwoasi bindings over ZWO SDK — raw bayer out
-└── PiCamDriver  picamera2/libcamera — raw bayer out
+├── PiCamDriver  picamera2/libcamera — raw bayer out        (primary)
+└── ZwoDriver    zwoasi bindings over ZWO SDK — raw bayer out (best effort)
 ```
 
 Both drivers return raw bayer + metadata; the pipeline owns debayer → JPEG and bayer → DNG
-(via pidng). Identical output regardless of camera. Probe order: ZWO on USB first, then CSI.
+(via pidng). Identical output regardless of camera. Probe order: Pi CSI first, then ZWO on
+USB.
 
 ### What first contact with real ZWO hardware changed
 
@@ -133,23 +138,78 @@ Known upstream annoyance, not patched: zwoasi 0.2.0's `Camera.__del__` raises
 torn down before the finaliser runs). It is noise in the log after the capture loop has
 already exited, and it is a library bug rather than ours.
 
+### The ZWO SDK is installed on demand, not shipped — IMPLEMENTED (2026-08-17)
+
+ZWO's licence forbids redistributing their SDK and their download portal is
+browser-only, so `libASICamera2` cannot be in the SD image. That made a ZWO rig
+the one setup still requiring SSH — a direct contradiction of goal 1, and the
+only entry in the README's limitations that needed a terminal.
+
+Removing the ZWO driver entirely was considered and rejected: the problem is
+*distribution*, not the driver. It is instead fetched on request, which
+redistributes nothing — the user asks for it and accepts ZWO's terms, and the
+file comes from the [INDI project's
+mirror](https://github.com/indilib/indi-3rdparty/tree/master/libasi) of the same
+vendor binaries.
+
+Shape, the same as the camera-overlay button that preceded it:
+
+`Settings → Cameras` / wizard camera step → `POST /api/setup/zwo/install`
+(`skylapse/zwosdk.py`) → `sudo -n skylapse-admin zwo-sdk` → download, verify,
+install, `ldconfig`, udev reload → `systemctl restart skylapse-daemon`.
+
+Decisions worth keeping:
+
+- **Pinned and checksummed, not "latest".** The helper hardcodes an
+  `indi-3rdparty` tag and the SHA-256 of both files. This is an unsigned
+  third-party binary landing in `/usr/local/lib` as root; "whatever is at that
+  URL today" is not an acceptable input to that. A mismatch installs nothing and
+  leaves no partial file — a truncated library would be found by the loader and
+  fail at `dlopen`, which reads as broken hardware.
+- **Acceptance is in the request.** `accept_terms` has no default. The licence is
+  the user's to accept, so the server never assumes it.
+- **Restart, not reboot.** Nothing here touches the boot config. But the daemon
+  only probes for cameras when it opens one, so without the restart a freshly
+  installed SDK does nothing until the next night.
+- **aarch64 only.** The mirror has armv6/armv7 builds; nobody here has run them,
+  and a button that installs the wrong architecture and then reports a camera
+  fault is worse than one that is honestly absent.
+- **The Python bindings ship anyway.** `pip install -e .[zwo]` is pure Python and
+  tiny, so it is unconditional — installing ZWO support later is then one
+  download rather than rebuilding a venv on a camera in the field.
+
+This closes the SSH gap. It does not make ZWO a first-class target: the UI says
+plainly, above the button, that support is best effort, verified on one model,
+and may not work at all.
+
 ### Choosing between two cameras
 
-Probe order is simulator → ZWO USB → Pi CSI. ZWO leads because it is the
-primary target: a rig with both attached is almost always a ZWO imaging camera
-on a Pi that happens to have a module fitted.
+Probe order is simulator → Pi CSI → ZWO USB.
 
-`config.active_camera` overrides that for the rig where the Pi module *is* the
+**It was the other way round until 2026-08-17.** ZWO led because it was declared
+the primary target, which was a statement about the bench this was built on
+rather than about the product. What the product actually is became clear once
+the SD image existed: a Pi camera needs no vendor library, so it is the only
+camera the image can support end to end; the ZWO SDK cannot legally be shipped
+inside it. The ZWO driver is also verified against exactly one model, while the
+Pi path covers every sensor Raspberry Pi OS carries an overlay for. So the
+common case a probe order should favour is a Pi camera on the sky, and a rig
+with both attached is more likely to be a Pi camera plus a ZWO that is not
+pointed anywhere in particular than the reverse.
+
+`config.active_camera` overrides that for the rig where the ZWO *is* the
 sky-facing camera. It holds a `camera_id`, and the driver is taken from the part
 before the first dash — every id is built as `<driver>-<hardware identity>`
-(`zwo-asi676mc`, `picam-imx477`), so the config needs no second field that could
+(`picam-imx477`, `zwo-asi676mc`), so the config needs no second field that could
 disagree with the id. A preference naming a camera that is not attached logs a
 warning and falls back to the probe order: unplugging the preferred camera
 should degrade to capturing with the other one, not stop the night.
 
-Selection is config-level only. There is no Settings control yet — it is a
-one-line config edit and belongs with the wizard's camera step rather than as a
-stray dropdown.
+Selection is exposed in both the wizard's camera step and Settings → Cameras,
+which render the same component (`web/src/components/camera.jsx`). Settings
+previously had no camera management at all — you plugged something in and hoped
+the daemon noticed — so a second camera, or a first one the Pi could not
+auto-detect, meant walking the wizard again or reaching for SSH.
 
 ### Pi camera: what first light changed (2026-08-15)
 
@@ -191,6 +251,12 @@ the hundreds. AE spills into gain once exposure is capped, so a 22x sensor
 carrying a 300 ceiling would keep asking for gain it cannot reach and never see
 brightness respond — fine by day on exposure alone, stalled after dark. Profiles
 are now clamped to the camera's reported limits on every open, downward only.
+
+The raw defaults are still ZWO-shaped even now that Pi cameras lead, which reads
+backwards but is harmless: the clamp runs on every open and only ever lowers, so
+a Pi module gets Pi-sized ceilings before the first frame either way. Rewriting
+the defaults would move them for every existing rig's stored profiles to fix
+nothing.
 
 Verified end to end on the module: own registry entry and image folder,
 4056x3040 JPEGs with thumbnails and sidecars, a DNG that parses with
@@ -576,3 +642,8 @@ free tier, user's own account, nothing operated by the project.
 ## Licensing
 
 MIT. All code clean-room — no code from GPL allsky projects.
+
+Nothing proprietary is redistributed. ZWO's SDK is not in this repository and not
+in the SD image; it is downloaded by the camera, at the user's request, after
+they accept ZWO's terms — see [The ZWO SDK is installed on
+demand](#the-zwo-sdk-is-installed-on-demand-not-shipped--implemented-2026-08-17).

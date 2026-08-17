@@ -26,7 +26,7 @@ class BayerPattern(str, Enum):
 class CameraInfo:
     name: str
     camera_id: str                   # stable hardware id: registry key + image folder
-    driver: str                      # "zwo" | "picam"
+    driver: str                      # "picam" | "zwo"
     width: int
     height: int
     bayer: BayerPattern
@@ -81,8 +81,8 @@ class CameraDriver(ABC):
 def driver_of(camera_id: str) -> str:
     """Driver name from a camera_id.
 
-    Every id is built as "<driver>-<hardware identity>" — "zwo-asi676mc",
-    "picam-imx477" — so the prefix is the driver. That convention is what lets
+    Every id is built as "<driver>-<hardware identity>" — "picam-imx477",
+    "zwo-asi676mc" — so the prefix is the driver. That convention is what lets
     `active_camera` in the config select hardware without the config having to
     carry a second, redundant field that could disagree with the id.
     """
@@ -92,21 +92,27 @@ def driver_of(camera_id: str) -> str:
 def detect_camera(prefer: str = "") -> "CameraDriver":
     """Pick a camera driver.
 
-    Default order is simulator (SKYLAPSE_SIM=1), then ZWO on USB, then Pi CSI.
-    ZWO leads because it is the primary target: a rig with both attached is
-    almost always a ZWO imaging camera on a Pi that happens to have a module.
+    Default order is simulator (SKYLAPSE_SIM=1), then Pi CSI, then ZWO on USB.
 
-    `prefer` is a camera_id (or bare driver name) from `config.active_camera`,
-    for the rig where that assumption is wrong and the Pi module is the one
-    pointed at the sky. A preference that is not actually present falls back to
-    the normal order rather than failing — unplugging the preferred camera
-    should degrade to capturing with the other one, not stop the night.
+    Pi CSI leads because it is the primary target. Everything here is developed
+    and tested against a Pi camera module, the HQ/IMX477 above all: it needs no
+    vendor library, it is what the SD image can actually support end to end, and
+    it is what a new build is most likely to have. ZWO is second and best
+    effort — its SDK cannot ship in the image, and the driver is verified
+    against exactly one model. A rig with both attached is more often a Pi
+    camera on the sky than a ZWO, and the one that is wrong about that has
+    `active_camera` to say so.
+
+    `prefer` is a camera_id (or bare driver name) from `config.active_camera`.
+    A preference that is not actually present falls back to the normal order
+    rather than failing — unplugging the preferred camera should degrade to
+    capturing with the other one, not stop the night.
     """
     from .sim import SimDriver
     from .zwo import ZwoDriver
     from .picam import PiCamDriver
 
-    drivers = [("sim", SimDriver), ("zwo", ZwoDriver), ("picam", PiCamDriver)]
+    drivers = [("sim", SimDriver), ("picam", PiCamDriver), ("zwo", ZwoDriver)]
 
     wanted = driver_of(prefer)
     if wanted:
@@ -126,4 +132,4 @@ def detect_camera(prefer: str = "") -> "CameraDriver":
     for name, cls in drivers:
         if cls.probe():
             return cls()
-    raise CameraError("No supported camera found (checked: ZWO USB, Pi CSI)")
+    raise CameraError("No supported camera found (checked: Pi CSI, ZWO USB)")

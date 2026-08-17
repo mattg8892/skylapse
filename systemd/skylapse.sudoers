@@ -1,8 +1,10 @@
 # Installed to /etc/sudoers.d/skylapse by install.sh.
 #
-# The services run unprivileged; three operations genuinely need root, and they
-# all go through one script with a closed argument list rather than a sudoers
-# wildcard, which would be root with extra steps.
+# The services run unprivileged; a few operations genuinely need root — writing
+# a camera overlay into the boot config, installing the ZWO SDK into
+# /usr/local/lib, restarting units and rebooting — and they all go through one
+# script with a closed argument list rather than a sudoers wildcard, which would
+# be root with extra steps.
 #
 # systemctl/systemd-run are here because the in-app updater restarts the units
 # it has just updated. Without this the updater fails at `sudo -n` on any

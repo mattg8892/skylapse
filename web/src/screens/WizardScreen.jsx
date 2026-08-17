@@ -9,9 +9,10 @@
 // The hotspot/captive-portal entry path is deliberately not built yet — it
 // waits on netwatch being radio-verified. The network screen is shaped so that
 // lands as an addition rather than a rewrite.
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { Button, Card, Select, Toggle } from '../components/ui.jsx'
 import JoinNetwork from '../components/JoinNetwork.jsx'
+import { CameraPanel, useCameras } from '../components/camera.jsx'
 import {
   canContinue, canGoBack, formatCoords, nextStep, prevStep, resolveLocation,
   startsWhen, STEPS, stepIndex,
@@ -345,253 +346,30 @@ function Choice({ checked, label, detail, onSelect }) {
 
 /* -- 4. camera ------------------------------------------------------------- */
 
+/**
+ * Detection, a test shot, and the two ways to add a camera the Pi cannot see.
+ *
+ * All of it lives in components/camera.jsx, because the settings screen offers
+ * exactly the same things to an installed camera — before that it had no
+ * reliable way to add one at all, just plug it in and hope the daemon noticed.
+ * The only difference here is that the choice goes into the wizard's draft
+ * rather than straight to config.
+ */
 function Camera({ draft, patch }) {
-  const [info, setInfo] = useState(null)
-  const [shotAt, setShotAt] = useState(null)
-  const [waiting, setWaiting] = useState(false)
-  const polls = useRef(0)
-
-  const refresh = useCallback(async () => {
-    const r = await fetch('/api/setup/camera').catch(() => null)
-    if (r?.ok) setInfo(await r.json())
-  }, [])
-
-  useEffect(() => { refresh() }, [refresh])
-
-  const takeShot = async () => {
-    setWaiting(true)
-    polls.current = 0
-    await fetch('/api/setup/camera/test', { method: 'POST' }).catch(() => {})
-    // The daemon picks the request up between frames, so this can take a gap.
-    const timer = setInterval(async () => {
-      polls.current += 1
-      const r = await fetch('/api/setup/camera').catch(() => null)
-      const next = r?.ok ? await r.json() : null
-      if (next?.shot_at && next.shot_at !== info?.shot_at) {
-        setShotAt(next.shot_at)
-        setWaiting(false)
-        clearInterval(timer)
-      } else if (polls.current > 40) {         // ~2 minutes
-        setWaiting(false)
-        clearInterval(timer)
-      }
-    }, 3000)
-  }
-
-  const cameras = info?.cameras ?? []
-  const found = cameras.length > 0 || info?.detected
+  const [info, refresh] = useCameras()
+  const found = (info?.cameras?.length ?? 0) > 0 || info?.detected
 
   return (
     <>
       <Heading title="Camera">
         {found ? 'Here’s what Skylapse can see.' : 'No camera detected yet.'}
       </Heading>
-
-      {found ? (
-        <div className="mt-6 space-y-4">
-          {cameras.length > 1 ? (
-            <Select label="Which camera is pointed at the sky?"
-              value={draft.camera?.camera_id || info.active || cameras[0].camera_id}
-              onChange={(camera_id) => patch({ camera: { camera_id } })}
-              options={cameras.map((c) => ({ value: c.camera_id, label: c.label }))} />
-          ) : (
-            <p className="rounded-xl border border-zinc-800 bg-zinc-900 p-4
-                          text-emerald-300">
-              {cameras[0]?.label || info.detected}
-            </p>
-          )}
-
-          {shotAt && (
-            <figure>
-              <img src={`/api/setup/camera/shot?t=${shotAt}`} alt="Test shot"
-                className="w-full rounded-lg bg-zinc-800" />
-              <figcaption className="mt-1 text-xs text-zinc-500">
-                A real frame, taken just now. It isn’t saved to your night.
-              </figcaption>
-            </figure>
-          )}
-
-          <Button onClick={takeShot} disabled={waiting} className="w-full">
-            {waiting ? 'Taking a shot…' : shotAt ? 'Retake' : 'Take a test shot'}
-          </Button>
-        </div>
-      ) : (
-        <div className="mt-6 space-y-3 text-sm text-zinc-400">
-          <p>Worth checking, in this order:</p>
-          <ul className="list-disc space-y-2 pl-5">
-            <li><b>USB camera:</b> seated firmly, and on the official power
-              supply. Underpowering a USB3 camera looks like a missing camera.</li>
-            <li><b>Ribbon cable:</b> contacts the right way round at
-              <i> both</i> ends. It is easy to get right at one and wrong at the
-              other.</li>
-            <li><b>Pull the power for 15 seconds.</b> Not a reboot — a full cold
-              start. Some modules only come up after one, and this is the step
-              most often mistaken for a broken cable.</li>
-          </ul>
-          <Button onClick={refresh} className="w-full">Scan again</Button>
-          <NotDetected />
-        </div>
-      )}
+      <div className="mt-6">
+        <CameraPanel info={info} refresh={refresh}
+          selected={draft.camera?.camera_id}
+          onSelect={(camera_id) => patch({ camera: { camera_id } })} />
+      </div>
     </>
-  )
-}
-
-/**
- * Declare a sensor by hand when auto-detection cannot see it.
- *
- * Raspberry Pi OS detects cameras by reading an EEPROM, and third-party boards
- * — the very common HQ/IMX477 clones among them — do not carry one. On a stock
- * image such a camera is simply invisible, and the only fix was editing
- * /boot/firmware/config.txt over SSH: the exact thing an appliance image exists
- * to avoid. Measured on this project's own hardware, which is how it was found.
- */
-function NotDetected() {
-  const [open, setOpen] = useState(false)
-  const [sensors, setSensors] = useState([])
-  const [sensor, setSensor] = useState('imx477')
-  const [state, setState] = useState('')
-
-  useEffect(() => {
-    if (!open) return
-    fetch('/api/setup/camera/sensors').then((r) => r.json())
-      .then((b) => setSensors(b.sensors ?? [])).catch(() => {})
-  }, [open])
-
-  const enable = async () => {
-    setState('working')
-    const r = await fetch('/api/setup/camera/overlay', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ sensor }),
-    }).catch(() => null)
-    setState(r?.ok ? 'rebooting' : 'failed')
-  }
-
-  if (state === 'rebooting') return <WaitingForReboot sensor={sensor} />
-
-  if (!open) {
-    return (
-      <button onClick={() => setOpen(true)}
-        className="w-full text-sm text-sky-400 underline">
-        My camera isn’t being detected
-      </button>
-    )
-  }
-
-  return (
-    <div className="space-y-3 rounded-xl border border-zinc-800 bg-zinc-900 p-4">
-      <p className="text-sm text-zinc-400">
-        Some cameras — most third-party HQ/IMX477 boards among them — can’t be
-        detected automatically, because that relies on a chip they don’t carry.
-        Pick yours and Skylapse will tell the Pi about it directly.
-      </p>
-      <Select label="Sensor" value={sensor} onChange={setSensor}
-        options={sensors.length ? sensors
-          : [{ value: 'imx477', label: 'HQ Camera / IMX477' }]} />
-      <p className="rounded-lg bg-zinc-800/60 p-3 text-xs text-zinc-400">
-        The camera restarts to load the driver, so your phone will drop off its
-        Wi-Fi for a minute. Don’t close this page — it picks up on its own.
-      </p>
-      <Button tone="accent" className="w-full" disabled={state === 'working'}
-        onClick={enable}>
-        {state === 'working' ? 'Saving…' : 'Enable and restart'}
-      </Button>
-      {state === 'failed' && (
-        <p className="text-sm text-red-400">
-          Couldn’t write the boot configuration.
-        </p>
-      )}
-      <p className="text-xs text-zinc-500">
-        Harmless to get wrong — pick another and try again. The original
-        configuration is kept as config.txt.skylapse-backup.
-      </p>
-    </div>
-  )
-}
-
-
-/**
- * The screen you stare at while the camera restarts.
- *
- * Reported from the rig: "you just kinda get thrown around on an offline copy
- * of the page and can't tell if it's working." Which is exactly right — the
- * reboot takes the access point down with it, so the page loses its network
- * mid-action and has nothing to say.
- *
- * The tab's JavaScript keeps running through all of that, though, as long as
- * nobody reloads. So this keeps quietly retrying, says plainly what is
- * happening and what to do about the dropped Wi-Fi, and moves on by itself the
- * moment the camera answers again. The one instruction that matters is "do not
- * reload" — a reload during the outage is what produces the blank cached page.
- */
-function WaitingForReboot({ sensor }) {
-  const [seconds, setSeconds] = useState(0)
-  const [found, setFound] = useState(null)
-
-  useEffect(() => {
-    const tick = setInterval(() => setSeconds((s) => s + 1), 1000)
-    const poll = setInterval(async () => {
-      // no-store, because the whole failure mode here is a cached answer from
-      // before the reboot looking like a live one.
-      const r = await fetch('/api/setup/camera', { cache: 'no-store' })
-        .catch(() => null)
-      if (!r?.ok) return
-      const info = await r.json().catch(() => null)
-      if (info?.detected || info?.cameras?.length) {
-        setFound(info.cameras?.[0]?.label || info.detected)
-        clearInterval(poll)
-        clearInterval(tick)
-      }
-    }, 3000)
-    return () => { clearInterval(poll); clearInterval(tick) }
-  }, [])
-
-  if (found) {
-    return (
-      <div className="rounded-xl border border-emerald-800 bg-emerald-950 p-4">
-        <p className="text-emerald-300">Camera found: {found}</p>
-        <p className="mt-2 text-sm text-zinc-400">
-          Take a test shot below to make sure it is really working, not just
-          detected.
-        </p>
-      </div>
-    )
-  }
-
-  // Past about two minutes a Pi has either come back or is not going to, and
-  // continuing to show a hopeful spinner would be its own kind of lie.
-  const slow = seconds > 130
-  return (
-    <div className="rounded-xl border border-zinc-800 bg-zinc-900 p-4">
-      <div className="flex items-center gap-3">
-        <span className="h-4 w-4 shrink-0 animate-spin rounded-full
-                         border-2 border-sky-500 border-t-transparent" />
-        <p className="text-sky-300">
-          Restarting with {sensor} enabled… {seconds}s
-        </p>
-      </div>
-
-      <ol className="mt-4 space-y-2 text-sm text-zinc-400">
-        <li>
-          <b className="text-zinc-300">Don’t reload this page.</b> It is still
-          working, and reloading now is what shows you a blank one.
-        </li>
-        <li>
-          Your phone will drop off the camera’s Wi-Fi while it restarts.
-          <b className="text-zinc-300"> Rejoin it</b> when it comes back and
-          this page carries on by itself.
-        </li>
-        <li>Usually about a minute. Nothing you answered is lost.</li>
-      </ol>
-
-      {slow && (
-        <p className="mt-4 rounded-lg bg-amber-950 p-3 text-sm text-amber-300">
-          Taking longer than usual. Check your phone is back on the camera’s
-          network — and if it is, reload this page: setup resumes where you left
-          off, because your answers are kept on the camera rather than here.
-        </p>
-      )}
-    </div>
   )
 }
 

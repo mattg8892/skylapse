@@ -19,7 +19,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from .. import (__version__, auth, config, notify, remote, setup, updater,
-                usbexport)
+                usbexport, zwosdk)
 from ..daemon.pipeline import process
 from ..daemon.scheduler import profile_for
 from ..daemon.watchdog import stall_threshold_s
@@ -235,6 +235,41 @@ def setup_camera_overlay(body: CameraOverlay) -> dict:
                    capture_output=True, text=True, timeout=30)
     return {"ok": True, "sensor": body.sensor,
             "note": "rebooting; the camera is checked again on the way back up"}
+
+
+# -- ZWO support (optional, on demand) --------------------------------------
+
+@app.get("/api/setup/zwo")
+def setup_zwo_status() -> dict:
+    """Whether ZWO support can be installed here, and whether it already is."""
+    return zwosdk.status()
+
+
+class ZwoInstall(BaseModel):
+    # An explicit tick, not a default. The camera is about to download a
+    # proprietary binary on the user's behalf under a licence that is theirs to
+    # accept, so the request has to carry the acceptance rather than the server
+    # assuming it.
+    accept_terms: bool = False
+
+
+@app.post("/api/setup/zwo/install")
+def setup_zwo_install(body: ZwoInstall) -> dict:
+    """Download and install ZWO's SDK, then restart the daemon.
+
+    The one thing standing between a ZWO rig and an SSH-free setup: their
+    licence forbids redistributing the library, so it cannot be in the image,
+    so until now it had to be fetched by hand over a terminal. Doing it here
+    redistributes nothing — the user asks, accepts ZWO's terms, and the file
+    comes from the INDI project's mirror, pinned and checksummed in
+    scripts/skylapse-admin.
+    """
+    if not body.accept_terms:
+        raise HTTPException(400, "ZWO's licence has to be accepted first")
+    result = zwosdk.install()
+    if not result.get("ok"):
+        raise HTTPException(500, result.get("error", "could not install the SDK"))
+    return result
 
 
 @app.get("/api/setup/camera/shot")

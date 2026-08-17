@@ -4,7 +4,7 @@
 the whole thing from your phone — live view, focus assist, timelapses, and RAW files,
 without SSHing in every night.
 
-<sub>[Getting started](#getting-started) · [Using it](#using-it) ·
+<sub>[Getting started](#getting-started) · [Cameras](#cameras) · [Using it](#using-it) ·
 [Troubleshooting](#troubleshooting) · [Development](#development) ·
 [Design notes](DESIGN.md) · [Releases](https://github.com/mattg8892/skylapse/releases)</sub>
 
@@ -14,10 +14,12 @@ without SSHing in every night.
 
 - **Write a card, plug it in, set it up on your phone.** No terminal, no config files, no
   account, nothing in the cloud. If there is no Wi-Fi to join, the camera serves its own.
-- **Two camera families, one interface.** Raspberry Pi camera modules over CSI and ZWO
-  ASI over USB. Both are verified on real hardware — see
-  [what first contact changed](DESIGN.md#camera-drivers) for the specifics each one
-  taught us. Cameras the Pi cannot auto-detect can be declared from the setup screen.
+- **Built for Raspberry Pi camera modules**, the [HQ
+  Camera](https://www.raspberrypi.com/products/raspberry-pi-high-quality-camera/) /
+  IMX477 above all — that is the camera this is developed and tested against, and
+  boards the Pi cannot auto-detect can be declared from the setup screen. **ZWO ASI USB
+  cameras are supported second, on a best-effort basis** — see
+  [cameras](#cameras) before you buy one for this.
 - **Full-resolution JPEG every frame**, plus **DNG raw** on demand, on a schedule, or
   from a keeper button for when a meteor just went past.
 - **Auto-exposure that tracks the sky**, with day/night/twilight profiles from sun
@@ -45,7 +47,7 @@ cannot stop the others writing frames.
 | **Raspberry Pi** | Pi 5 recommended, Pi 4 works. [Pi 5](https://www.raspberrypi.com/products/raspberry-pi-5/) |
 | **Power supply** | The official 5V/5A (Pi 5) or 5V/3A (Pi 4). Underpowering a USB3 camera shows up as mysterious disconnects mid-night, not as an obvious power error. |
 | **Storage** | 64 GB+ microSD. A [high-endurance card](https://www.raspberrypi.com/documentation/computers/getting-started.html#recommended-sd-cards) if you plan to shoot RAW — see [storage](#storage-and-raw). |
-| **Camera** | A [ZWO ASI](https://www.zwoastro.com/) USB camera, **or** a Pi camera module ([HQ Camera](https://www.raspberrypi.com/products/raspberry-pi-high-quality-camera/) / IMX477-class). |
+| **Camera** | A Pi camera module — the [HQ Camera](https://www.raspberrypi.com/products/raspberry-pi-high-quality-camera/) / IMX477 is the recommended one and what this is developed against. A [ZWO ASI](https://www.zwoastro.com/) USB camera may also work; see [cameras](#cameras). |
 | **Optional** | A DS3231 RTC module (~$5) — a Pi has no battery-backed clock, so it boots with a stale time until it reaches the network. |
 
 Weatherproof housing, dew heater and lens are up to you; this is the software half.
@@ -97,27 +99,41 @@ That is the whole install. No terminal, no config files, no account, nothing in 
 > screen, pick your sensor, and it restarts with the camera declared. No terminal needed
 > for that either.
 
-### ZWO cameras: one extra step
+## Cameras
 
-Pi camera modules need nothing. ZWO's SDK cannot be redistributed in the image — their
-licence does not allow it and their download portal is browser-only — so a ZWO rig needs
-the library installed once over SSH:
+**Skylapse is a Raspberry Pi camera project first.** A Pi camera module on the CSI
+ribbon is the supported path: it needs no vendor software, everything in the SD image
+supports it end to end, and it is what every feature here is developed and tested
+against. The **HQ Camera / IMX477** is the specific one this is built around, and the
+one to buy if you are buying.
 
-```bash
-# from https://github.com/indilib/indi-3rdparty/tree/master/libasi
-#   armv8/libASICamera2.bin  -> the 64-bit Pi library
-#   99-asi.rules             -> udev rules
-sudo install -m 644 libASICamera2.bin /usr/local/lib/libASICamera2.so.1.41
-sudo ln -sf libASICamera2.so.1.41 /usr/local/lib/libASICamera2.so.1
-sudo ln -sf libASICamera2.so.1    /usr/local/lib/libASICamera2.so
-sudo ldconfig
-sudo install -m 644 99-asi.rules /etc/udev/rules.d/
-sudo udevadm control --reload-rules && sudo udevadm trigger
-sudo systemctl restart skylapse-daemon
-```
+Other Pi-compatible modules — IMX708, IMX219, IMX519, OV5647, IMX296 and the many
+third-party boards using those sensors — work through the same driver and can be
+declared from the setup screen when the Pi cannot see them by itself.
 
-Those udev rules matter for more than permissions: they raise the USB buffer limit that
-large frames need. Replug the camera afterwards, or reboot.
+### ZWO ASI cameras
+
+Second, and honestly second. If you are choosing a camera for this project, choose a Pi
+one.
+
+- **It may not work with your camera.** The driver is verified against exactly one model
+  (an ASI676MC). Other models go through code paths nobody here has run.
+- **It needs a vendor library Skylapse cannot ship.** ZWO's licence does not allow their
+  SDK to be redistributed and their download portal is browser-only, so it cannot be in
+  the image.
+- **It is not what new features are designed against.** A ZWO-only regression is likely
+  to be found by you rather than by us.
+
+You no longer need a terminal for it, though. In **Settings → Cameras** (or on the
+camera screen during setup), open **Add another camera → ZWO ASI camera (USB)**, accept
+ZWO's licence, and tap **Install ZWO support**. Skylapse downloads the library —
+about 4 MB, so the camera needs internet access at that moment — verifies it against a
+pinned checksum, installs it with the udev rules that raise the USB buffer limit large
+frames need, and restarts capture. No reboot.
+
+The binaries come from the [INDI project's
+mirror](https://github.com/indilib/indi-3rdparty/tree/master/libasi) of ZWO's SDK,
+pinned to a tagged release in `scripts/skylapse-admin`. 64-bit Raspberry Pi OS only.
 
 ## Using it
 
@@ -177,9 +193,12 @@ The topic name is the only thing protecting it — treat it as a secret.
 skylapse-daemon`. Logs are `journalctl -u skylapse-daemon -f`, which prints one line per
 captured frame.
 
-**"No camera detected" with a ZWO attached.** Confirm the SDK is installed
-(`ldconfig -p | grep ASICamera`) and that the camera appears in `lsusb`. A camera that
-enumerates but fails to capture is usually power — use the official supply.
+**"No camera detected" with a ZWO attached.** First check Settings → Cameras says ZWO
+support is installed; if it doesn't, install it there. If it does and the camera is still
+missing, it is power or the model: a USB3 camera on a non-official supply enumerates
+intermittently or not at all, and models other than the ASI676MC are not verified and may
+simply not open. From a terminal, `lsusb` shows whether the camera is on the bus at all
+and `journalctl -u skylapse-daemon` says how far the open got.
 
 **A Pi camera module doesn't enumerate.** Check `rpicam-hello --list-cameras`. If it says
 `No cameras available!`:
@@ -246,7 +265,7 @@ first contact.
 ## Status
 
 Working and verified on hardware, most of it the hard way: the flashable image, first-run
-setup on a phone, capture, both camera drivers, auto-exposure, white balance, hot-pixel
+setup on a phone, capture, auto-exposure, white balance, hot-pixel
 correction, DNG, timelapses, the nights browser, focus assist, USB export, phone alerts,
 an optional password, self-updating with rollback, and the Wi-Fi fallback and
 access-point mode — including the guard that refuses to drop the access point while a
@@ -261,9 +280,9 @@ Not there yet:
 
 - **No captive portal.** Joining the camera's own network works, but you have to type
   `10.42.0.1` yourself — it will not pop up a sign-in page the way a hotel network does.
-- **ZWO needs one terminal step.** Their SDK cannot legally be redistributed inside the
-  image, so a ZWO rig is the one setup that is not entirely SSH-free. Pi camera modules
-  need nothing.
+- **ZWO support is best effort.** It is verified on one model, its SDK has to be
+  downloaded on demand because it cannot be redistributed, and it may not work with your
+  camera at all. Pi camera modules are the supported path — see [cameras](#cameras).
 - **No white balance for mono sensors**, and no colour management beyond the per-camera
   multipliers.
 

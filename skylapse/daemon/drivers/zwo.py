@@ -33,16 +33,29 @@ _POLL_INTERVAL_S = 0.01
 _CAPTURE_TIMEOUT_MARGIN_S = 15.0
 
 
-def _load_sdk():
-    import zwoasi
+def sdk_path() -> str:
+    """Where the vendor library is, or "" if it has not been installed.
+
+    Public because the API's "install ZWO support" button needs to answer the
+    same question this driver does, and two independent notions of "is the SDK
+    here" would eventually disagree — with the settings screen offering to
+    install something already present, or claiming a working rig has nothing.
+    """
     for path in _SDK_PATHS:
         if path and os.path.exists(path):
-            try:
-                zwoasi.init(path)
-                return zwoasi
-            except zwoasi.ZWO_Error:
-                # Already initialised is fine; re-raise anything else.
-                return zwoasi
+            return path
+    return ""
+
+
+def _load_sdk():
+    import zwoasi
+    path = sdk_path()
+    if path:
+        try:
+            zwoasi.init(path)
+        except zwoasi.ZWO_Error:
+            pass                # already initialised is fine
+        return zwoasi
     raise CameraError("ZWO SDK library not found (set ZWO_ASI_LIB)")
 
 
