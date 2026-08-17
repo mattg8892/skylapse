@@ -473,6 +473,13 @@ class NetwatchService:
         no way in.
         """
         _run("rfkill", "unblock", "wifi")
+        # NetworkManager keeps its own software radio switch, persisted in
+        # /var/lib/NetworkManager/NetworkManager.state — and Raspberry Pi OS
+        # Lite ships it *off*. Measured on the first SD image: rfkill clear,
+        # regulatory domain set, and wlan0 still "unavailable", so the hotspot
+        # profile had no device to bind to and NM fell back to eth0 with
+        # "mismatching interface name". Two minutes of confusion for one line.
+        _nmcli("radio", "wifi", "on")
 
         current = ""
         for line in _iw("reg", "get").splitlines():
@@ -510,7 +517,17 @@ class NetwatchService:
         if not self._radio_ready():
             return                        # _radio_ready has said why
         password = self._ensure_hotspot_profile(iface)
-        _nmcli("con", "up", self.hotspot_ssid)
+        result = _nmcli_result("con", "up", self.hotspot_ssid, timeout=60)
+        if result.returncode != 0 or not self._in_ap_mode():
+            # It used to log success unconditionally, immediately below a
+            # warning saying the activation had failed. Two lines apart, in the
+            # same journal, contradicting each other — which is how "no access
+            # point" read as "netwatch thinks it has one" for an entire
+            # debugging session.
+            log.error("Hotspot %s did NOT come up: %s", self.hotspot_ssid,
+                      (result.stderr or result.stdout or "").strip()[:200]
+                      or "activation reported success but the radio is not an AP")
+            return
         log.info("Hotspot %s up on %s (%s)", self.hotspot_ssid, iface,
                  "password protected" if password else "open")
 

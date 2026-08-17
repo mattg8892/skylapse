@@ -267,9 +267,11 @@ function Network({ draft, patch, setError }) {
       </div>
 
       <div className="mt-4 space-y-2">
-        <Choice checked={mode === 'auto'} label="Use this Wi-Fi network"
-          detail="The camera joins your network, and falls back to its own if
-                  yours ever disappears."
+        <Choice checked={mode === 'auto'}
+          label={online ? `Stay on ${net.ssid}` : 'Connect to a Wi-Fi network'}
+          detail={online
+            ? 'The camera keeps using this network, and falls back to its own if yours ever disappears.'
+            : 'Pick your network below. The camera falls back to its own if yours ever disappears.'}
           onSelect={() => patch({ network: { mode: 'auto' } })} />
         <Choice checked={mode === 'standalone'} label="Don’t use Wi-Fi at all"
           detail="The camera always serves its own network and never looks for
@@ -281,26 +283,38 @@ function Network({ draft, patch, setError }) {
         <div className="mt-4 space-y-2">
           <p className="rounded-lg bg-amber-950 p-3 text-sm text-amber-300">
             {online
-              ? `When you finish setup, the camera will leave ${net.ssid || 'your network'}
-                 and serve its own. To reach it again, join
+              ? `When you finish setup, the camera will leave ${net.ssid} and
+                 serve its own. To reach it again, join
                  ${net.hotspot_ssid || 'Skylapse-Setup'} from your Wi-Fi settings
                  and open http://10.42.0.1`
-              : `The camera will serve its own network,
-                 ${net?.hotspot_ssid || 'Skylapse-Setup'}, and never look for yours.`}
+              : `The camera keeps serving
+                 ${net?.hotspot_ssid || 'Skylapse-Setup'} and never looks for
+                 yours. You stay right where you are.`}
           </p>
           <p className="text-sm text-zinc-500">
             Capture, storage, RAW and the timelapse all work exactly the same
             with no network. You can switch to Wi-Fi later in Settings.
           </p>
         </div>
-      ) : !expanded ? (
-        <button onClick={() => setExpanded(true)}
-          className="mt-4 text-sm text-sky-400 underline">
-          Use a different network
-        </button>
+      ) : online ? (
+        // Already on a network: the list is a detour, so it stays behind a link.
+        !expanded ? (
+          <button onClick={() => setExpanded(true)}
+            className="mt-4 text-sm text-sky-400 underline">
+            Use a different network
+          </button>
+        ) : (
+          <div className="mt-4"><JoinNetwork onJoined={() => setError('')} /></div>
+        )
       ) : (
+        // Not on a network — which is the whole reason someone is reading this
+        // over the camera's own access point. The list of networks IS the
+        // screen; hiding it behind "use a different network" asks them to go
+        // looking for the one thing they came here to do.
         <div className="mt-4">
-          <JoinNetwork onJoined={() => setError('')} />
+          <p className="mb-2 text-sm text-zinc-400">Choose your network:</p>
+          <JoinNetwork warnAboutDisconnect={net?.access_point}
+            onJoined={() => setError('')} />
         </div>
       )}
     </>

@@ -133,6 +133,22 @@ SKYLAPSE_IMAGE_BUILD=1 SKYLAPSE_USER=$SKYLAPSE_USER $INSTALL_DIR/install.sh
 # could never update itself.
 git config --system --add safe.directory $INSTALL_DIR
 
+# Raspberry Pi OS Lite ships with NetworkManager's software radio switch OFF,
+# persisted here. Left alone, wlan0 comes up "unavailable" on a fresh card: the
+# hotspot profile has no device to bind to, NM falls back to eth0, and a camera
+# with no Wi-Fi has no way in at all. netwatch also turns it on at runtime, but
+# an image should not need to be corrected on its first boot.
+install -d /var/lib/NetworkManager
+if [ -f /var/lib/NetworkManager/NetworkManager.state ]; then
+    sed -i 's/^WirelessEnabled=.*/WirelessEnabled=true/'         /var/lib/NetworkManager/NetworkManager.state
+else
+    printf '[main]
+NetworkingEnabled=true
+WirelessEnabled=true
+WWANEnabled=true
+'         > /var/lib/NetworkManager/NetworkManager.state
+fi
+
 # The promised address is skylapse.local. Imager can override the hostname, but
 # somebody who flashes the image and clicks straight past customisation should
 # still land where the documentation says they will.

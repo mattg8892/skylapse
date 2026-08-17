@@ -458,3 +458,44 @@ def test_the_helper_reports_whether_the_tool_ran(monkeypatch):
     monkeypatch.setattr(svc.subprocess, "run",
                         lambda *a, **kw: (_ for _ in ()).throw(FileNotFoundError()))
     assert svc._run("rfkill", "unblock", "wifi") is False
+
+
+def test_a_failed_hotspot_is_reported_as_failed(monkeypatch, caplog):
+    """It used to log "Hotspot up" unconditionally, two lines below a warning
+    saying the activation had failed — contradicting itself in the same
+    journal. That is how "no access point at all" read as "netwatch believes it
+    has one" for a whole debugging session."""
+    import logging
+
+    clock, radio = FakeClock(), FakeRadio(FakeClock())
+    radio.clock = clock
+    service = _service(monkeypatch, radio, clock)
+
+    # The radio refuses to become an access point, as it does when
+    # NetworkManager's software switch is off.
+    monkeypatch.setattr(service, "_in_ap_mode", lambda: False)
+    with caplog.at_level(logging.INFO):
+        service._start_hotspot()
+
+    assert not any("up on" in r.message for r in caplog.records), \
+        "claimed the hotspot came up"
+    assert any(r.levelno >= logging.ERROR for r in caplog.records), \
+        "a hotspot that did not start must be an error, not silence"
+
+
+def test_the_software_radio_switch_is_turned_on(monkeypatch):
+    """Raspberry Pi OS Lite ships NetworkManager's own wireless switch off,
+    persisted in its state file. rfkill is clear and the regulatory domain is
+    fine, and wlan0 is still unavailable — so the hotspot profile binds to
+    nothing and NM falls back to eth0."""
+    clock, radio = FakeClock(), FakeRadio(FakeClock())
+    radio.clock = clock
+    service = _service(monkeypatch, radio, clock)
+
+    seen = []
+    original = radio.nmcli
+    radio.nmcli = lambda *a, **kw: (seen.append(" ".join(a)), original(*a, **kw))[1]
+
+    service._radio_ready()
+    assert any("radio wifi on" in cmd for cmd in seen), \
+        f"never enabled the radio: {seen}"
