@@ -1,7 +1,7 @@
 [project]
 name = "skylapse"
 version = "0.3.0"
-description = "Open-source allsky camera software for Raspberry Pi — Pi camera modules first, ZWO best-effort, JPEG+DNG, zero-code setup"
+description = "Timelapse software for capturing the entire night sky, every night — Raspberry Pi cameras first, ZWO best-effort, JPEG+DNG, zero-code setup"
 readme = "README.md"
 license = { text = "MIT" }
 requires-python = ">=3.11"

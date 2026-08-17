@@ -1,7 +1,8 @@
 # Skylapse — Design Document
 
-Open-source allsky camera software for Raspberry Pi. Built to replace config-file-driven
-setups with something anyone can install, point at the sky, and manage from a phone.
+Open-source timelapse software for capturing the entire night sky, every night, on a
+Raspberry Pi. Built to replace config-file-driven setups with something anyone can
+install, point at the sky, and manage from a phone.
 
 ## Goals
 

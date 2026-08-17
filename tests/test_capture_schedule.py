@@ -2,7 +2,7 @@
 
 The twilight cases are the ones worth pinning. Twilight uses the night profile
 and is when the interesting sky starts, so treating it as day would cut off
-exactly what an allsky camera is set up to catch.
+exactly what a night-sky camera is set up to catch.
 """
 from __future__ import annotations
 

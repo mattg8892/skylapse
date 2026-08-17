@@ -1,8 +1,8 @@
 # Skylapse
 
-**Allsky camera software for the Raspberry Pi.** Point a camera at the sky, and manage
-the whole thing from your phone — live view, focus assist, timelapses, and RAW files,
-without SSHing in every night.
+**Timelapse software for capturing the entire night sky, every night.** Point a Raspberry
+Pi camera straight up and run the whole thing from your phone — live view, focus assist,
+timelapses and RAW files, with no terminal in sight.
 
 <sub>[Getting started](#getting-started) · [Cameras](#cameras) · [Using it](#using-it) ·
 [Troubleshooting](#troubleshooting) · [Development](#development) ·

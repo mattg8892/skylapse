@@ -38,11 +38,11 @@ def profile_for(cfg: Config, cam: CameraEntry,
 def should_capture(cam: CameraEntry, current_period: str) -> bool:
     """Whether the capture schedule allows a frame right now.
 
-    `night_only` skips daylight for allsky rigs whose owners do not want a
-    day's worth of blue-sky frames filling the card. Twilight still captures:
-    it is when the interesting sky starts, and it already uses the night
-    profile, so treating it as day would cut off exactly the part people set an
-    allsky camera up for.
+    `night_only` skips daylight for rigs whose owners do not want a day's worth
+    of blue-sky frames filling the card. Twilight still captures: it is when the
+    interesting sky starts, and it already uses the night profile, so treating
+    it as day would cut off exactly the part people point a camera at the sky
+    for.
     """
     if cam.capture_schedule != "night_only":
         return True
