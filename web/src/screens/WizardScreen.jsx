@@ -467,15 +467,7 @@ function NotDetected() {
     setState(r?.ok ? 'rebooting' : 'failed')
   }
 
-  if (state === 'rebooting') {
-    return (
-      <p className="rounded-lg bg-sky-950 p-3 text-sm text-sky-300">
-        Restarting to load the camera driver. This page comes back on its own
-        in a minute or two — if you are on the camera’s own network, rejoin it
-        when it reappears.
-      </p>
-    )
-  }
+  if (state === 'rebooting') return <WaitingForReboot sensor={sensor} />
 
   if (!open) {
     return (
@@ -496,6 +488,10 @@ function NotDetected() {
       <Select label="Sensor" value={sensor} onChange={setSensor}
         options={sensors.length ? sensors
           : [{ value: 'imx477', label: 'HQ Camera / IMX477' }]} />
+      <p className="rounded-lg bg-zinc-800/60 p-3 text-xs text-zinc-400">
+        The camera restarts to load the driver, so your phone will drop off its
+        Wi-Fi for a minute. Don’t close this page — it picks up on its own.
+      </p>
       <Button tone="accent" className="w-full" disabled={state === 'working'}
         onClick={enable}>
         {state === 'working' ? 'Saving…' : 'Enable and restart'}
@@ -509,6 +505,92 @@ function NotDetected() {
         Harmless to get wrong — pick another and try again. The original
         configuration is kept as config.txt.skylapse-backup.
       </p>
+    </div>
+  )
+}
+
+
+/**
+ * The screen you stare at while the camera restarts.
+ *
+ * Reported from the rig: "you just kinda get thrown around on an offline copy
+ * of the page and can't tell if it's working." Which is exactly right — the
+ * reboot takes the access point down with it, so the page loses its network
+ * mid-action and has nothing to say.
+ *
+ * The tab's JavaScript keeps running through all of that, though, as long as
+ * nobody reloads. So this keeps quietly retrying, says plainly what is
+ * happening and what to do about the dropped Wi-Fi, and moves on by itself the
+ * moment the camera answers again. The one instruction that matters is "do not
+ * reload" — a reload during the outage is what produces the blank cached page.
+ */
+function WaitingForReboot({ sensor }) {
+  const [seconds, setSeconds] = useState(0)
+  const [found, setFound] = useState(null)
+
+  useEffect(() => {
+    const tick = setInterval(() => setSeconds((s) => s + 1), 1000)
+    const poll = setInterval(async () => {
+      // no-store, because the whole failure mode here is a cached answer from
+      // before the reboot looking like a live one.
+      const r = await fetch('/api/setup/camera', { cache: 'no-store' })
+        .catch(() => null)
+      if (!r?.ok) return
+      const info = await r.json().catch(() => null)
+      if (info?.detected || info?.cameras?.length) {
+        setFound(info.cameras?.[0]?.label || info.detected)
+        clearInterval(poll)
+        clearInterval(tick)
+      }
+    }, 3000)
+    return () => { clearInterval(poll); clearInterval(tick) }
+  }, [])
+
+  if (found) {
+    return (
+      <div className="rounded-xl border border-emerald-800 bg-emerald-950 p-4">
+        <p className="text-emerald-300">Camera found: {found}</p>
+        <p className="mt-2 text-sm text-zinc-400">
+          Take a test shot below to make sure it is really working, not just
+          detected.
+        </p>
+      </div>
+    )
+  }
+
+  // Past about two minutes a Pi has either come back or is not going to, and
+  // continuing to show a hopeful spinner would be its own kind of lie.
+  const slow = seconds > 130
+  return (
+    <div className="rounded-xl border border-zinc-800 bg-zinc-900 p-4">
+      <div className="flex items-center gap-3">
+        <span className="h-4 w-4 shrink-0 animate-spin rounded-full
+                         border-2 border-sky-500 border-t-transparent" />
+        <p className="text-sky-300">
+          Restarting with {sensor} enabled… {seconds}s
+        </p>
+      </div>
+
+      <ol className="mt-4 space-y-2 text-sm text-zinc-400">
+        <li>
+          <b className="text-zinc-300">Don’t reload this page.</b> It is still
+          working, and reloading now is what shows you a blank one.
+        </li>
+        <li>
+          Your phone will drop off the camera’s Wi-Fi while it restarts.
+          <b className="text-zinc-300"> Rejoin it</b> when it comes back and
+          this page carries on by itself.
+        </li>
+        <li>Usually about a minute. Nothing you answered is lost.</li>
+      </ol>
+
+      {slow && (
+        <p className="mt-4 rounded-lg bg-amber-950 p-3 text-sm text-amber-300">
+          Taking longer than usual. Check your phone is back on the camera’s
+          network — and if it is, reload this page: setup resumes where you left
+          off, because your answers are kept on the camera rather than here.
+        </p>
+      )}
     </div>
   )
 }
