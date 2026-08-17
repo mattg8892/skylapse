@@ -192,6 +192,11 @@ export function DeclareSensor() {
       <p className="rounded-lg bg-zinc-800/60 p-3 text-xs text-zinc-400">
         The camera restarts to load the driver, so your phone will drop off its
         Wi-Fi for a minute. Don’t close this page — it picks up on its own.
+        <b className="mt-1 block text-zinc-300">
+          Have the power lead handy.
+        </b>
+        On most boards the restart is not enough on its own and you will need to
+        pull the power once — the next screen says when.
       </p>
       <Button tone="accent" className="w-full" disabled={state === 'working'}
         onClick={enable}>
@@ -374,9 +379,19 @@ export function WaitingForReboot({ sensor }) {
     )
   }
 
+  // Reported from the rig, reproducibly: declaring a sensor and restarting is
+  // not enough on its own — the camera appears only after the power is pulled.
+  // Which follows, since a warm reboot never drains the sensor's regulator, so
+  // the module comes back up in exactly the dead state it went down in.
+  //
+  // So this is not filed under troubleshooting. It is the next step of the
+  // procedure, shown once the restart has plainly not done it by itself, and
+  // not before — because on boards where the reboot *is* enough, telling
+  // someone to go and unplug their camera would be wrong.
+  const coldStart = seconds > 45
   // Past about two minutes a Pi has either come back or is not going to, and
   // continuing to show a hopeful spinner would be its own kind of lie.
-  const slow = seconds > 130
+  const slow = seconds > 150
   return (
     <div className="rounded-xl border border-zinc-800 bg-zinc-900 p-4">
       <div className="flex items-center gap-3">
@@ -400,11 +415,32 @@ export function WaitingForReboot({ sensor }) {
         <li>Usually about a minute. Nothing you answered is lost.</li>
       </ol>
 
+      {coldStart && (
+        <div className="mt-4 rounded-lg border border-sky-800 bg-sky-950 p-3">
+          <p className="text-sm text-sky-200">
+            <b className="text-sky-100">Now pull the power for 15 seconds</b>,
+            then plug it back in.
+          </p>
+          <p className="mt-2 text-xs text-sky-200/80">
+            This is normal and it is usually the step that works. Restarting
+            applies the setting, but it does not cut power to the sensor, and
+            most camera boards will not come up until it has actually been off.
+            Unplug at the wall or at the Pi — either is fine.
+          </p>
+          <p className="mt-2 text-xs text-sky-200/80">
+            Leave this page open while you do it. It keeps checking, and moves
+            on by itself the moment the camera answers.
+          </p>
+        </div>
+      )}
+
       {slow && (
         <p className="mt-4 rounded-lg bg-amber-950 p-3 text-sm text-amber-300">
-          Taking longer than usual. Check your phone is back on the camera’s
-          network — and if it is, reload this page. Nothing is lost either way:
-          anything you answered is kept on the camera, not here.
+          Still nothing. If you have already power-cycled it, check your phone is
+          back on the camera’s network, then reload this page — nothing is lost
+          either way, since your answers are kept on the camera rather than here.
+          A camera that never appears after a cold start is usually the ribbon
+          cable, or the wrong sensor picked, and both are safe to try again.
         </p>
       )}
     </div>

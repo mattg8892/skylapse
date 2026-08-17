@@ -96,9 +96,15 @@ That is the whole install. No terminal, no config files, no account, nothing in 
 
 > **If it says "No camera detected"**, that is usually not a fault. Raspberry Pi OS
 > identifies cameras by reading a chip that many third-party boards — including most
-> HQ/IMX477 clones — simply do not have. Tap **"My camera isn't being detected"** on that
-> screen, pick your sensor, and it restarts with the camera declared. No terminal needed
-> for that either.
+> HQ/IMX477 clones — simply do not have. In **Settings → Cameras**, open
+> **"My camera isn't being detected"**, pick your sensor, and tap **Enable and restart**.
+> No terminal needed.
+>
+> **Then pull the power for 15 seconds and plug it back in.** This is the step people
+> miss. Restarting applies the setting, but it does not cut power to the sensor, and most
+> camera boards will not come up until it has genuinely been off — on this project's own
+> hardware the declare-restart-*power cycle* sequence works every time, and stopping after
+> the restart does not. The page tells you when, and picks up by itself afterwards.
 
 ## Cameras
 
