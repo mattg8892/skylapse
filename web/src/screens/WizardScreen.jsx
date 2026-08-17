@@ -12,7 +12,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Button, Card, Select, Toggle } from '../components/ui.jsx'
 import JoinNetwork from '../components/JoinNetwork.jsx'
-import { CameraPanel, useCameras } from '../components/camera.jsx'
 import {
   canContinue, canGoBack, formatCoords, nextStep, prevStep, resolveLocation,
   startsWhen, STEPS, stepIndex,
@@ -193,7 +192,7 @@ function Welcome() {
     <>
       <p className="text-sm uppercase tracking-widest text-sky-400">Skylapse</p>
       <Heading title="Let’s point this at the sky.">
-        Six short questions. You can change any of it later.
+        Five short questions. You can change any of it later.
       </Heading>
       {cameraTime && (
         <p className="mt-6 text-sm text-zinc-500">
@@ -344,37 +343,14 @@ function Choice({ checked, label, detail, onSelect }) {
 }
 
 
-/* -- 4. camera ------------------------------------------------------------- */
-
-/**
- * Detection, a test shot, and the two ways to add a camera the Pi cannot see.
- *
- * All of it lives in components/camera.jsx, because the settings screen offers
- * exactly the same things to an installed camera — before that it had no
- * reliable way to add one at all, just plug it in and hope the daemon noticed.
- * The only difference here is that the choice goes into the wizard's draft
- * rather than straight to config.
- */
-function Camera({ draft, patch }) {
-  const [info, refresh] = useCameras()
-  const found = (info?.cameras?.length ?? 0) > 0 || info?.detected
-
-  return (
-    <>
-      <Heading title="Camera">
-        {found ? 'Here’s what Skylapse can see.' : 'No camera detected yet.'}
-      </Heading>
-      <div className="mt-6">
-        <CameraPanel info={info} refresh={refresh}
-          selected={draft.camera?.camera_id}
-          onSelect={(camera_id) => patch({ camera: { camera_id } })} />
-      </div>
-    </>
-  )
-}
+/* Camera setup used to be step 4. It is Settings → Cameras now: the same
+   component, doing the same work, in the place you have to go anyway the first
+   time a camera is replaced or added — and not in the middle of first-run
+   setup, where declaring an undetectable sensor means rebooting the Pi out from
+   under the phone that is halfway through the wizard. */
 
 
-/* -- 5. location ----------------------------------------------------------- */
+/* -- 4. location ----------------------------------------------------------- */
 
 function Location({ draft, patch }) {
   const [derived, setDerived] = useState(null)
@@ -500,7 +476,7 @@ function Location({ draft, patch }) {
   )
 }
 
-/* -- 6. capture defaults --------------------------------------------------- */
+/* -- 5. capture defaults --------------------------------------------------- */
 
 function Capture({ draft, patch }) {
   const capture = draft.capture ?? {}
@@ -538,7 +514,7 @@ function Capture({ draft, patch }) {
   )
 }
 
-/* -- 7. security ----------------------------------------------------------- */
+/* -- 6. security ----------------------------------------------------------- */
 
 function Security({ draft, patch }) {
   const security = draft.security ?? {}
@@ -587,7 +563,7 @@ function Security({ draft, patch }) {
   )
 }
 
-/* -- 8. notifications ------------------------------------------------------ */
+/* -- 7. notifications ------------------------------------------------------ */
 
 function Notifications({ draft, patch }) {
   const [topic, setTopic] = useState(null)
@@ -650,7 +626,7 @@ function Notifications({ draft, patch }) {
   )
 }
 
-/* -- 9. done --------------------------------------------------------------- */
+/* -- 8. done --------------------------------------------------------------- */
 
 function Done({ draft }) {
   const [status, setStatus] = useState(null)
@@ -661,7 +637,7 @@ function Done({ draft }) {
   }, [])
 
   const rows = [
-    ['Camera', summary.camera || '—'],
+    ['Camera', summary.camera || 'Not detected yet'],
     ['Location', formatCoords(summary.latitude, summary.longitude) || '—'],
     ['Schedule', summary.schedule === 'night_only' ? 'Night only' : '24/7'],
     ['RAW', summary.raw_mode === 'every_frame' ? 'Every frame' : 'Keepers only'],
@@ -684,6 +660,18 @@ function Done({ draft }) {
           and open http://10.42.0.1
         </p>
       )}
+
+      {/* Setup no longer walks you through the camera, so this is where someone
+          whose camera was never detected finds that out — and it has to say
+          what to do about it rather than leaving a dash in a table. */}
+      {!summary.camera && (
+        <p className="mt-4 rounded-lg bg-amber-950 p-3 text-sm text-amber-300">
+          No camera has been detected yet. That is often not a fault — many
+          third-party boards can’t be auto-detected and just need to be named.
+          Open <b>Settings → Cameras</b> to sort it out; everything else is set
+          up and waiting.
+        </p>
+      )}
       <Card className="mt-6">
         <dl className="divide-y divide-zinc-800">
           {rows.map(([label, value]) => (
@@ -701,7 +689,6 @@ function Done({ draft }) {
 const SCREENS = {
   welcome: Welcome,
   network: Network,
-  camera: Camera,
   location: Location,
   capture: Capture,
   security: Security,

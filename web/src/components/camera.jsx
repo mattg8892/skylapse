@@ -99,12 +99,14 @@ export function CameraPanel({ selected, onSelect, info, refresh }) {
         <div className="space-y-3 text-sm text-zinc-400">
           <p>No camera detected. Worth checking, in this order:</p>
           <ul className="list-disc space-y-2 pl-5">
+            <li><b>Pull the power for 15 seconds.</b> Not a reboot — a full cold
+              start, plug out. A warm reboot does not drain the sensor’s
+              regulator and some modules only come up after one. This is first
+              because it is the cheapest thing to try and, on this project’s own
+              hardware, the thing that turned out to be wrong twice.</li>
             <li><b>Ribbon cable:</b> contacts the right way round at
               <i> both</i> ends. It is easy to get right at one and wrong at the
               other.</li>
-            <li><b>Pull the power for 15 seconds.</b> Not a reboot — a full cold
-              start. Some modules only come up after one, and this is the step
-              most often mistaken for a broken cable.</li>
             <li><b>USB camera:</b> seated firmly, and on the official power
               supply. Underpowering a USB3 camera looks like a missing camera.</li>
           </ul>

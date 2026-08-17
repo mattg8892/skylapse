@@ -52,7 +52,38 @@ def test_the_draft_seeds_from_current_config(configured):
     """Re-entry shows what the camera is set to, never a blank form."""
     draft = configured.get("/api/setup/draft").json()["draft"]
     assert draft["location"]["latitude"] == 42.73
-    assert draft["camera"]["camera_id"] == "picam-imx477"
+    assert draft["network"]["mode"] == "auto"
+
+
+def test_the_wizard_does_not_ask_about_the_camera(fresh):
+    """Camera setup is Settings → Cameras. It does everything the step did, it
+    is where you go anyway when a camera is replaced, and declaring a sensor the
+    Pi cannot auto-detect reboots the Pi — which is not a thing to do to
+    somebody halfway through first-run setup."""
+    steps = fresh.get("/api/setup/draft").json()["steps"]
+    assert "camera" not in steps
+
+
+def test_the_capture_answers_reach_the_detected_camera(fresh, tmp_path):
+    """Regression, and it predates moving the step out: the old camera screen
+    only wrote camera_id when there was more than one camera to choose between,
+    so on a fresh single-camera card it stayed empty and this whole screen was
+    silently discarded — with the summary then reporting defaults nobody chose.
+    """
+    cfg = config.load()
+    cfg.camera("picam-imx477").label = "Pi Camera"      # what the daemon does
+    config.save(cfg)
+
+    fresh.patch("/api/setup/draft",
+                json={"capture": {"schedule": "night_only",
+                                  "raw_mode": "every_frame"}})
+    summary = fresh.post("/api/setup/complete", json={}).json()["summary"]
+    assert summary["schedule"] == "night_only"
+    assert summary["raw_mode"] == "every_frame"
+
+    saved = config.load()
+    assert saved.active_camera == "picam-imx477"
+    assert saved.cameras["picam-imx477"].capture_schedule == "night_only"
 
 
 def test_a_screen_only_writes_its_own_section(fresh):

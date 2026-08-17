@@ -3,8 +3,13 @@
 // no internet, a phone that never answers — can be asserted instead of
 // stumbled into on someone's first five minutes with the product.
 
+// Camera setup is deliberately not here. It lives in Settings → Cameras, which
+// does everything this screen did and more, and which is where you end up
+// anyway the first time a camera is unplugged, replaced or added to. A wizard
+// step that can reboot the Pi halfway through first-run setup is also the worst
+// possible place to discover a camera the Pi cannot auto-detect.
 export const STEPS = [
-  'welcome', 'network', 'camera', 'location', 'capture',
+  'welcome', 'network', 'location', 'capture',
   'security', 'notifications', 'done',
 ]
 

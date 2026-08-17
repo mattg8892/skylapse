@@ -25,7 +25,10 @@ DRAFT_NAME = "setup_draft.json"
 
 # Screens, in order. The wizard is one question per screen and the server keeps
 # the list so that "which step am I on" survives a reload.
-STEPS = ("welcome", "network", "camera", "location", "capture",
+# Camera setup is deliberately not a step — see web/src/lib/wizard.js. It lives
+# in Settings → Cameras, which does everything the step did and is where you end
+# up anyway the first time a camera is added or replaced.
+STEPS = ("welcome", "network", "location", "capture",
          "security", "notifications", "done")
 
 
@@ -64,7 +67,6 @@ def seed_from_config(cfg: config.Config) -> dict:
                      "timezone": cfg.location.timezone,
                      "source": ""},
         "network": {"mode": cfg.network.mode, "country": cfg.network.country},
-        "camera": {"camera_id": cfg.active_camera},
         "capture": {"schedule": "always", "raw_mode": "off"},
         "security": {"password": "", "public_live_view": False},
         "notifications": {"enabled": cfg.notifications.enabled},
@@ -126,7 +128,19 @@ def apply_draft(draft: dict, cfg: config.Config) -> config.Config:
     if len(country) == 2 and country.isalpha():
         updated.network.country = country
 
-    camera_id = (draft.get("camera") or {}).get("camera_id") or ""
+    # Which camera the capture answers belong to. The draft key survives from
+    # when choosing a camera was a wizard step, and is still honoured if an old
+    # draft carries one — but the answer normally comes from what the daemon has
+    # actually seen by now.
+    #
+    # This also fixes something that predates moving the step out: the old
+    # screen only wrote camera_id when there was more than one camera to choose
+    # between, so on a fresh single-camera card it stayed empty — and the whole
+    # "what should it capture?" screen was silently discarded, with the summary
+    # then reporting the defaults it had not chosen.
+    camera_id = ((draft.get("camera") or {}).get("camera_id")
+                 or updated.active_camera
+                 or next(iter(updated.cameras), ""))
     if camera_id:
         updated.active_camera = camera_id
 

@@ -207,10 +207,12 @@ and `journalctl -u skylapse-daemon` says how far the open got.
 **A Pi camera module doesn't enumerate.** Check `rpicam-hello --list-cameras`. If it says
 `No cameras available!`:
 
-1. Reseat the ribbon at both ends, contacts the right way round.
-2. **Fully power off** — pull the plug for 15 seconds. A warm reboot does not drain the
-   sensor's regulator, and some modules only come up after a cold start. This one is easy
-   to mistake for a broken cable.
+1. **Fully power off** — pull the plug for 15 seconds. A warm reboot does not drain the
+   sensor's regulator, and some modules only come up after a cold start. This is first
+   because it is the cheapest thing to try and, on this project's own hardware, it was
+   twice the answer to a camera that looked broken — including once immediately after
+   writing a fresh card.
+2. Reseat the ribbon at both ends, contacts the right way round.
 3. If it still fails, `sudo dmesg | grep imx477` tells you which: no lines at all means
    the overlay isn't loading; `failed to read chip id` means the sensor isn't answering,
    which is then genuinely a cable or module fault.
