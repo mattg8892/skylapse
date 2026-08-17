@@ -629,7 +629,15 @@ accounts.
 - Implementation: FastAPI session middleware + login screen + Settings card. Must land
   **before** the setup wizard so the wizard integrates it.
 
-## Remote access (optional, wizard-driven) — IMPLEMENTED (skylapse/remote.py, settings card)
+## Remote access (optional) — WRITTEN, NOT WORKING (skylapse/remote.py)
+
+**Status as of 2026-08-17: parked, and the settings card says "coming soon".** It has now
+been rewritten once and failed on hardware twice. The code and the endpoints stay; what is
+switched off is offering it to someone as though it works. Marking it implemented when it
+had never run on a camera is what let it sit broken for weeks, so it does not get that
+label again until a real rig completes the flow.
+
+
 
 Tailscale wrapped so the user never touches a terminal. Settings card "Enable remote
 access": Skylapse runs `tailscale up`, renders the returned login URL as a QR code;
@@ -643,7 +651,10 @@ free tier, user's own account, nothing operated by the project.
 ### What using it on the rig changed (2026-08-17)
 
 The card had been marked implemented since it was written, and it had never worked on a
-camera. Three separate faults, and the first is the one worth remembering:
+camera. Three separate faults were found and fixed — and it *still* did not work when it
+was tried on the rig afterwards, which is why it is parked rather than shipped. Whoever
+picks this up starts by reproducing that failure, not by re-reading this list: everything
+below was verified only in tests.
 
 1. **Nothing ever installed Tailscale.** Not `install.sh`, not the SD image. So the card
    correctly reported "Tailscale isn't installed on this device" on every flashed

@@ -35,10 +35,6 @@ timelapses and RAW files, with no terminal in sight.
 - **Falls back to its own Wi-Fi** if your network disappears, so a camera you cannot
   reach is still a camera you can walk up to — and an **access-point mode** you can
   switch on by hand when you are standing at it.
-- **Optional remote access** through your own free [Tailscale](https://tailscale.com)
-  account — installed and signed in from the settings page, with a QR code to scan. The
-  camera is never exposed to the open internet, and nothing runs on our servers because
-  there are none.
 - **In-app updates** with automatic rollback if the new version doesn't come up healthy.
 
 Capture, the web UI, and networking are three separate services, so a problem in one
@@ -286,6 +282,11 @@ Not there yet:
 
 - **No captive portal.** Joining the camera's own network works, but you have to type
   `10.42.0.1` yourself — it will not pop up a sign-in page the way a hotel network does.
+- **No remote access yet.** Viewing the camera from outside your own network — over
+  [Tailscale](https://tailscale.com), your account, nothing hosted by us — is written and
+  does not work on real hardware yet. The settings card says so rather than offering a
+  button that fails. On your own network everything works today, and the camera has never
+  needed the internet to run.
 - **ZWO support is best effort.** It is verified on one model, its SDK has to be
   downloaded on demand because it cannot be redistributed, and it may not work with your
   camera at all. Pi camera modules are the supported path — see [cameras](#cameras).
