@@ -1,6 +1,6 @@
 [project]
 name = "skylapse"
-version = "0.1.0"
+version = "0.2.0"
 description = "Open-source allsky camera software for Raspberry Pi — ZWO and Pi cameras, JPEG+DNG, zero-code setup"
 readme = "README.md"
 license = { text = "MIT" }

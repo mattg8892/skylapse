@@ -12,10 +12,12 @@ without SSHing in every night.
 
 ## What it does
 
-- **Two camera families, one interface.** ZWO ASI over USB and Raspberry Pi camera
-  modules over CSI. Both are verified on real hardware — see
+- **Write a card, plug it in, set it up on your phone.** No terminal, no config files, no
+  account, nothing in the cloud. If there is no Wi-Fi to join, the camera serves its own.
+- **Two camera families, one interface.** Raspberry Pi camera modules over CSI and ZWO
+  ASI over USB. Both are verified on real hardware — see
   [what first contact changed](DESIGN.md#camera-drivers) for the specifics each one
-  taught us.
+  taught us. Cameras the Pi cannot auto-detect can be declared from the setup screen.
 - **Full-resolution JPEG every frame**, plus **DNG raw** on demand, on a schedule, or
   from a keeper button for when a meteor just went past.
 - **Auto-exposure that tracks the sky**, with day/night/twilight profiles from sun
@@ -70,15 +72,30 @@ takes a minute or two longer than later ones.
 
 ### 2. Open it
 
+**If you entered Wi-Fi details**, the camera joins your network:
+
 ```
 http://skylapse.local
 ```
 
-Setup runs on the first visit: network, camera with a live test shot, where the camera is,
-what to capture, and optionally a password. A couple of minutes on a phone, and every
-answer can be changed later in Settings.
+**If you didn't**, the camera serves its own network instead. Join **`Skylapse-Setup`**
+from your phone's Wi-Fi settings — it is open, no password — and go to:
+
+```
+http://10.42.0.1
+```
+
+Either way, setup runs on the first visit: network, camera with a live test shot, where
+the camera is, what to capture, and optionally a password. A couple of minutes on a
+phone, and every answer can be changed later in Settings.
 
 That is the whole install. No terminal, no config files, no account, nothing in the cloud.
+
+> **If it says "No camera detected"**, that is usually not a fault. Raspberry Pi OS
+> identifies cameras by reading a chip that many third-party boards — including most
+> HQ/IMX477 clones — simply do not have. Tap **"My camera isn't being detected"** on that
+> screen, pick your sensor, and it restarts with the camera declared. No terminal needed
+> for that either.
 
 ### ZWO cameras: one extra step
 
@@ -228,20 +245,27 @@ first contact.
 
 ## Status
 
-Working and verified on hardware: capture, both camera drivers, auto-exposure, hot-pixel
+Working and verified on hardware, most of it the hard way: the flashable image, first-run
+setup on a phone, capture, both camera drivers, auto-exposure, white balance, hot-pixel
 correction, DNG, timelapses, the nights browser, focus assist, USB export, phone alerts,
-self-updating with rollback, and the Wi-Fi fallback and access-point mode — including the
-guard that refuses to drop the access point while a phone is connected to it, which was
-tested with a real phone because there is no other way to test it.
+an optional password, self-updating with rollback, and the Wi-Fi fallback and
+access-point mode — including the guard that refuses to drop the access point while a
+phone is connected to it, which was tested with a real phone because there is no other
+way to test it.
+
+The whole path in this README — write a card, power it up, join the camera's own Wi-Fi,
+finish setup on a phone, and have it capturing — has been done end to end on a Pi 5 with
+an IMX477, with no terminal at any point.
 
 Not there yet:
 
-- **No setup wizard.** Configuration is the Settings screen, and location has to be
-  entered by hand. The access-point fallback works, but the first-boot flow that would
-  let you hand the camera your Wi-Fi password through it is designed and not built —
-  "Connect to a new network" on that screen is inert. Set Wi-Fi up in Pi Imager instead.
-- **No access control.** Anyone on your network can reach the interface. Specified in
-  [DESIGN.md](DESIGN.md), not yet built — don't port-forward it.
+- **No captive portal.** Joining the camera's own network works, but you have to type
+  `10.42.0.1` yourself — it will not pop up a sign-in page the way a hotel network does.
+- **ZWO needs one terminal step.** Their SDK cannot legally be redistributed inside the
+  image, so a ZWO rig is the one setup that is not entirely SSH-free. Pi camera modules
+  need nothing.
+- **No white balance for mono sensors**, and no colour management beyond the per-camera
+  multipliers.
 
 Issues and pull requests welcome.
 
