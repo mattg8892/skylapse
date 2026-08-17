@@ -429,11 +429,90 @@ function Camera({ draft, patch }) {
               most often mistaken for a broken cable.</li>
           </ul>
           <Button onClick={refresh} className="w-full">Scan again</Button>
+          <NotDetected />
         </div>
       )}
     </>
   )
 }
+
+/**
+ * Declare a sensor by hand when auto-detection cannot see it.
+ *
+ * Raspberry Pi OS detects cameras by reading an EEPROM, and third-party boards
+ * — the very common HQ/IMX477 clones among them — do not carry one. On a stock
+ * image such a camera is simply invisible, and the only fix was editing
+ * /boot/firmware/config.txt over SSH: the exact thing an appliance image exists
+ * to avoid. Measured on this project's own hardware, which is how it was found.
+ */
+function NotDetected() {
+  const [open, setOpen] = useState(false)
+  const [sensors, setSensors] = useState([])
+  const [sensor, setSensor] = useState('imx477')
+  const [state, setState] = useState('')
+
+  useEffect(() => {
+    if (!open) return
+    fetch('/api/setup/camera/sensors').then((r) => r.json())
+      .then((b) => setSensors(b.sensors ?? [])).catch(() => {})
+  }, [open])
+
+  const enable = async () => {
+    setState('working')
+    const r = await fetch('/api/setup/camera/overlay', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sensor }),
+    }).catch(() => null)
+    setState(r?.ok ? 'rebooting' : 'failed')
+  }
+
+  if (state === 'rebooting') {
+    return (
+      <p className="rounded-lg bg-sky-950 p-3 text-sm text-sky-300">
+        Restarting to load the camera driver. This page comes back on its own
+        in a minute or two — if you are on the camera’s own network, rejoin it
+        when it reappears.
+      </p>
+    )
+  }
+
+  if (!open) {
+    return (
+      <button onClick={() => setOpen(true)}
+        className="w-full text-sm text-sky-400 underline">
+        My camera isn’t being detected
+      </button>
+    )
+  }
+
+  return (
+    <div className="space-y-3 rounded-xl border border-zinc-800 bg-zinc-900 p-4">
+      <p className="text-sm text-zinc-400">
+        Some cameras — most third-party HQ/IMX477 boards among them — can’t be
+        detected automatically, because that relies on a chip they don’t carry.
+        Pick yours and Skylapse will tell the Pi about it directly.
+      </p>
+      <Select label="Sensor" value={sensor} onChange={setSensor}
+        options={sensors.length ? sensors
+          : [{ value: 'imx477', label: 'HQ Camera / IMX477' }]} />
+      <Button tone="accent" className="w-full" disabled={state === 'working'}
+        onClick={enable}>
+        {state === 'working' ? 'Saving…' : 'Enable and restart'}
+      </Button>
+      {state === 'failed' && (
+        <p className="text-sm text-red-400">
+          Couldn’t write the boot configuration.
+        </p>
+      )}
+      <p className="text-xs text-zinc-500">
+        Harmless to get wrong — pick another and try again. The original
+        configuration is kept as config.txt.skylapse-backup.
+      </p>
+    </div>
+  )
+}
+
 
 /* -- 5. location ----------------------------------------------------------- */
 

@@ -188,6 +188,55 @@ def setup_camera() -> dict:
     }
 
 
+# Sensors whose overlays ship with Raspberry Pi OS, in the order someone is
+# likely to own one. Mirrors the closed list in scripts/skylapse-admin, which
+# is the one that actually enforces it — this is only what the UI offers.
+CAMERA_SENSORS = [
+    ("imx477", "HQ Camera / IMX477 (incl. Arducam)"),
+    ("imx708", "Camera Module 3 / IMX708"),
+    ("imx219", "Camera Module 2 / IMX219"),
+    ("ov5647", "Camera Module 1 / OV5647"),
+    ("imx519", "Arducam 16MP / IMX519"),
+    ("imx296", "Global Shutter / IMX296"),
+]
+
+
+@app.get("/api/setup/camera/sensors")
+def setup_camera_sensors() -> dict:
+    return {"sensors": [{"value": v, "label": l} for v, l in CAMERA_SENSORS]}
+
+
+class CameraOverlay(BaseModel):
+    sensor: str
+
+
+@app.post("/api/setup/camera/overlay")
+def setup_camera_overlay(body: CameraOverlay) -> dict:
+    """Declare a sensor in the boot config, then reboot.
+
+    Auto-detect reads an EEPROM that third-party boards do not carry, so a
+    perfectly good HQ-clone camera is simply invisible on a stock image — and
+    the only fix was editing /boot/firmware/config.txt over SSH, which is the
+    exact thing an appliance image exists to avoid.
+
+    Both ports are declared, because which connector a camera is in is not
+    something anyone should have to know. The empty port fails its probe
+    harmlessly; that is what a working rig's log looks like.
+    """
+    if body.sensor not in {v for v, _ in CAMERA_SENSORS}:
+        raise HTTPException(400, f"unknown sensor {body.sensor!r}")
+    helper = str(Path(__file__).resolve().parents[2] / "scripts" / "skylapse-admin")
+    result = subprocess.run(["sudo", "-n", helper, "camera-overlay", body.sensor],
+                            capture_output=True, text=True, timeout=30)
+    if result.returncode != 0:
+        raise HTTPException(500, f"could not write the boot config: "
+                                 f"{(result.stderr or result.stdout).strip()[:200]}")
+    subprocess.run(["sudo", "-n", helper, "reboot"],
+                   capture_output=True, text=True, timeout=30)
+    return {"ok": True, "sensor": body.sensor,
+            "note": "rebooting; the camera is checked again on the way back up"}
+
+
 @app.get("/api/setup/camera/shot")
 def setup_camera_shot() -> Response:
     shot = config.RUN_DIR / "setup_shot.jpg"

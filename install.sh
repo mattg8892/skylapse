@@ -120,6 +120,23 @@ else
 fi
 as_user npm --prefix "$ROOT/web" run build
 
+echo "==> privileged helper"
+# The service user needs root for exactly three things: writing a camera
+# overlay into the boot config, restarting its own units after an update, and
+# rebooting. One script, a closed argument list, one sudoers file — rather than
+# a wildcard rule, which would be root with extra steps. Validated before
+# installing, because a malformed sudoers file locks everyone out of sudo.
+chmod 755 "$ROOT/scripts/skylapse-admin"
+sed -e "s|@SKYLAPSE_ROOT@|$ROOT|g" -e "s|@SKYLAPSE_USER@|$RUN_USER|g" \
+    "$ROOT/systemd/skylapse.sudoers" > /tmp/skylapse.sudoers
+if visudo -cqf /tmp/skylapse.sudoers; then
+    install -m 440 -o root -g root /tmp/skylapse.sudoers /etc/sudoers.d/skylapse
+else
+    echo "    refusing to install a malformed sudoers file"
+    exit 1
+fi
+rm -f /tmp/skylapse.sudoers
+
 echo "==> systemd units"
 for unit in skylapse-daemon skylapse-api skylapse-netwatch; do
     sed -e "s|@SKYLAPSE_ROOT@|$ROOT|g" -e "s|@SKYLAPSE_USER@|$RUN_USER|g" \

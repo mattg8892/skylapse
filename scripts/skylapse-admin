@@ -1,0 +1,66 @@
+#!/usr/bin/env bash
+# The one privileged thing Skylapse is allowed to do to its own host.
+#
+# The services run unprivileged. A few operations genuinely need root — editing
+# /boot/firmware/config.txt to enable a camera overlay, restarting units, and
+# rebooting — and the alternative to this script is a sudoers rule with a
+# wildcard, which is just root with extra steps.
+#
+# So: one entry in /etc/sudoers.d/skylapse pointing here, no wildcards, and
+# every argument validated below rather than by sudo's pattern matching.
+set -euo pipefail
+
+# Overridable so the tests can exercise the real script against a real file
+# instead of a reimplementation of it. This writes to a root-owned boot config;
+# a bug here costs a card that will not come back up.
+CONFIG="${SKYLAPSE_CONFIG_TXT:-/boot/firmware/config.txt}"
+[ -f "$CONFIG" ] || CONFIG=/boot/config.txt          # pre-Bookworm layout
+
+# Sensors whose overlays ship with Raspberry Pi OS. A closed list, because this
+# value reaches a root-owned boot file: anything not named here is refused
+# rather than written and discovered at the next boot, when the camera is on a
+# pole and the only feedback is that it did not come back.
+SENSORS="imx477 imx708 imx219 imx296 imx519 ov5647 ov9281 imx290 imx378"
+
+usage() { echo "usage: skylapse-admin {camera-overlay <sensor>|reboot}" >&2; exit 2; }
+
+case "${1:-}" in
+  camera-overlay)
+    sensor="${2:-}"
+    [ -n "$sensor" ] || usage
+    # shellcheck disable=SC2086
+    case " $SENSORS " in
+        *" $sensor "*) ;;
+        *) echo "unknown sensor: $sensor" >&2; exit 3 ;;
+    esac
+
+    cp -n "$CONFIG" "$CONFIG.skylapse-backup" 2>/dev/null || true
+
+    # Auto-detect reads an EEPROM that third-party boards do not have, and it
+    # takes precedence over an explicit overlay, so it has to go off for a
+    # declared sensor to bind at all.
+    if grep -q '^camera_auto_detect=' "$CONFIG"; then
+        sed -i 's/^camera_auto_detect=.*/camera_auto_detect=0/' "$CONFIG"
+    else
+        printf '\ncamera_auto_detect=0\n' >> "$CONFIG"
+    fi
+
+    # Both ports. Which connector a camera is in is not something anyone should
+    # have to know, and the port without one fails its probe harmlessly — that
+    # is exactly what a working rig's log looks like.
+    for port in cam0 cam1; do
+        line="dtoverlay=$sensor,$port"
+        grep -qxF "$line" "$CONFIG" || printf '%s\n' "$line" >> "$CONFIG"
+    done
+    echo "enabled $sensor on cam0 and cam1"
+    ;;
+
+  reboot)
+    # Detached, so the caller can answer the HTTP request it is still holding
+    # before the machine goes down under it.
+    systemd-run --collect --quiet --on-active=2s /sbin/reboot
+    echo "rebooting"
+    ;;
+
+  *) usage ;;
+esac

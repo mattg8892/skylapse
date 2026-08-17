@@ -1,0 +1,14 @@
+# Installed to /etc/sudoers.d/skylapse by install.sh.
+#
+# The services run unprivileged; three operations genuinely need root, and they
+# all go through one script with a closed argument list rather than a sudoers
+# wildcard, which would be root with extra steps.
+#
+# systemctl/systemd-run are here because the in-app updater restarts the units
+# it has just updated. Without this the updater fails at `sudo -n` on any
+# install whose service user is not a sudoer — which is every SD image, since
+# the image runs as a dedicated system account with no login and no sudo.
+@SKYLAPSE_USER@ ALL=(root) NOPASSWD: @SKYLAPSE_ROOT@/scripts/skylapse-admin
+@SKYLAPSE_USER@ ALL=(root) NOPASSWD: /usr/bin/systemctl restart skylapse-daemon skylapse-api skylapse-netwatch
+@SKYLAPSE_USER@ ALL=(root) NOPASSWD: /usr/bin/systemctl restart skylapse-daemon
+@SKYLAPSE_USER@ ALL=(root) NOPASSWD: /usr/bin/systemd-run --collect --quiet --unit=skylapse-update *
