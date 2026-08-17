@@ -1,16 +1,23 @@
 # Installed to /etc/sudoers.d/skylapse by install.sh.
 #
-# The services run unprivileged; a few operations genuinely need root — writing
-# a camera overlay into the boot config, installing the ZWO SDK into
-# /usr/local/lib, restarting units and rebooting — and they all go through one
-# script with a closed argument list rather than a sudoers wildcard, which would
-# be root with extra steps.
+# The services run unprivileged. Several operations genuinely need root —
+# writing a camera overlay into the boot config, installing the ZWO SDK or
+# Tailscale, launching the updater outside the API's cgroup, restarting units,
+# rebooting — and every one of them goes through a single script with a closed
+# list of verbs.
 #
-# systemctl/systemd-run are here because the in-app updater restarts the units
-# it has just updated. Without this the updater fails at `sudo -n` on any
-# install whose service user is not a sudoer — which is every SD image, since
-# the image runs as a dedicated system account with no login and no sudo.
+# ONE ENTRY, ON PURPOSE. There used to be three more, spelling out the exact
+# argument lists for systemd-run and systemctl. Both had drifted from the
+# commands the code actually built — the systemd-run rule expected
+# --unit=skylapse-update where the real command had --uid= and
+# --working-directory= first, and the systemctl rule named three units where the
+# updater restarts two. Neither matched, so `sudo -n` failed with "a password is
+# required", and the in-app updater could not be started from the web UI on any
+# install. Nothing caught it because the contract lived half in a Python list
+# and half in a sudoers pattern, where no test on either side could see both.
+#
+# So: sudo authorises the script, and the script owns its own arguments. Adding
+# a flag to a command can no longer break sudo, and every argument that reaches
+# root is validated in one place — scripts/skylapse-admin — rather than by
+# sudo's pattern matching.
 @SKYLAPSE_USER@ ALL=(root) NOPASSWD: @SKYLAPSE_ROOT@/scripts/skylapse-admin
-@SKYLAPSE_USER@ ALL=(root) NOPASSWD: /usr/bin/systemctl restart skylapse-daemon skylapse-api skylapse-netwatch
-@SKYLAPSE_USER@ ALL=(root) NOPASSWD: /usr/bin/systemctl restart skylapse-daemon
-@SKYLAPSE_USER@ ALL=(root) NOPASSWD: /usr/bin/systemd-run --collect --quiet --unit=skylapse-update *

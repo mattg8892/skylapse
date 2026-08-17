@@ -20,7 +20,6 @@ Two things shape the implementation:
 """
 from __future__ import annotations
 
-import getpass
 import json
 import logging
 import shutil
@@ -176,23 +175,35 @@ def _set_status(**fields) -> None:
 
 # -- applying ---------------------------------------------------------------
 
+def helper() -> str:
+    """The one privileged helper, which sudo is configured to allow."""
+    return str(repo_root() / "scripts" / "skylapse-admin")
+
+
 def _worker_command(target_ref: str, apply_now: bool) -> list[str]:
     """How to launch the worker so it survives restarting skylapse-api.
 
     start_new_session alone is not enough: a child of the API inherits its
     systemd cgroup, and stopping that unit kills everything in it — including
     the updater, mid-flight. systemd-run puts the worker in its own transient
-    unit, outside that cgroup. --uid keeps it running as the service user so
-    the checkout does not end up owned by root.
+    unit, outside that cgroup.
+
+    The systemd-run invocation lives in skylapse-admin rather than here, and
+    that is the whole fix for a bug that made this feature unusable: the
+    sudoers rule spelled out the expected argument list, this function built a
+    different one, so `sudo -n` matched no rule and failed with "a password is
+    required" on every install. Arguments assembled here and matched there is a
+    contract that no test on either side can see — so now sudo authorises the
+    script, and the script owns the arguments.
     """
+    if shutil.which("systemd-run") and Path(helper()).exists():
+        cmd = ["sudo", "-n", helper(), "update", target_ref]
+        if apply_now:
+            cmd.append("--now")
+        return cmd
     inner = [sys.executable, "-m", "skylapse.updater", "apply", target_ref]
     if apply_now:
         inner.append("--now")
-    if shutil.which("systemd-run"):
-        return ["sudo", "-n", "systemd-run", "--collect", "--quiet",
-                f"--uid={getpass.getuser()}",
-                f"--working-directory={repo_root()}",
-                "--unit=skylapse-update", *inner]
     return inner
 
 
@@ -239,7 +250,14 @@ def service_start_id(unit: str) -> str:
 
 
 def _restart_services() -> bool:
-    result = _run(["sudo", "-n", "systemctl", "restart", *SERVICES], timeout=120)
+    """Through the helper, for the same reason as the launch.
+
+    The old sudoers rule named three units; this restarts two, so it matched
+    nothing and failed with a password prompt. The updater then did exactly what
+    it should with a failed restart — rolled the update back — which made a
+    sudoers typo look like a bad build.
+    """
+    result = _run(["sudo", "-n", helper(), "restart-services"], timeout=120)
     if result.returncode != 0:
         log.error("Service restart failed (%s): %s",
                   result.returncode, (result.stderr or "").strip())
@@ -310,7 +328,11 @@ def _wait_healthy(since: float, deadline_s: int = HEALTH_TIMEOUT_S,
 
 def _build(changed: set[str]) -> None:
     """Reinstall and rebuild only what actually changed — a pip install and an
-    npm build are minutes on a Pi, and most updates touch neither."""
+    npm build are minutes on a Pi, and most updates touch neither.
+
+    Called on rollback too, with the same set, so whatever this does forward it
+    also undoes backward.
+    """
     root = repo_root()
     if any(p == "pyproject.toml" for p in changed):
         _set_status(state="running", message="Installing Python dependencies")
@@ -319,6 +341,19 @@ def _build(changed: set[str]) -> None:
     if any(p.startswith("web/") for p in changed):
         _set_status(state="running", message="Building the web interface")
         _run(["npm", "--prefix", str(root / "web"), "run", "build"], timeout=1800)
+    if any(p.startswith("systemd/") or p.startswith("scripts/") for p in changed):
+        # Nothing used to apply these, so a unit file or a sudoers change simply
+        # did not reach any rig that updated rather than reflashed. That is how
+        # a sudoers rule that had drifted from the code stayed broken through
+        # three releases — and why it could not be fixed by an update.
+        _set_status(state="running", message="Updating system services")
+        result = _run(["sudo", "-n", helper(), "reinstall-units"], timeout=120)
+        if result.returncode != 0:
+            # Not fatal on its own: the health check is what decides, and it is
+            # better to carry on to the restart and let that judge than to
+            # abandon an update over a step most builds do not need.
+            log.warning("Could not reinstall units: %s",
+                        (result.stderr or "").strip())
 
 
 def apply(target_ref: str, apply_now: bool = False) -> dict:

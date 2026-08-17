@@ -6,6 +6,7 @@ stops capturing, so the rollback path is exercised here rather than trusted.
 from __future__ import annotations
 
 import json
+import os
 
 import pytest
 
@@ -304,14 +305,34 @@ def test_failed_restart_command_rolls_back(tmp_path, monkeypatch):
     assert checkouts == ["v9.9.9", "priorsha"]
 
 
-def test_worker_escapes_the_api_cgroup(monkeypatch):
-    """Regression: a plain child of skylapse-api is killed when that unit
-    restarts, which is the one thing the updater must do."""
+def test_worker_launches_through_the_privileged_helper(monkeypatch):
+    """The launch goes through the one script sudo authorises.
+
+    It used to build its own `sudo systemd-run …` line, matched against a
+    sudoers rule that spelled the arguments out. They had drifted, so sudo
+    matched no rule and the updater failed with "a password is required" on
+    every install — the whole feature, unusable from the web UI.
+    """
     monkeypatch.setattr(updater.shutil, "which", lambda name: "/usr/bin/systemd-run")
     cmd = updater._worker_command("v0.2.0", apply_now=True)
-    assert cmd[0] == "sudo" and "systemd-run" in cmd
-    assert any(a.startswith("--uid=") for a in cmd), "would run the checkout as root"
-    assert cmd[-1] == "--now" and "v0.2.0" in cmd
+    assert cmd[:2] == ["sudo", "-n"]
+    assert cmd[2].endswith("skylapse-admin"), \
+        "sudo authorises the helper, not an argument list that can drift"
+    assert cmd[3] == "update" and "v0.2.0" in cmd and cmd[-1] == "--now"
+
+
+def test_restart_goes_through_the_helper_too(monkeypatch):
+    """The other half of the same bug: the sudoers rule named three units and
+    this restarts two, so the restart failed and the update rolled itself back
+    over a typo in a pattern."""
+    seen = []
+    monkeypatch.setattr(updater, "_run", lambda cmd, timeout=300, cwd=None:
+                        seen.append(cmd) or
+                        type("R", (), {"returncode": 0, "stderr": "", "stdout": ""})())
+    assert updater._restart_services() is True
+    assert seen[0][:2] == ["sudo", "-n"]
+    assert seen[0][2].endswith("skylapse-admin")
+    assert seen[0][3] == "restart-services"
 
 
 def test_worker_falls_back_without_systemd_run(monkeypatch):
@@ -337,3 +358,92 @@ def test_build_only_runs_what_changed(tmp_path, monkeypatch):
     ran.clear()
     updater._build({"web/src/App.jsx"})
     assert ran == ["npm"]
+
+
+# -- the privileged helper ---------------------------------------------------
+#
+# The launch is split across a Python function and a shell script, and the last
+# time a contract like that was split across two files it silently broke the
+# whole feature. These cover the shell half.
+
+import shutil as _shutil                                          # noqa: E402
+import subprocess as _subprocess                                  # noqa: E402
+from pathlib import Path as _Path                                 # noqa: E402
+
+ADMIN = _Path(__file__).resolve().parents[1] / "scripts" / "skylapse-admin"
+BASH = _shutil.which("bash")
+
+
+def _admin(*args, **env):
+    return _subprocess.run([BASH, str(ADMIN), *args], capture_output=True,
+                           text=True, env={**os.environ, "SKYLAPSE_PRINT_ONLY": "1",
+                                           **env})
+
+
+@pytest.mark.skipif(not BASH, reason="needs bash")
+class TestTheLaunchCommand:
+    def test_it_runs_the_worker_as_the_service_user_outside_the_cgroup(self):
+        """--uid or the checkout ends up owned by root; a transient unit or the
+        worker dies with the API it was launched from."""
+        out = _admin("update", "v0.3.2", "--now", SUDO_USER="skylapse").stdout
+        assert "systemd-run" in out
+        assert "--uid=skylapse" in out
+        assert "--unit=skylapse-update" in out
+        assert out.rstrip().endswith("apply v0.3.2 --now")
+
+    def test_a_deferred_update_is_not_told_to_apply_now(self):
+        out = _admin("update", "v0.3.2", SUDO_USER="skylapse").stdout
+        assert out.rstrip().endswith("apply v0.3.2")
+
+    def test_a_ref_that_could_be_an_option_is_refused(self):
+        """This reaches git as root. An argument that starts with a dash is not
+        a version, it is a flag someone hopes we will pass through."""
+        result = _admin("update", "--upload-pack=evil", SUDO_USER="skylapse")
+        assert result.returncode == 3
+        assert "unsafe ref" in result.stderr
+
+    def test_a_ref_with_shell_characters_is_refused(self):
+        result = _admin("update", "v1.0;reboot", SUDO_USER="skylapse")
+        assert result.returncode == 3
+
+    def test_a_missing_ref_is_refused(self):
+        assert _admin("update", SUDO_USER="skylapse").returncode == 2
+
+
+@pytest.mark.skipif(not BASH, reason="needs bash")
+def test_reinstall_units_substitutes_the_checkout_and_its_owner(tmp_path):
+    """The updater never touched /etc, so a unit or sudoers change did not
+    reach any rig that updated instead of reflashing — which is how a broken
+    sudoers rule survived three releases and could not be fixed by an update."""
+    units, sudoers = tmp_path / "units", tmp_path / "sudoers.d" / "skylapse"
+    sudoers.parent.mkdir(parents=True)
+    root = _Path(__file__).resolve().parents[1]
+
+    result = _subprocess.run(
+        [BASH, str(ADMIN), "reinstall-units"], capture_output=True, text=True,
+        env={**os.environ,
+             "SKYLAPSE_ROOT": root.as_posix(),
+             "SKYLAPSE_UNIT_DIR": units.as_posix(),
+             "SKYLAPSE_SUDOERS_PATH": sudoers.as_posix()})
+    assert result.returncode == 0, result.stderr
+
+    written = (units / "skylapse-api.service").read_text()
+    assert "@SKYLAPSE_ROOT@" not in written and "@SKYLAPSE_USER@" not in written
+    assert root.as_posix() in written
+    # And the sudoers entry, which is the one that must never be stale: it is
+    # what authorises every privileged thing the app can do.
+    assert "skylapse-admin" in sudoers.read_text()
+
+
+def test_build_reinstalls_units_when_they_change(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "RUN_DIR", tmp_path)
+    seen = []
+    monkeypatch.setattr(updater, "_run", lambda cmd, timeout=300, cwd=None:
+                        seen.append(cmd) or
+                        type("R", (), {"returncode": 0, "stderr": "", "stdout": ""})())
+
+    updater._build({"skylapse/api/main.py"})
+    assert not seen, "reinstalled units for a change that touched neither"
+
+    updater._build({"systemd/skylapse-api.service"})
+    assert any("reinstall-units" in c for c in seen)

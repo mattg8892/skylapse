@@ -17,6 +17,15 @@ set -euo pipefail
 CONFIG="${SKYLAPSE_CONFIG_TXT:-/boot/firmware/config.txt}"
 [ -f "$CONFIG" ] || CONFIG=/boot/config.txt          # pre-Bookworm layout
 
+# The checkout this script belongs to: scripts/ sits directly under it.
+SELF_DIR="$(cd "$(dirname "$0")" && pwd)"
+ROOT="${SKYLAPSE_ROOT:-$(dirname "$SELF_DIR")}"
+
+# Units the updater restarts. netwatch is deliberately not here: it owns the
+# radio, and taking Wi-Fi down underneath the phone watching the update is not
+# a thing to do for a change it can pick up at the next boot.
+SERVICES="skylapse-daemon skylapse-api"
+
 # Sensors whose overlays ship with Raspberry Pi OS. A closed list, because this
 # value reaches a root-owned boot file: anything not named here is refused
 # rather than written and discovered at the next boot, when the camera is on a
@@ -83,6 +92,7 @@ os_codename() {
 
 usage() {
     echo "usage: skylapse-admin {camera-overlay <sensor>|zwo-sdk|reboot" >&2
+    echo "                       |update <ref> [--now]|restart-services" >&2
     echo "                       |tailscale-install|tailscale-up" >&2
     echo "                       |tailscale-serve|tailscale-down|tailscale-status}" >&2
     exit 2
@@ -191,6 +201,107 @@ case "${1:-}" in
         udevadm control --reload-rules && udevadm trigger
     fi
     echo "zwo-sdk ready"
+    ;;
+
+  update)
+    # Launch the in-app updater's worker outside the API's cgroup.
+    #
+    # This used to be built in Python and run as `sudo -n systemd-run --collect
+    # --quiet --uid=… --working-directory=… --unit=skylapse-update …`, matched
+    # against a sudoers rule that spelled the arguments out. The rule listed
+    # --unit= immediately after --quiet; the command had --uid= and
+    # --working-directory= in between. So it matched nothing, sudo asked for a
+    # password, and `sudo -n` failed with "a password is required" — meaning
+    # the updater could never be started from the web UI on any install.
+    #
+    # A sudoers rule that spells out an argument list is a rule that breaks the
+    # next time anyone adds a flag, silently and only in production. Hence this:
+    # the argument list lives here, next to the thing it launches, and sudo only
+    # has to know about one script.
+    ref="${2:-}"
+    [ -n "$ref" ] || usage
+    # This becomes a git ref. Refuse anything that could be an option or a
+    # shell surprise rather than passing it through as root.
+    case "$ref" in
+        -*|*[!A-Za-z0-9._/-]*)
+            echo "unsafe ref: $ref" >&2; exit 3 ;;
+    esac
+    now=""
+    [ "${3:-}" = "--now" ] && now="--now"
+
+    # --uid so the checkout does not end up owned by root; the service user is
+    # whoever invoked sudo.
+    set -- systemd-run --collect --quiet \
+        --uid="${SUDO_USER:-$(id -un)}" \
+        --working-directory="$ROOT" \
+        --unit=skylapse-update \
+        "$ROOT/venv/bin/python" -m skylapse.updater apply "$ref" $now
+    if [ -n "${SKYLAPSE_PRINT_ONLY:-}" ]; then
+        echo "$@"                       # for the tests; never set in service
+        exit 0
+    fi
+    exec "$@"
+    ;;
+
+  reinstall-units)
+    # Re-apply the systemd units and the sudoers file from the checkout.
+    #
+    # The in-app updater is `git checkout` plus a pip install and an npm build.
+    # It has never touched /etc, so a change to a unit file or to this script's
+    # sudoers entry simply did not apply to any rig that updated rather than
+    # reflashed — which is exactly why the broken sudoers rule that made the
+    # updater unusable could not be fixed by the updater.
+    #
+    # Called from the updater's build step when systemd/ or scripts/ changed,
+    # and again on rollback, so the units always match the code that is checked
+    # out.
+    UNIT_DIR="${SKYLAPSE_UNIT_DIR:-/etc/systemd/system}"
+    SUDOERS_PATH="${SKYLAPSE_SUDOERS_PATH:-/etc/sudoers.d/skylapse}"
+    # The checkout's owner is the service user by construction — install.sh
+    # chowns it — and is more reliable here than SUDO_USER, which is whoever
+    # happened to invoke this.
+    user="$(stat -c %U "$ROOT" 2>/dev/null || echo "${SUDO_USER:-root}")"
+
+    tmp="$(mktemp -d)"
+    trap 'rm -rf "$tmp"' EXIT
+    sed -e "s|@SKYLAPSE_ROOT@|$ROOT|g" -e "s|@SKYLAPSE_USER@|$user|g" \
+        "$ROOT/systemd/skylapse.sudoers" > "$tmp/skylapse.sudoers"
+    # A malformed sudoers file locks everyone out of sudo, including the helper
+    # that would be needed to repair it. Validate before it goes anywhere near
+    # /etc, exactly as install.sh does.
+    if command -v visudo >/dev/null 2>&1; then
+        visudo -cqf "$tmp/skylapse.sudoers" || {
+            echo "refusing to install a malformed sudoers file" >&2; exit 7; }
+    fi
+    # Ownership only when we are actually root — which is every real
+    # invocation, since sudo is how this runs. Asking for it otherwise fails on
+    # a developer machine that has no root user, for no gain.
+    if [ "$(id -u)" -eq 0 ]; then
+        install -m 440 -o root -g root "$tmp/skylapse.sudoers" "$SUDOERS_PATH"
+    else
+        install -m 440 "$tmp/skylapse.sudoers" "$SUDOERS_PATH"
+    fi
+
+    mkdir -p "$UNIT_DIR"
+    for unit in skylapse-daemon skylapse-api skylapse-netwatch; do
+        [ -f "$ROOT/systemd/$unit.service" ] || continue
+        sed -e "s|@SKYLAPSE_ROOT@|$ROOT|g" -e "s|@SKYLAPSE_USER@|$user|g" \
+            "$ROOT/systemd/$unit.service" > "$UNIT_DIR/$unit.service"
+    done
+    if command -v systemctl >/dev/null 2>&1; then
+        systemctl daemon-reload
+    fi
+    echo "reinstalled units for $user"
+    ;;
+
+  restart-services)
+    # Same story as `update`: the sudoers rule named three units and the
+    # updater restarts two, so it matched nothing and the restart failed with a
+    # password prompt — which the updater then correctly treated as a failed
+    # update and rolled back.
+    # shellcheck disable=SC2086
+    systemctl restart $SERVICES
+    echo "restarted $SERVICES"
     ;;
 
   tailscale-install)
