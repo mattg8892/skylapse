@@ -106,6 +106,18 @@ rsync -a --delete \
     --exclude .pytest_cache/ --exclude __pycache__/ \
     "$REPO_ROOT/" "$MNT$INSTALL_DIR/"
 
+# actions/checkout writes a CI credential into .git/config as an http
+# extraheader. Copying .git wholesale therefore ships that token inside every
+# image — and because it dies with the CI job, `git fetch` on a flashed card
+# fails with "could not read Username", which silently breaks the in-app
+# updater on every camera. Strip it, and pin the remote to the public URL.
+log "Sanitising the copied git checkout"
+git -C "$MNT$INSTALL_DIR" config --unset-all http."https://github.com/".extraheader || true
+git -C "$MNT$INSTALL_DIR" config --remove-section http."https://github.com/" 2>/dev/null || true
+git -C "$MNT$INSTALL_DIR" remote set-url origin https://github.com/mattg8892/skylapse.git
+grep -qi authorization "$MNT$INSTALL_DIR/.git/config" && {
+    echo "refusing to ship a credential in the image"; exit 1; }
+
 log "Installing"
 chroot "$MNT" /bin/bash -eux <<CHROOT
 export DEBIAN_FRONTEND=noninteractive
