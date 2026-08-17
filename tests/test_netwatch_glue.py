@@ -427,3 +427,34 @@ def test_the_radio_is_unblocked_before_anything_else(monkeypatch):
                                                real_run(cmd, *a, **kw))[1])
     service._start_hotspot()
     assert "rfkill" in seen, "never unblocked the radio"
+
+
+def test_a_missing_system_tool_does_not_kill_netwatch(monkeypatch):
+    """It did, on the first SD image. iw and rfkill are not on Pi OS Lite, the
+    radio-readiness check called both, and FileNotFoundError escaped the poll
+    loop — so systemd restarted netwatch every five seconds forever.
+
+    On a camera with no Wi-Fi that means no access point and no way in at all,
+    which is the worst outcome this whole subsystem exists to prevent. Nothing
+    netwatch shells out to may be load-bearing on its own existence.
+    """
+    from skylapse.netwatch import service as svc
+
+    clock, radio = FakeClock(), FakeRadio(FakeClock())
+    radio.clock, radio.country = clock, "00"
+    service = _service(monkeypatch, radio, clock)
+
+    def nothing_installed(cmd, *a, **kw):
+        raise FileNotFoundError(f"No such file or directory: {cmd[0]!r}")
+
+    monkeypatch.setattr(svc.subprocess, "run", nothing_installed)
+    service._start_hotspot()          # must not raise
+    service._poll_events()            # nor must the loop that calls it
+
+
+def test_the_helper_reports_whether_the_tool_ran(monkeypatch):
+    from skylapse.netwatch import service as svc
+
+    monkeypatch.setattr(svc.subprocess, "run",
+                        lambda *a, **kw: (_ for _ in ()).throw(FileNotFoundError()))
+    assert svc._run("rfkill", "unblock", "wifi") is False

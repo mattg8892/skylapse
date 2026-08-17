@@ -39,8 +39,7 @@ def _nmcli(*args: str, timeout: int = 30) -> str:
     in this file was invisible: a refused hotspot and a successful one looked
     identical to the caller.
     """
-    result = subprocess.run(["nmcli", *args], capture_output=True,
-                            text=True, timeout=timeout)
+    result = _nmcli_result(*args, timeout=timeout)
     if result.returncode != 0:
         log.warning("nmcli %s failed (%d): %s", " ".join(args),
                     result.returncode, (result.stderr or "").strip())
@@ -50,8 +49,17 @@ def _nmcli(*args: str, timeout: int = 30) -> str:
 def _nmcli_result(*args: str, timeout: int = 30) -> subprocess.CompletedProcess:
     """Like _nmcli but hands back the whole result, for callers that must
     classify *why* something failed rather than just that it did."""
-    result = subprocess.run(["nmcli", *args], capture_output=True,
-                            text=True, timeout=timeout)
+    try:
+        result = subprocess.run(["nmcli", *args], capture_output=True,
+                                text=True, timeout=timeout)
+    except FileNotFoundError:
+        # Nothing netwatch shells out to may be load-bearing on its own
+        # existence: an absent tool must degrade, never take the service down.
+        log.error("nmcli is not installed; network management is unavailable")
+        return subprocess.CompletedProcess(args, 127, "", "nmcli not installed")
+    except subprocess.TimeoutExpired:
+        log.warning("nmcli %s timed out", " ".join(args))
+        return subprocess.CompletedProcess(args, 124, "", "timed out")
     if result.returncode != 0:
         log.info("nmcli %s -> %d: %s", " ".join(args), result.returncode,
                  (result.stderr or result.stdout or "").strip().splitlines()[:1])
@@ -98,6 +106,27 @@ def _iw(*args: str, timeout: int = 10) -> str:
     except Exception as exc:
         log.warning("iw %s failed: %s", " ".join(args), exc)
         return ""
+
+
+def _run(*args: str, timeout: int = 10) -> bool:
+    """Run a system tool, tolerating its absence.
+
+    A missing binary must never take the network service down with it. It did:
+    the radio-readiness check called `iw` and `rfkill`, neither of which Pi OS
+    Lite ships, and the resulting FileNotFoundError escaped the poll loop. The
+    first SD image therefore restarted netwatch every five seconds forever,
+    which on a camera with no Wi-Fi means no access point and no way in at all.
+    """
+    try:
+        subprocess.run(list(args), capture_output=True, timeout=timeout,
+                       check=False)
+        return True
+    except FileNotFoundError:
+        log.error("%s is not installed; the radio cannot be configured", args[0])
+        return False
+    except Exception as exc:
+        log.warning("%s failed: %s", " ".join(args), exc)
+        return False
 
 
 def _sd_notify(msg: str) -> None:
@@ -443,8 +472,7 @@ class NetwatchService:
         with no network is reached at all, so a camera that cannot raise it has
         no way in.
         """
-        subprocess.run(["rfkill", "unblock", "wifi"],
-                       capture_output=True, timeout=10, check=False)
+        _run("rfkill", "unblock", "wifi")
 
         current = ""
         for line in _iw("reg", "get").splitlines():
@@ -465,8 +493,7 @@ class NetwatchService:
             "transmit and the access point could not start. Falling back to "
             "%s so the camera is reachable — set the right one in Settings.",
             country)
-        subprocess.run(["iw", "reg", "set", country],
-                       capture_output=True, timeout=10, check=False)
+        _run("iw", "reg", "set", country)
         for line in _iw("reg", "get").splitlines():
             if line.startswith("country") and line.split()[1].rstrip(":") not in ("", "00"):
                 return True

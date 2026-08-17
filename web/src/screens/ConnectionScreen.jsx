@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import JoinNetwork from '../components/JoinNetwork.jsx'
 
 // Implements the flow from DESIGN.md: saved networks with reasons, three
 // actions (Try again / Connect new / Access point), "always" checkbox,
@@ -39,6 +40,7 @@ export default function ConnectionScreen({ status }) {
   const [alwaysStandalone, setAlwaysStandalone] = useState(false)
   const [synced, setSynced] = useState(false)
   const [busy, setBusy] = useState(null)
+  const [joining, setJoining] = useState(false)
 
   const authFailures = status.network?.auth_failures ?? {}
   const cameraTime = status.server_time ? new Date(status.server_time * 1000) : null
@@ -101,10 +103,9 @@ export default function ConnectionScreen({ status }) {
             className="rounded-lg border border-zinc-700 py-2.5 text-sm hover:bg-zinc-800">
             {busy === 'retry' ? 'Trying (up to 90s)…' : 'Try again'}
           </button>
-          <button disabled title="Not built yet — see the setup wizard in DESIGN.md"
-            className="rounded-lg border border-zinc-800 py-2.5 text-sm
-                       text-zinc-600 cursor-not-allowed">
-            Connect to a new network (not built yet)
+          <button onClick={() => setJoining((v) => !v)} disabled={busy}
+            className="rounded-lg border border-zinc-700 py-2.5 text-sm hover:bg-zinc-800">
+            {joining ? 'Never mind' : 'Connect to a new network'}
           </button>
           <button onClick={pickStandalone} disabled={busy}
             className="rounded-lg border-2 border-sky-600 py-2.5 text-sm hover:bg-zinc-800">
@@ -117,6 +118,12 @@ export default function ConnectionScreen({ status }) {
           </label>
           <RunSetupAgain />
         </div>
+
+        {joining && (
+          <div className="mt-4 border-t border-zinc-800 pt-4">
+            <JoinNetwork warnAboutDisconnect />
+          </div>
+        )}
       </div>
 
       {showStandalone && drift > 5 && (

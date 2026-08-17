@@ -11,6 +11,7 @@
 // lands as an addition rather than a rewrite.
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Button, Card, Select, Toggle } from '../components/ui.jsx'
+import JoinNetwork from '../components/JoinNetwork.jsx'
 import {
   canContinue, canGoBack, formatCoords, nextStep, prevStep, resolveLocation,
   startsWhen, STEPS, stepIndex,
@@ -225,35 +226,12 @@ function guessCountry() {
 
 function Network({ draft, patch, setError }) {
   const [net, setNet] = useState(null)
-  const [scan, setScan] = useState(null)
-  const [chosen, setChosen] = useState('')
-  const [password, setPassword] = useState('')
   const [expanded, setExpanded] = useState(false)
   const mode = draft.network?.mode === 'standalone' ? 'standalone' : 'auto'
 
   useEffect(() => {
     fetch('/api/network').then((r) => r.json()).then(setNet).catch(() => setNet({}))
   }, [])
-
-  const openScan = async () => {
-    setExpanded(true)
-    const r = await fetch('/api/network/scan').catch(() => null)
-    setScan(r?.ok ? await r.json() : [])
-  }
-
-  const join = async () => {
-    const r = await fetch('/api/network/join', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ssid: chosen, password }),
-    }).catch(() => null)
-    // netwatch may not be running — it is disabled on installs that have not
-    // verified it. Say so plainly rather than leaving a button that hangs.
-    setError(r?.ok
-      ? ''
-      : 'Couldn’t hand that to the network service. It may not be running on '
-        + 'this camera — you can set Wi-Fi up later in Settings.')
-  }
 
   const online = net?.state === 'connected' || net?.ssid
   return (
@@ -316,30 +294,13 @@ function Network({ draft, patch, setError }) {
           </p>
         </div>
       ) : !expanded ? (
-        <button onClick={openScan}
+        <button onClick={() => setExpanded(true)}
           className="mt-4 text-sm text-sky-400 underline">
           Use a different network
         </button>
       ) : (
-        <div className="mt-4 space-y-3">
-          {scan === null && <p className="text-sm text-zinc-500">Scanning…</p>}
-          {scan?.length === 0 && (
-            <p className="text-sm text-zinc-500">No networks found.</p>
-          )}
-          {scan?.length > 0 && (
-            <Select label="Network" value={chosen} onChange={setChosen}
-              options={[{ value: '', label: 'Choose a network…' },
-                        ...scan.map((n) => ({ value: n.ssid, label: n.ssid }))]} />
-          )}
-          {chosen && (
-            <input type="password" value={password} placeholder="Wi-Fi password"
-              onChange={(e) => setPassword(e.target.value)}
-              className="w-full rounded-lg border border-zinc-700 bg-zinc-900
-                         px-3 py-2.5 text-sm" />
-          )}
-          {chosen && (
-            <Button onClick={join} className="w-full">Join {chosen}</Button>
-          )}
+        <div className="mt-4">
+          <JoinNetwork onJoined={() => setError('')} />
         </div>
       )}
     </>

@@ -46,8 +46,12 @@ MISSING=""
 # been installed by hand months earlier, so the installer had never actually
 # been run anywhere without it, and would have failed on the first genuinely
 # fresh card.
+# iw and rfkill are what netwatch shells out to for the radio's mode and its
+# regulatory domain. network-manager brings nmcli but not those, and Pi OS Lite
+# ships neither — which on the first SD image meant netwatch could not raise
+# its access point, so a camera with no Wi-Fi could not be reached at all.
 for p in python3-venv python3-dev build-essential python3-picamera2 \
-         network-manager git ffmpeg nodejs npm; do
+         network-manager iw rfkill git ffmpeg nodejs npm; do
     dpkg -s "$p" >/dev/null 2>&1 || MISSING="$MISSING $p"
 done
 if [ -n "$MISSING" ]; then
