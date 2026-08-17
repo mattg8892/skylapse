@@ -54,13 +54,11 @@ const SCHEDULE_OPTIONS = [
 export default function SettingsScreen({ showToast, storage }) {
   const [cfg, setCfg] = useState(null)
   const [topic, setTopic] = useState(null)
-  const [remote, setRemote] = useState(null)
   const [testResult, setTestResult] = useState(null)
   const [cameraInfo, refreshCameras] = useCameras()
 
   useEffect(() => {
     fetch('/api/config').then((r) => r.json()).then(setCfg).catch(() => {})
-    fetch('/api/remote/status').then((r) => r.json()).then(setRemote).catch(() => {})
   }, [])
 
   /** PUT a partial config. Optimistic: the UI already shows the new value. */
@@ -95,15 +93,6 @@ export default function SettingsScreen({ showToast, storage }) {
     const r = await fetch('/api/notify/test', { method: 'POST' })
     const { sent } = await r.json()
     setTestResult(sent ? 'Sent — check your phone' : 'Not sent (check switch + topic)')
-  }
-
-  const enableRemote = async () => {
-    await fetch('/api/remote/enable', { method: 'POST' })
-    const id = setInterval(async () => {
-      const st = await (await fetch('/api/remote/status')).json()
-      setRemote(st)
-      if (st.connected) clearInterval(id)
-    }, 3000)
   }
 
   if (!cfg) return null
@@ -210,37 +199,149 @@ export default function SettingsScreen({ showToast, storage }) {
       <SecurityCard showToast={showToast} />
 
       {/* Remote access */}
-      <Card title="Remote access">
-        <p className="mt-1 text-sm text-zinc-400">
-          View your camera from anywhere with your own free Tailscale account.
-          Your camera is never exposed to the open internet.
-        </p>
-
-        {!remote?.installed ? (
-          <p className="mt-3 text-sm text-zinc-500">
-            Tailscale isn’t installed on this device.
-          </p>
-        ) : remote.connected ? (
-          <div className="mt-3 rounded-lg bg-emerald-950 p-3 text-sm">
-            <p className="text-emerald-300">Remote access enabled</p>
-            <a href={remote.url} className="text-sky-400 underline">{remote.url}</a>
-          </div>
-        ) : remote.auth_url ? (
-          <div className="mt-3 text-sm">
-            <p className="text-zinc-400">
-              1. Install the free Tailscale app on your phone and sign in.<br />
-              2. Scan this code to approve the camera:
-            </p>
-            <div className="mt-3 flex justify-center rounded-lg bg-zinc-800 p-4"
-              dangerouslySetInnerHTML={{ __html: remote.qr_svg }} />
-          </div>
-        ) : (
-          <Button onClick={enableRemote} className="mt-3 w-full">
-            Enable remote access
-          </Button>
-        )}
-      </Card>
+      <RemoteCard showToast={showToast} />
     </div>
+  )
+}
+
+/* -- remote access --------------------------------------------------------- */
+
+/**
+ * Tailscale, wrapped so nobody has to touch a terminal.
+ *
+ * This card used to have exactly one thing to say when Tailscale was absent —
+ * "Tailscale isn't installed on this device" — and nothing to do about it,
+ * which was both the common case (nothing ever installed it) and a dead end in
+ * a product that promises you never need a shell. Every state here carries an
+ * action or an explanation; none of them just report a fact and stop.
+ */
+function RemoteCard({ showToast }) {
+  const [remote, setRemote] = useState(null)
+  const [busy, setBusy] = useState('')
+
+  const refresh = useCallback(async () => {
+    const r = await fetch('/api/remote/status').catch(() => null)
+    if (r?.ok) setRemote(await r.json())
+  }, [])
+
+  useEffect(() => { refresh() }, [refresh])
+
+  const post = async (path, working, done) => {
+    setBusy(working)
+    const r = await fetch(path, { method: 'POST' }).catch(() => null)
+    setBusy('')
+    if (!r?.ok) {
+      const detail = await r?.json().catch(() => null)
+      showToast?.(detail?.detail || 'That didn’t work — see the card for details')
+    } else if (done) {
+      showToast?.(done)
+    }
+    refresh()
+    return !!r?.ok
+  }
+
+  // The login lives in a background process on the camera; the QR code appears
+  // when it prints one, so poll until the state settles rather than waiting on
+  // the request that started it.
+  const enable = async () => {
+    if (!await post('/api/remote/enable', 'enabling')) return
+    const id = setInterval(async () => {
+      const r = await fetch('/api/remote/status').catch(() => null)
+      if (!r?.ok) return
+      const st = await r.json()
+      setRemote(st)
+      if (st.connected || st.error) clearInterval(id)
+    }, 3000)
+    setTimeout(() => clearInterval(id), 15 * 60 * 1000)
+  }
+
+  if (!remote) return null
+
+  return (
+    <Card title="Remote access">
+      <p className="mt-1 text-sm text-zinc-400">
+        View your camera from anywhere with your own free Tailscale account.
+        Your camera is never exposed to the open internet, and Skylapse has no
+        server in the middle — the account is yours.
+      </p>
+
+      {remote.connected ? (
+        <div className="mt-3 space-y-3">
+          <div className="rounded-lg bg-emerald-950 p-3 text-sm">
+            <p className="text-emerald-300">Remote access is on</p>
+            <a href={remote.url} className="break-all text-sky-400 underline">
+              {remote.url}
+            </a>
+            <p className="mt-2 text-xs text-zinc-400">
+              Works from any device signed in to your tailnet. Real HTTPS, no
+              certificate warnings.
+            </p>
+          </div>
+          <Button tone="warn" className="w-full" disabled={!!busy}
+            onClick={() => post('/api/remote/disable', 'disabling',
+                                'Remote access turned off')}>
+            {busy === 'disabling' ? 'Turning off…' : 'Turn off remote access'}
+          </Button>
+        </div>
+      ) : remote.auth_url ? (
+        <div className="mt-3 text-sm">
+          <p className="text-zinc-400">
+            1. Install the free Tailscale app on your phone and sign in.<br />
+            2. Scan this code to approve the camera:
+          </p>
+          <div className="mt-3 flex justify-center rounded-lg bg-zinc-800 p-4"
+            dangerouslySetInnerHTML={{ __html: remote.qr_svg }} />
+          <p className="mt-2 break-all text-xs text-zinc-500">
+            Or open <a href={remote.auth_url} className="text-sky-400 underline"
+              target="_blank" rel="noreferrer">this link</a> on any device.
+          </p>
+        </div>
+      ) : !remote.installed ? (
+        <div className="mt-3 space-y-3">
+          <p className="text-sm text-zinc-400">
+            Tailscale isn’t installed on this camera yet — it isn’t part of the
+            image, because a VPN client running on every camera by default is
+            not something to opt you into.
+          </p>
+          {remote.can_install ? (
+            <>
+              <Button tone="accent" className="w-full" disabled={!!busy}
+                onClick={() => post('/api/remote/install', 'installing',
+                                    'Installed — now sign in below')}>
+                {busy === 'installing' ? 'Installing…' : 'Install Tailscale'}
+              </Button>
+              <p className="text-xs text-zinc-500">
+                Downloads from Tailscale’s own signed package repository, so the
+                camera needs internet access. Takes a minute or two, and
+                capture keeps running throughout.
+              </p>
+            </>
+          ) : (
+            <p className="text-sm text-zinc-500">
+              This install has no package manager to add it with, so it has to
+              be installed by hand.
+            </p>
+          )}
+        </div>
+      ) : (
+        <div className="mt-3 space-y-3">
+          <Button tone="accent" className="w-full" disabled={!!busy}
+            onClick={enable}>
+            {busy === 'enabling' ? 'Starting…' : 'Enable remote access'}
+          </Button>
+          <p className="text-xs text-zinc-500">
+            You’ll get a QR code to scan with the Tailscale app. Free account,
+            no card, and the camera joins only your own network of devices.
+          </p>
+        </div>
+      )}
+
+      {remote.error && (
+        <p className="mt-3 rounded-lg bg-amber-950/60 p-3 text-sm text-amber-300">
+          {remote.error}
+        </p>
+      )}
+    </Card>
   )
 }
 

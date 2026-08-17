@@ -640,6 +640,38 @@ default; requires a free Tailscale account; camera is never exposed to the open
 internet. Headscale documented as the self-hosted alternative for purists. Fits goal 0:
 free tier, user's own account, nothing operated by the project.
 
+### What using it on the rig changed (2026-08-17)
+
+The card had been marked implemented since it was written, and it had never worked on a
+camera. Three separate faults, and the first is the one worth remembering:
+
+1. **Nothing ever installed Tailscale.** Not `install.sh`, not the SD image. So the card
+   correctly reported "Tailscale isn't installed on this device" on every flashed
+   camera — and that sentence was the entire card. A dead end in a product whose claim
+   is that you never need a terminal is worse than a missing feature, because it looks
+   like a broken one. It now installs on request, from Tailscale's own signed apt
+   repository (they are not in Debian), through the same privileged helper as the ZWO
+   SDK. Unlike the SDK there is nothing to checksum-pin, and that is right rather than
+   lax: this is a signed repository, not a loose binary, and apt verifies every package
+   against the keyring from then on.
+2. **`tailscale up` needs root**, and the API deliberately does not have it. Even where
+   someone had installed Tailscale by hand, the button could only fail. All of it —
+   `up`, `serve`, `down`, and `status` where the socket is root-only — now goes through
+   `skylapse-admin`.
+3. **`enable_https_serve()` was called by nothing.** A camera that got through the login
+   would show an `https://…ts.net` address pointing at a host serving nothing on 443.
+   `serve()` now runs as soon as the login lands.
+
+Still not preinstalled in the image, on purpose: a VPN client daemon on every camera by
+default, and a third-party apt source in every image's `sources.list`, is a larger thing
+to opt someone into than a feature they can turn on in one tap. `--accept-dns=false` on
+`up`, because a camera that starts taking its resolver from a tailnet can lose its own
+network for reasons nobody standing next to it can see.
+
+The rule this leaves behind, which applies well beyond this card: **a state is not
+finished until it carries an action or an explanation.** "It isn't installed" is a fact;
+"it isn't installed, here is the button" is a feature.
+
 ## Licensing
 
 MIT. All code clean-room — no code from GPL allsky projects.

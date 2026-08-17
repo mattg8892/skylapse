@@ -35,6 +35,10 @@ timelapses and RAW files, with no terminal in sight.
 - **Falls back to its own Wi-Fi** if your network disappears, so a camera you cannot
   reach is still a camera you can walk up to — and an **access-point mode** you can
   switch on by hand when you are standing at it.
+- **Optional remote access** through your own free [Tailscale](https://tailscale.com)
+  account — installed and signed in from the settings page, with a QR code to scan. The
+  camera is never exposed to the open internet, and nothing runs on our servers because
+  there are none.
 - **In-app updates** with automatic rollback if the new version doesn't come up healthy.
 
 Capture, the web UI, and networking are three separate services, so a problem in one

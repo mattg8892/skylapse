@@ -1374,9 +1374,35 @@ def remote_status() -> dict:
     return st
 
 
+@app.post("/api/remote/install")
+def remote_install() -> dict:
+    """Install Tailscale from the vendor's signed apt repository.
+
+    Nothing installed it before — not install.sh, not the SD image — so the
+    settings card correctly reported it missing on every flashed camera and then
+    offered no way to do anything about it. Slow by nature: it holds the request
+    for the length of an apt install.
+    """
+    result = remote.install()
+    if not result.get("ok"):
+        raise HTTPException(500, result.get("error", "could not install Tailscale"))
+    return result
+
+
 @app.post("/api/remote/enable")
 def remote_enable() -> dict:
-    return remote.enable()
+    result = remote.enable()
+    if not result.get("ok"):
+        raise HTTPException(409, result.get("error", "could not start Tailscale"))
+    return result
+
+
+@app.post("/api/remote/disable")
+def remote_disable() -> dict:
+    result = remote.disable()
+    if not result.get("ok"):
+        raise HTTPException(500, result.get("error", "could not turn it off"))
+    return result
 
 
 # -- static frontend (mounted last so /api wins) -----------------------------

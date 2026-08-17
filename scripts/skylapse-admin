@@ -50,7 +50,43 @@ LIB_DIR="${SKYLAPSE_LIB_DIR:-/usr/local/lib}"
 UDEV_DIR="${SKYLAPSE_UDEV_DIR:-/etc/udev/rules.d}"
 ARCH="${SKYLAPSE_ARCH:-$(uname -m)}"
 
-usage() { echo "usage: skylapse-admin {camera-overlay <sensor>|zwo-sdk|reboot}" >&2; exit 2; }
+# -- Tailscale --------------------------------------------------------------
+#
+# Remote access is Tailscale, and Tailscale is not in Debian, so it comes from
+# the vendor's own signed apt repository — the method they document. Unlike the
+# ZWO SDK there is no checksum to pin here and that is correct rather than lax:
+# this is a repository, not a file. The keyring is fetched over TLS from the
+# vendor's domain once, and from then on apt verifies every package against it,
+# including upgrades we will never see.
+#
+# Not preinstalled in the SD image on purpose. A VPN client daemon running on
+# every camera by default, and a third-party apt source in every image's
+# sources.list, is a bigger thing to opt someone into than a feature they can
+# turn on in one tap when they want it.
+TS_KEYRING=/usr/share/keyrings/tailscale-archive-keyring.gpg
+TS_SOURCES=/etc/apt/sources.list.d/tailscale.list
+TS_BASE_URL="${SKYLAPSE_TS_BASE_URL:-https://pkgs.tailscale.com/stable/debian}"
+
+os_codename() {
+    codename="${SKYLAPSE_OS_CODENAME:-}"
+    if [ -z "$codename" ] && [ -r /etc/os-release ]; then
+        # shellcheck disable=SC1091
+        codename="$(. /etc/os-release && echo "${VERSION_CODENAME:-}")"
+    fi
+    # Reaches a URL, so it is validated rather than trusted. Anything that is
+    # not a plain release name is a system we do not know how to serve.
+    case "$codename" in
+        "" | *[!a-z0-9]*) return 1 ;;
+        *) echo "$codename" ;;
+    esac
+}
+
+usage() {
+    echo "usage: skylapse-admin {camera-overlay <sensor>|zwo-sdk|reboot" >&2
+    echo "                       |tailscale-install|tailscale-up" >&2
+    echo "                       |tailscale-serve|tailscale-down|tailscale-status}" >&2
+    exit 2
+}
 
 # Fetch one file and refuse it unless it hashes to what we expect.
 fetch_verified() {
@@ -155,6 +191,73 @@ case "${1:-}" in
         udevadm control --reload-rules && udevadm trigger
     fi
     echo "zwo-sdk ready"
+    ;;
+
+  tailscale-install)
+    if command -v tailscale >/dev/null 2>&1; then
+        echo "tailscale already installed"
+    else
+        # Validated before anything else is checked: what this resolves to
+        # decides which URL is fetched, so an unrecognised system is a refusal
+        # rather than a guess at an apt source to add to someone's camera.
+        codename="$(os_codename)" || {
+            echo "cannot identify this OS release; install tailscale manually" >&2
+            exit 4; }
+        command -v curl >/dev/null 2>&1 || { echo "curl is not installed" >&2; exit 5; }
+
+        # Staged, because a truncated keyring in place is worse than none: apt
+        # then fails every update on the system, not just this install.
+        tmp="$(mktemp -d)"
+        trap 'rm -rf "$tmp"' EXIT
+        curl -fsSL --retry 3 --connect-timeout 15 --max-time 120 \
+             -o "$tmp/keyring.gpg" "$TS_BASE_URL/$codename.noarmor.gpg" || {
+            echo "could not fetch the Tailscale signing key for $codename" >&2
+            exit 6; }
+        [ -s "$tmp/keyring.gpg" ] || { echo "empty signing key" >&2; exit 6; }
+        curl -fsSL --retry 3 --connect-timeout 15 --max-time 120 \
+             -o "$tmp/tailscale.list" "$TS_BASE_URL/$codename.tailscale-keyring.list" || {
+            echo "could not fetch the Tailscale apt source for $codename" >&2
+            exit 6; }
+        grep -q '^deb ' "$tmp/tailscale.list" || {
+            echo "apt source does not look like one" >&2; exit 6; }
+
+        install -m 0644 "$tmp/keyring.gpg" "$TS_KEYRING"
+        install -m 0644 "$tmp/tailscale.list" "$TS_SOURCES"
+
+        # Only this source: a full `apt-get update` on a camera pulls every
+        # index it has, which is slow on a Pi and is not what was asked for.
+        apt-get update -o Dir::Etc::sourcelist="$TS_SOURCES" \
+                       -o Dir::Etc::sourceparts="-" -o APT::Get::List-Cleanup="0"
+        DEBIAN_FRONTEND=noninteractive apt-get install -y tailscale
+    fi
+    # Enabled but not authenticated: the machine joins nothing until someone
+    # completes the login, which is the next verb.
+    systemctl enable --now tailscaled
+    echo "tailscale-install ready"
+    ;;
+
+  tailscale-up)
+    # Prints a login URL on stdout and then blocks until that login completes,
+    # which is why the caller streams this rather than waiting for it.
+    # --accept-dns=false: a camera that starts taking its resolver from a
+    # tailnet is a camera that can lose its own network for reasons nobody
+    # standing next to it can see.
+    exec tailscale up --accept-dns=false --hostname="$(hostname)"
+    ;;
+
+  tailscale-serve)
+    # Puts the local UI on the tailnet's HTTPS name with a real certificate.
+    # Without this the address the settings card shows resolves to a machine
+    # serving nothing on 443.
+    tailscale serve --bg 80
+    ;;
+
+  tailscale-down)
+    tailscale down
+    ;;
+
+  tailscale-status)
+    tailscale status --json
     ;;
 
   reboot)
