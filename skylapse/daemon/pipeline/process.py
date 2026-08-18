@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 from pathlib import Path
 
 import cv2
@@ -213,11 +214,41 @@ def render_wb_preview(mosaic: np.ndarray, meta: dict, wb: tuple[float, float],
     return buf.tobytes()
 
 
+def camera_zone():
+    """The timezone the camera is *in*, which is not the host's.
+
+    Raspberry Pi OS Lite ships set to Europe/London and nothing in the SD image
+    changes it, so on a camera in Wisconsin every "local" time was six hours
+    out. Noon in London is 6 AM in Racine — which is exactly where the night of
+    2026-08-17 was cut in half, 2205 frames in one folder and the dawn in
+    another. Setup already asks where the camera is and stores an IANA name;
+    this is that answer finally being used.
+
+    Falls back to the host's zone when there is no config to read (tests, and
+    the first frames of a camera that has never been set up), which is the old
+    behaviour and no worse than it was.
+    """
+    from ...config import load
+    try:
+        name = load().location.timezone
+        return ZoneInfo(name) if name else None
+    except Exception:
+        return None
+
+
+def local_time(ts: float) -> datetime:
+    """A timestamp in the camera's own local time. One definition, used by the
+    night folder and the frame name alike, so the two can never disagree."""
+    zone = camera_zone()
+    return (datetime.fromtimestamp(ts, zone) if zone
+            else datetime.fromtimestamp(ts).astimezone())
+
+
 def day_folder(ts: float, camera_id: str) -> Path:
     """images/<camera_id>/YYYY-MM-DD — camera dimension is in the path from
     day one so multi-camera rigs never need a store migration. Date rolls
-    over at local noon so one night stays in one folder."""
-    local = datetime.fromtimestamp(ts).astimezone()
+    over at the camera's local noon so one night stays in one folder."""
+    local = local_time(ts)
     if local.hour < 12:
         local -= timedelta(days=1)
     folder = IMAGE_ROOT / camera_id / local.strftime("%Y-%m-%d")
@@ -268,7 +299,7 @@ def save_jpeg(frame: Frame, camera_id: str, quality: int = 92,
                            frame.exposure_us, frame.gain, frame.sensor_temp_c)
 
     folder = day_folder(frame.timestamp, camera_id)
-    stamp = datetime.fromtimestamp(frame.timestamp).strftime("%Y%m%d_%H%M%S")
+    stamp = local_time(frame.timestamp).strftime("%Y%m%d_%H%M%S")
     path = folder / f"img_{stamp}.jpg"
     _write_jpeg(img, path, quality)
     # Thumbnail now, while the debayered array is already in memory. Generating
@@ -368,7 +399,7 @@ def save_dng(frame: Frame, camera_id: str,
              wb: tuple[float, float] = NEUTRAL_WB) -> Path:
     """Raw bayer -> DNG in the image store, beside the night's JPEGs."""
     folder = day_folder(frame.timestamp, camera_id)
-    stamp = datetime.fromtimestamp(frame.timestamp).strftime("%Y%m%d_%H%M%S")
+    stamp = local_time(frame.timestamp).strftime("%Y%m%d_%H%M%S")
     return write_dng(frame, folder / f"img_{stamp}.dng", wb)
 
 

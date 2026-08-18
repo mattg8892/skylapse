@@ -168,9 +168,19 @@ class CaptureDaemon:
             if self.last_period in ("night", "twilight") and now_period == "day":
                 log.info("Dawn: running night jobs (timelapse + cleanup)")
                 cam_root = config.IMAGE_ROOT / self.camera_id
-                latest_night = max((d for d in cam_root.iterdir() if d.is_dir()),
-                                   default=None)
-                if latest_night and cam.timelapse.auto_render:
+                # The folder frames are being written into right now, which at
+                # dawn is still the night that just ended — the rollover is at
+                # local noon, hours away. Deriving it from the same function
+                # that files the frames is what makes that true by construction.
+                #
+                # This used to be max() over the directory names, i.e. the
+                # newest folder, and on 2026-08-17 that was a folder created
+                # minutes earlier: the host clock was on London time, so the
+                # night rolled over at 6 AM local, and dawn then rendered the
+                # 25 frames that had landed since instead of the 2205 from the
+                # night. It validated, it notified, and it was 2 seconds long.
+                latest_night = process.day_folder(time.time(), self.camera_id)
+                if latest_night.exists() and cam.timelapse.auto_render:
                     log.info("Rendering timelapse for %s", latest_night.name)
                     nightjobs.render_night(latest_night, cam.timelapse)
                 nightjobs.cleanup(cam_root, self.cfg.cleanup_free_gb)
