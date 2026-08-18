@@ -354,6 +354,88 @@ Exposure fell 34% and the frame stopped being both green and too bright. A neutr
 meters exactly as it did — the luma weights sum to 1 — so mono cameras and any rig still
 at 1.0/1.0 are not re-exposed by this.
 
+## What the first real night changed (2026-08-17)
+
+The first unattended night on the rig: 2205 frames, an IMX477 behind a 180-degree
+fisheye, clear with dew arriving twice. Three things were wrong, and each had been
+wrong since it was written — they had simply never had a night to be wrong on.
+
+### The camera was keeping London's clock
+
+Raspberry Pi OS Lite ships set to `Europe/London` and nothing in the SD image changes
+it. Setup asks where the camera is and stores an IANA timezone, and nothing read it back.
+So `day_folder()` — which rolls the night at "local" noon precisely so a night is never
+split — rolled at noon in London, which is 6 AM in Racine. The night was cut in half at
+05:59, 2205 frames in `2026-08-17` and the dawn in `2026-08-18`.
+
+Fixed by using the timezone the camera is configured with, not the host's, for both the
+night folder and the frame names — one function, `local_time()`, so the two can never
+disagree again. Frame names had the same fault and would have been the clue: a frame
+called `21:49` was written at 15:49 local.
+
+The system timezone is still whatever the image shipped with. It is not worth a helper
+verb to change it — nothing else reads it — but it does mean journal timestamps run on
+London time on an unmodified card, which is worth knowing before reading logs.
+
+### Dawn rendered the wrong folder
+
+The dawn job took `max()` of the night directories: the newest name. Ordinarily the
+rollover is at noon and dawn is hours away, so the newest folder *is* the night that just
+ended and this worked by luck. With the split above, the newest folder was one created
+minutes earlier — so at dawn it rendered the 25 frames that had landed since 06:00,
+validated them correctly (all 25 were there), fired `timelapse_ready`, and produced a
+2.08-second file. The 2205-frame night was never rendered at all.
+
+The lesson is not "max() was wrong" but that the render target was being *derived
+separately* from where the frames were being written. It now asks `day_folder()` for the
+folder frames are going into right now, which at dawn is last night's, by construction.
+
+Worth stating because it was the assumption going in: **the render validation was not at
+fault, and the file was not corrupt.** It decoded cleanly, end to end, with no errors.
+Post-render frame counting did exactly its job — it verified the file contained every
+frame it had been given. It cannot know the wrong folder was handed to it.
+
+### Star counting was counting noise
+
+218,617 "stars" in an 8:15 PM twilight frame with none visible, and 248,138 on a 2:23 AM
+frame too dewed to see through. The old detector thresholded the raw Bayer mosaic at a
+fixed offset and counted every connected component.
+
+Four faults, in the order they mattered: it ran on the mosaic, whose adjacent pixels are
+different colour channels and therefore carry a built-in checkerboard; the threshold was
+a fixed number rather than relative to the frame's own noise; single pixels counted; and
+nothing rejected a shape that was obviously not a star. See `pipeline/analyze.py` — the
+constants there are the measured separation from this night, not guesses.
+
+Measured against three frames from it:
+
+| frame | before | after |
+|---|---|---|
+| 20:15 twilight, no stars visible | 215,553 | **0** |
+| 03:04 clear, best of the night | 60,264 | **748** |
+| 02:23 dew-covered | 248,138 | **2** |
+
+**The dew signature is worth keeping.** Across the night the new count rises steadily as
+the sky darkens — 248 at 21:00 to 840 at 04:30 — and craters to single digits at exactly
+02:30 and 05:00, the two dew episodes, recovering in between. That happens for a physical
+reason: dew scatters light, which lifts the measured noise floor, which raises the
+threshold, which culls the faint stars first. So **a count that craters on a night that
+was clear an hour ago is a dew alarm**, and a better one than a dedicated sensor because
+it measures the thing that actually matters — whether the sky is still visible through
+the dome. Not built; the notification hook and the dew heater are the obvious consumers.
+
+### Auto-exposure was pinned all night and never said so
+
+The night ran at 25s and gain 22 — both ceilings, on a module whose gain ceiling *is* 22
+— for hours. Every frame was as bright as the rig could make it and the target was simply
+out of reach. Nothing reported this, so the only symptom was a sky that looked darker
+than it should have, with no indication of where to look.
+
+Pinning at both ceilings for three consecutive frames now sets a status flag the
+dashboard shows and logs once per episode. Three frames because one is a cloud crossing.
+It is not an error and is not notified — it is a fact about the sky that the operator
+needs in order to decide whether to spend more exposure on it.
+
 ## Capture scheduler
 
 - Sun altitude via `astral` decides day / twilight / night profiles.
