@@ -264,6 +264,85 @@ function RenderPlan({ cameraId }) {
   )
 }
 
+
+/**
+ * What target brightness means, and whether this rig is reaching it.
+ *
+ * The setting on its own is a number between 1 and 255 with no units and no
+ * feedback, which makes it a dial nobody should be expected to turn. The
+ * measurement beside it is the whole point: on the first real night the target
+ * was 90, the sky came in around 41, and auto-exposure sat at both its ceilings
+ * for hours with nothing anywhere saying so. Showing the gap is what turns a
+ * mystery ("why is it dark?") into a decision ("this rig cannot reach 90; lower
+ * it, or get faster glass").
+ */
+function BrightnessGuide({ target, period, maxGain }) {
+  const [daemon, setDaemon] = useState(null)
+
+  useEffect(() => {
+    let live = true
+    const read = () => fetch('/api/status')
+      .then((r) => r.json())
+      .then((d) => live && setDaemon(d.daemon))
+      .catch(() => {})
+    read()
+    const id = setInterval(read, 10000)
+    return () => { live = false; clearInterval(id) }
+  }, [])
+
+  // Only meaningful against the period actually being captured: a night target
+  // means nothing next to a daylight measurement.
+  const live = daemon?.period === period ? daemon : null
+  const measured = live?.brightness
+  const short = measured != null && measured < target * 0.85
+
+  return (
+    <>
+      <p className="-mt-2 text-xs text-zinc-500">
+        The average brightness of the whole frame, 0–255, that auto-exposure
+        aims at. It lengthens the exposure to reach it, and only then raises
+        gain — so a higher target means longer exposures, fewer frames, and a
+        brighter, less natural-looking sky. A lower one gives darker frames,
+        shorter exposures and more of them.
+      </p>
+
+      {measured != null && (
+        <div className={`rounded-lg p-3 text-xs ${short
+          ? 'border border-amber-700/60 bg-amber-950/40 text-amber-200/90'
+          : 'bg-zinc-800/60 text-zinc-400'}`}>
+          <p className={short ? 'text-amber-300' : 'text-zinc-300'}>
+            Reaching {Math.round(measured)} of {target} right now
+            {live?.ae_at_limits && ' — at both its limits'}
+          </p>
+          {short ? (
+            <p className="mt-1">
+              This rig cannot get there tonight. Auto-exposure has nothing left
+              to give once the exposure and gain ceilings are hit, and every
+              frame after that is as bright as it can make it — the target stops
+              having any effect at all. Either set the target near what it
+              actually reaches, so exposure settles below its ceilings and can
+              still respond to the sky, or put faster glass in front of it.
+            </p>
+          ) : (
+            <p className="mt-1">
+              Comfortably reached, so auto-exposure still has room to respond
+              when the sky changes.
+            </p>
+          )}
+        </div>
+      )}
+
+      <p className="text-xs text-zinc-500">
+        There is no correct number — 90 is a bright, detailed night sky, 40–60
+        looks closer to how a dark sky looks to the eye. What matters is that it
+        is reachable: a target this camera cannot hit is the same as no
+        auto-exposure at all. Gain is capped at {maxGain} by this camera, which
+        is usually what runs out first.
+      </p>
+    </>
+  )
+}
+
 /* -- remote access --------------------------------------------------------- */
 
 /**
@@ -536,14 +615,8 @@ function CameraSettings({ id, cam, storage, onCamera, onProfile }) {
                 value={profile.target_brightness ?? 90}
                 onChange={(target_brightness) =>
                   onProfile(period, { target_brightness })} />
-              <p className="-mt-2 text-xs text-zinc-500">
-                The average frame brightness auto-exposure aims at, 0–255.
-                Higher shows more, at the cost of a brighter-looking sky.
-              </p>
-
-              <p className="text-xs text-zinc-500">
-                Gain is capped at {profile.max_gain} by this camera.
-              </p>
+              <BrightnessGuide target={profile.target_brightness ?? 90}
+                period={period} maxGain={profile.max_gain} />
             </div>
           )}
         </div>
