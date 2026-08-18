@@ -26,6 +26,7 @@ import shutil
 import subprocess
 import sys
 import time
+import urllib.error
 import urllib.request
 from pathlib import Path
 
@@ -36,6 +37,12 @@ log = logging.getLogger("skylapse.updater")
 REPO = "mattg8892/skylapse"
 RELEASES_URL = f"https://api.github.com/repos/{REPO}/releases/latest"
 CHECK_TTL_S = 24 * 3600          # daily; the on-demand endpoint passes force
+# A FAILED check is cached too, and this is why. Failures used to return before
+# the cache write, so every settings page load retried the network — and when
+# the failure is GitHub's rate limit, retrying is what keeps you inside it. The
+# loop is self-sustaining and it looks, from the outside, like the camera is
+# hammering GitHub constantly. It was: once per page view, forever.
+FAILED_TTL_S = 15 * 60
 HEALTH_TIMEOUT_S = 60            # how long the new build gets to prove itself
 HEALTH_POLL_S = 3
 HEALTH_STREAK = 3                # consecutive healthy polls required — spans
@@ -87,23 +94,54 @@ def _cached_check() -> dict | None:
         data = json.loads(path.read_text())
     except (OSError, json.JSONDecodeError):
         return None
+    # A failed check carries its own, much shorter, expiry — and a rate-limited
+    # one expires exactly when GitHub says the limit resets, so the next attempt
+    # is the first one that can succeed.
+    retry_after = data.get("retry_after")
+    if retry_after:
+        return data if time.time() < retry_after else None
     if time.time() - data.get("checked_at", 0) > CHECK_TTL_S:
         return None
     return data
 
 
-def _fetch_latest_release() -> dict | None:
-    """Unauthenticated GitHub releases API. Rate limits are generous relative
-    to one call a day, and a public repo needs no token."""
+def _fetch_latest_release() -> tuple[dict | None, str, float]:
+    """Unauthenticated GitHub releases API.
+
+    Returns (release, error, retry_at). Rate limits are generous relative to one
+    call a day — 60 an hour for the whole network — but they are shared by every
+    camera behind the same address and by anything else asking, and they are
+    reached surprisingly easily by a person pressing a button.
+
+    The error is a sentence someone can act on, not a category. "Could not reach
+    GitHub" sent someone hunting a network fault on a camera whose network was
+    fine; it was 403 with a reset time attached, and that time was the answer.
+    """
     req = urllib.request.Request(
         RELEASES_URL, headers={"Accept": "application/vnd.github+json",
                                "User-Agent": f"skylapse/{__version__}"})
     try:
         with urllib.request.urlopen(req, timeout=20) as resp:
-            return json.loads(resp.read())
+            return json.loads(resp.read()), "", 0.0
+    except urllib.error.HTTPError as exc:
+        reset = 0.0
+        try:
+            reset = float(exc.headers.get("X-RateLimit-Reset") or 0)
+        except (TypeError, ValueError):
+            pass
+        if exc.code == 403 and (exc.headers.get("X-RateLimit-Remaining") == "0"
+                                or reset):
+            when = (time.strftime("%H:%M", time.localtime(reset)) if reset
+                    else "shortly")
+            log.info("Update check rate-limited by GitHub until %s", when)
+            return None, (f"GitHub's hourly limit for this network is used up. "
+                          f"It frees up at {when} — checking again before then "
+                          f"only uses it up faster."), reset
+        log.debug("Release check failed: %s", exc)
+        return None, f"GitHub answered {exc.code}.", 0.0
     except Exception as exc:
         log.debug("Release check failed: %s", exc)
-        return None
+        return None, "Could not reach GitHub. Check the camera's connection.", 0.0
 
 
 def _dev_channel_check() -> dict:
@@ -128,20 +166,37 @@ def _dev_channel_check() -> dict:
 
 
 def check(force: bool = False) -> dict:
-    """What is available, from whichever channel this unit follows."""
+    """What is available, from whichever channel this unit follows.
+
+    Nothing here reaches the network unless it has to. A good answer is kept for
+    a day, a bad one for fifteen minutes, and with auto_check off nothing is
+    fetched at all until somebody presses the button.
+    """
     cfg = config.load()
+    if not force:
+        cached = _cached_check()
+        if cached:
+            return cached
+        if not cfg.updates.auto_check:
+            # Off means off: no daily check, no check on opening the settings
+            # page. The button still works and still forces.
+            return {"channel": cfg.updates.channel, "current": __version__,
+                    "available": False, "auto_check": False, "checked_at": 0}
+
     if cfg.updates.channel == "dev":
         result = _dev_channel_check()
     else:
-        if not force:
-            cached = _cached_check()
-            if cached:
-                return cached
-        release = _fetch_latest_release()
+        release, error, reset = _fetch_latest_release()
         if release is None:
-            return {"channel": "release", "current": __version__,
-                    "available": False, "error": "Could not reach GitHub",
-                    "checked_at": time.time()}
+            failed = {"channel": "release", "current": __version__,
+                      "available": False, "error": error,
+                      "checked_at": time.time(),
+                      # Cached like any other answer, so a failure backs off
+                      # instead of retrying on every page load.
+                      "retry_after": max(reset, time.time() + FAILED_TTL_S)}
+            config.RUN_DIR.mkdir(parents=True, exist_ok=True)
+            config.write_run_file(CHECK_NAME, json.dumps(failed))
+            return failed
         tag = release.get("tag_name", "")
         result = {
             "channel": "release",

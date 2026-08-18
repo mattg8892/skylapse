@@ -173,7 +173,10 @@ export default function SettingsScreen({ showToast, storage }) {
       <UpdateCard cfg={cfg} showToast={showToast}
         onChannel={(channel) =>
           save({ updates: { ...cfg.updates, channel } },
-               { ...cfg, updates: { ...cfg.updates, channel } })} />
+               { ...cfg, updates: { ...cfg.updates, channel } })}
+        onAutoCheck={(auto_check) =>
+          save({ updates: { ...cfg.updates, auto_check } },
+               { ...cfg, updates: { ...cfg.updates, auto_check } })} />
 
       {/* Backup */}
       <Card title="Backup">
@@ -898,7 +901,7 @@ function RawCard({ raw, storage, onRaw }) {
 
 const RUNNING_STATES = ['waiting', 'running', 'rolling_back']
 
-function UpdateCard({ cfg, showToast, onChannel }) {
+function UpdateCard({ cfg, showToast, onChannel, onAutoCheck }) {
   const [info, setInfo] = useState(null)
   const [progress, setProgress] = useState(null)
   const [checking, setChecking] = useState(false)
@@ -951,6 +954,11 @@ function UpdateCard({ cfg, showToast, onChannel }) {
       right={<span className="text-sm text-zinc-500">v{info?.current ?? '—'}</span>}>
       {info?.error ? (
         <p className="mt-1 text-sm text-amber-400">{info.error}</p>
+      ) : info && info.auto_check === false && !info.checked_at ? (
+        /* Never say "up to date" about a check that has not happened. */
+        <p className="mt-1 text-sm text-zinc-400">
+          Not checked. Press Check now when you want to look.
+        </p>
       ) : info?.available ? (
         <>
           <p className="mt-1 text-sm text-sky-300">
@@ -997,6 +1005,18 @@ function UpdateCard({ cfg, showToast, onChannel }) {
           </>
         )}
       </div>
+
+      <label className="mt-4 flex items-start justify-between gap-3 text-sm">
+        <span>
+          <span className="text-zinc-300">Check automatically</span>
+          <span className="mt-1 block text-xs text-zinc-500">
+            Look for a new version once a day. Turn it off and the camera only
+            asks when you press Check now.
+          </span>
+        </span>
+        <Toggle checked={cfg.updates?.auto_check ?? true} label="Check automatically"
+          onChange={onAutoCheck} />
+      </label>
 
       <label className="mt-4 flex items-start justify-between gap-3 text-sm">
         <span>

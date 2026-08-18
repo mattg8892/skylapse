@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import json
 import os
+import time
+import urllib.error
 
 import pytest
 
@@ -40,9 +42,9 @@ def test_is_newer(candidate, current, newer):
 def test_release_check_offers_a_newer_tag(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "RUN_DIR", tmp_path)
     monkeypatch.setattr(updater, "__version__", "0.1.0")
-    monkeypatch.setattr(updater, "_fetch_latest_release", lambda: {
+    monkeypatch.setattr(updater, "_fetch_latest_release", lambda: ({
         "tag_name": "v0.2.0", "body": "notes", "name": "0.2.0",
-        "html_url": "http://example/r"})
+        "html_url": "http://example/r"}, "", 0.0))
     result = updater.check(force=True)
     assert result["available"] is True
     assert result["latest"] == "0.2.0"
@@ -52,15 +54,16 @@ def test_release_check_offers_a_newer_tag(tmp_path, monkeypatch):
 def test_release_check_when_up_to_date(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "RUN_DIR", tmp_path)
     monkeypatch.setattr(updater, "__version__", "0.2.0")
-    monkeypatch.setattr(updater, "_fetch_latest_release", lambda: {
-        "tag_name": "v0.2.0", "body": "", "name": ""})
+    monkeypatch.setattr(updater, "_fetch_latest_release", lambda: (
+        {"tag_name": "v0.2.0", "body": "", "name": ""}, "", 0.0))
     assert updater.check(force=True)["available"] is False
 
 
 def test_check_survives_github_being_unreachable(tmp_path, monkeypatch):
     """No network must not look like an available update, or an error page."""
     monkeypatch.setattr(config, "RUN_DIR", tmp_path)
-    monkeypatch.setattr(updater, "_fetch_latest_release", lambda: None)
+    monkeypatch.setattr(updater, "_fetch_latest_release",
+                        lambda: (None, "Could not reach GitHub.", 0.0))
     result = updater.check(force=True)
     assert result["available"] is False
     assert "error" in result
@@ -72,7 +75,7 @@ def test_check_uses_the_cache_within_the_ttl(tmp_path, monkeypatch):
 
     def fetch():
         calls.append(1)
-        return {"tag_name": "v9.9.9", "body": "", "name": ""}
+        return {"tag_name": "v9.9.9", "body": "", "name": ""}, "", 0.0
 
     monkeypatch.setattr(updater, "_fetch_latest_release", fetch)
     updater.check(force=True)
@@ -84,8 +87,9 @@ def test_force_bypasses_the_cache(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "RUN_DIR", tmp_path)
     calls = []
     monkeypatch.setattr(updater, "_fetch_latest_release",
-                        lambda: (calls.append(1), {"tag_name": "v9.9.9",
-                                                   "body": "", "name": ""})[1])
+                        lambda: (calls.append(1), ({"tag_name": "v9.9.9",
+                                                    "body": "", "name": ""},
+                                                   "", 0.0))[1])
     updater.check(force=True)
     updater.check(force=True)
     assert len(calls) == 2
@@ -447,3 +451,85 @@ def test_build_reinstalls_units_when_they_change(tmp_path, monkeypatch):
 
     updater._build({"systemd/skylapse-api.service"})
     assert any("reinstall-units" in c for c in seen)
+
+
+# -- not hammering GitHub ----------------------------------------------------
+#
+# Found the hard way: "Could not reach GitHub" on a camera whose network was
+# fine. It was 403, GitHub's hourly limit for the whole address, and every
+# settings page load retried and kept it there — because a failed check was the
+# one answer that was never cached.
+
+def test_a_failed_check_is_cached_so_it_stops_retrying(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "RUN_DIR", tmp_path)
+    calls = []
+
+    def fetch():
+        calls.append(1)
+        return None, "Could not reach GitHub.", 0.0
+
+    monkeypatch.setattr(updater, "_fetch_latest_release", fetch)
+    updater.check(force=True)
+    updater.check()
+    updater.check()
+    assert len(calls) == 1, "a failure retried on every call — the old loop"
+
+
+def test_a_rate_limit_waits_exactly_until_it_resets(tmp_path, monkeypatch):
+    """Retrying before the reset cannot succeed and only spends the next hour's
+    allowance, so the cache expires when GitHub says the limit does."""
+    monkeypatch.setattr(config, "RUN_DIR", tmp_path)
+    reset = time.time() + 1200
+    monkeypatch.setattr(updater, "_fetch_latest_release",
+                        lambda: (None, "used up", reset))
+    result = updater.check(force=True)
+    assert result["retry_after"] == reset
+    assert updater._cached_check() is not None          # still holding
+    monkeypatch.setattr(updater.time, "time", lambda: reset + 1)
+    assert updater._cached_check() is None              # and free again
+
+
+def test_the_error_says_what_to_do_about_it(tmp_path, monkeypatch):
+    """A category is not an answer. This one sent someone hunting a network
+    fault that did not exist."""
+    monkeypatch.setattr(config, "RUN_DIR", tmp_path)
+
+    class Limited(urllib.error.HTTPError):
+        def __init__(self):
+            super().__init__("u", 403, "rate limited", {}, None)
+            self.headers = {"X-RateLimit-Remaining": "0",
+                            "X-RateLimit-Reset": str(int(time.time() + 600))}
+
+    def raise_limited(*a, **kw):
+        raise Limited()
+
+    monkeypatch.setattr(updater.urllib.request, "urlopen", raise_limited)
+    release, error, reset = updater._fetch_latest_release()
+    assert release is None and reset > time.time()
+    assert "hourly limit" in error and "frees up at" in error
+
+
+def test_auto_check_off_never_touches_the_network(tmp_path, monkeypatch):
+    """The switch existed in config and was wired to nothing at all."""
+    monkeypatch.setattr(config, "RUN_DIR", tmp_path)
+    cfg = config.Config()
+    cfg.updates.auto_check = False
+    monkeypatch.setattr(config, "load", lambda: cfg)
+    calls = []
+    monkeypatch.setattr(updater, "_fetch_latest_release",
+                        lambda: calls.append(1) or (None, "", 0.0))
+
+    result = updater.check()
+    assert not calls, "checked despite auto_check being off"
+    assert result["auto_check"] is False
+
+
+def test_the_button_still_works_with_auto_check_off(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "RUN_DIR", tmp_path)
+    cfg = config.Config()
+    cfg.updates.auto_check = False
+    monkeypatch.setattr(config, "load", lambda: cfg)
+    monkeypatch.setattr(updater, "_fetch_latest_release",
+                        lambda: ({"tag_name": "v9.9.9", "body": "", "name": ""},
+                                 "", 0.0))
+    assert updater.check(force=True)["latest"] == "9.9.9"
