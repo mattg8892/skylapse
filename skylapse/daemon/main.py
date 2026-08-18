@@ -38,6 +38,9 @@ IDLE_POLL_S = 30                 # recheck cadence while a night_only camera
                                  # is picked up promptly, long enough to idle
 COMMAND_POLL_S = 0.5             # how often a gap is interrupted to look for
                                  # UI commands; the bound on button latency
+# Consecutive frames pinned at BOTH auto-exposure ceilings before it is worth
+# saying so. Three, because one is a cloud crossing and three is the sky.
+AE_PINNED_FRAMES = 3
 # Command files the UI drops in RUN_DIR. Seeing any of these ends a gap early.
 COMMAND_FILES = ("focus_start", "focus_stop", "keeper_cmd", "resume_cmd",
                  "focus_cmd.json")
@@ -66,6 +69,11 @@ class CaptureDaemon:
         self.stall = StallWatch()
         self.state = "starting"             # what the watchdog judges against
         self.consecutive_bright = 0
+        # AE pinned at both ceilings: counted, so a single frame at the
+        # limits does not raise anything, and latched so a long episode
+        # says so once rather than every frame.
+        self.ae_pinned = 0
+        self.ae_pinned_said = False
         self.focus: FocusSession | None = None
         self.focus_started = 0.0
         self.focus_controls: tuple[int, int] | None = None
@@ -264,6 +272,7 @@ class CaptureDaemon:
                           else "%.1f" % self.last_brightness,
                           profile.target_brightness, self.exposure_us,
                           prev_exposure, self.gain, prev_gain)
+                self._check_ae_headroom(profile)
                 self.driver.set_controls(self.exposure_us, self.gain)
                 frame = self.driver.capture()
             except CameraError:
@@ -336,6 +345,9 @@ class CaptureDaemon:
                 "frame_at": frame.timestamp,
                 "exposure_us": self.exposure_us,
                 "gain": self.gain,
+                # Surfaced so the dashboard can say the exposure is maxed out,
+                # rather than leaving a dark night looking like a broken camera.
+                "ae_at_limits": self.ae_pinned >= AE_PINNED_FRAMES,
                 "brightness": round(self.last_brightness, 1),
                 "stars": getattr(frame, "_stars", None),
                 "kp": self.last_kp,
@@ -578,6 +590,33 @@ class CaptureDaemon:
             start, end = cam.raw.window_start, cam.raw.window_end
             return (start <= now or now < end) if start > end else (start <= now < end)
         return False
+
+    def _check_ae_headroom(self, profile) -> None:
+        """Notice when auto-exposure has run out of room.
+
+        Pinned at max exposure AND max gain means the loop is asking for more
+        light and has nothing left to give: every frame after that is as bright
+        as this rig can make it, and the target is simply out of reach. That is
+        not a fault, but it must be visible — a whole night ran at gain 22 on a
+        module whose ceiling is 22 and nothing said so, which is why the sky
+        looked darker than it should have and nobody knew where to look.
+        """
+        pinned = (profile.auto_exposure
+                  and self.exposure_us >= profile.max_exposure_us
+                  and self.gain >= profile.max_gain)
+        if not pinned:
+            self.ae_pinned = 0
+            self.ae_pinned_said = False
+            return
+        self.ae_pinned += 1
+        if self.ae_pinned >= AE_PINNED_FRAMES and not self.ae_pinned_said:
+            self.ae_pinned_said = True
+            log.info("AE at limits: %.0fs exposure and gain %d are both maxed "
+                     "and brightness %.0f is still under the target of %d. "
+                     "The sky is darker than this rig can reach — raise the "
+                     "night max exposure, or accept darker frames.",
+                     profile.max_exposure_us / 1e6, profile.max_gain,
+                     self.last_brightness or 0, profile.target_brightness)
 
     def _write_status(self, extra: dict) -> None:
         config.RUN_DIR.mkdir(parents=True, exist_ok=True)

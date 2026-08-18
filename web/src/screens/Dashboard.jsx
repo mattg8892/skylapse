@@ -245,7 +245,21 @@ function StatusLine({ daemon: d }) {
   // stars is null in daylight by design; Kp only once the aurora poll has run.
   if (d.stars != null) bits.push(`${d.stars.toLocaleString()} stars`)
   if (d.kp != null) bits.push(`Kp ${d.kp}`)
-  return <p className="text-sm text-zinc-400">{bits.join(' · ')}</p>
+  return (
+    <>
+      <p className="text-sm text-zinc-400">{bits.join(' · ')}</p>
+      {/* Auto-exposure asking for more light and having none left to give.
+          Not a fault, but it has to be visible: a whole night ran pinned at
+          gain 22 on a module whose ceiling is 22, and the only symptom was a
+          sky that looked darker than it should have. */}
+      {d.ae_at_limits && (
+        <p className="mt-1 text-sm text-amber-400">
+          AE at limits — sky darker than target. Raise the longest exposure in
+          Settings, or accept darker frames.
+        </p>
+      )}
+    </>
+  )
 }
 
 function KeeperButton({ depth, showToast }) {

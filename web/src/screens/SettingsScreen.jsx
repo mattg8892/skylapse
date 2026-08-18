@@ -456,11 +456,35 @@ function CameraSettings({ id, cam, storage, onCamera, onProfile }) {
               </label>
             </div>
           ) : (
-            <p className="text-xs text-zinc-500">
-              Exposure and gain track the target brightness automatically, capped
-              at {((profile.max_exposure_us ?? 0) / 1e6).toFixed(1)}s and gain{' '}
-              {profile.max_gain}.
-            </p>
+            /* The two knobs auto-exposure actually aims at. They were in the
+               config and nowhere in the UI, so a rig whose sky was darker than
+               its target had no way to say so and no way to fix it. */
+            <div className="space-y-4 rounded-xl bg-zinc-800/40 p-4">
+              <NumberField
+                label="Longest exposure" suffix="s" min={0.1} max={120} step={5}
+                value={Number(((profile.max_exposure_us ?? 0) / 1e6).toFixed(1))}
+                onChange={(s) =>
+                  onProfile(period, { max_exposure_us: Math.round(s * 1e6) })} />
+              <p className="-mt-2 text-xs text-zinc-500">
+                How long a single frame may be exposed for. Longer means
+                brighter stars and fewer frames in the night — and the
+                timelapse gets shorter as a result.
+              </p>
+
+              <NumberField
+                label="Target brightness" min={1} max={255}
+                value={profile.target_brightness ?? 90}
+                onChange={(target_brightness) =>
+                  onProfile(period, { target_brightness })} />
+              <p className="-mt-2 text-xs text-zinc-500">
+                The average frame brightness auto-exposure aims at, 0–255.
+                Higher shows more, at the cost of a brighter-looking sky.
+              </p>
+
+              <p className="text-xs text-zinc-500">
+                Gain is capped at {profile.max_gain} by this camera.
+              </p>
+            </div>
           )}
         </div>
       </Card>

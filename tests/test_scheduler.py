@@ -68,3 +68,76 @@ def test_safety_quiet_at_night_with_normal_frames():
     p = CaptureProfile(auto_exposure=False, manual_safety_stop=True)
     assert safety_should_stop(p, "night", 0) is None
     assert safety_should_stop(p, "twilight", 0) is None
+
+
+# -- AE headroom -------------------------------------------------------------
+
+class _Pinned:
+    """Just the attributes _check_ae_headroom touches, so the check can be
+    exercised without standing up a camera."""
+    def __init__(self, exposure_us, gain, brightness=40.0):
+        self.exposure_us = exposure_us
+        self.gain = gain
+        self.last_brightness = brightness
+        self.ae_pinned = 0
+        self.ae_pinned_said = False
+
+
+def _profile(max_exposure_us=25_000_000, max_gain=22):
+    from skylapse.config import CaptureProfile
+    return CaptureProfile(auto_exposure=True, target_brightness=90,
+                          max_exposure_us=max_exposure_us, max_gain=max_gain)
+
+
+def _run(loop, profile, frames):
+    from skylapse.daemon.main import CaptureDaemon
+    for _ in range(frames):
+        CaptureDaemon._check_ae_headroom(loop, profile)
+    return loop
+
+
+def test_ae_at_both_ceilings_is_flagged_after_three_frames():
+    """The night of 2026-08-17 ran pinned at gain 22 on a module whose ceiling
+    is 22, for hours, and said nothing at all."""
+    from skylapse.daemon.main import AE_PINNED_FRAMES
+    loop = _Pinned(25_000_000, 22)
+    _run(loop, _profile(), 2)
+    assert loop.ae_pinned < AE_PINNED_FRAMES
+    _run(loop, _profile(), 1)
+    assert loop.ae_pinned >= AE_PINNED_FRAMES
+
+
+def test_one_dark_frame_is_not_an_episode():
+    """A cloud crossing is not the same as running out of exposure."""
+    from skylapse.daemon.main import AE_PINNED_FRAMES
+    loop = _Pinned(25_000_000, 22)
+    _run(loop, _profile(), 1)
+    loop.exposure_us = 12_000_000                    # AE found room again
+    _run(loop, _profile(), 1)
+    assert loop.ae_pinned == 0 and loop.ae_pinned_said is False
+
+
+def test_headroom_in_either_control_is_not_pinned():
+    """Both ceilings, or it is not out of road."""
+    _run(exposure := _Pinned(25_000_000, 10), _profile(), 5)
+    _run(gain := _Pinned(9_000_000, 22), _profile(), 5)
+    assert exposure.ae_pinned == 0 and gain.ae_pinned == 0
+
+
+def test_it_says_so_once_per_episode(caplog):
+    """Once. Not once per frame for the rest of the night."""
+    loop = _Pinned(25_000_000, 22)
+    with caplog.at_level("INFO", logger="skylapse.daemon"):
+        _run(loop, _profile(), 40)
+    said = [r for r in caplog.records if "AE at limits" in r.getMessage()]
+    assert len(said) == 1, f"logged {len(said)} times"
+
+
+def test_manual_exposure_never_reports_pinned():
+    """Manual mode is a choice, not a limit that has been hit."""
+    from skylapse.config import CaptureProfile
+    manual = CaptureProfile(auto_exposure=False, max_exposure_us=25_000_000,
+                            max_gain=22)
+    loop = _Pinned(25_000_000, 22)
+    _run(loop, manual, 5)
+    assert loop.ae_pinned == 0
