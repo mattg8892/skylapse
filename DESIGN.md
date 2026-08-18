@@ -424,6 +424,22 @@ was clear an hour ago is a dew alarm**, and a better one than a dedicated sensor
 it measures the thing that actually matters — whether the sky is still visible through
 the dome. Not built; the notification hook and the dew heater are the obvious consumers.
 
+### The clip length setting was never honoured on a long night
+
+Reported straight after the first good render: the clip is 1:13 and the setting says 30
+seconds. It was right, and it had always been wrong — just less visibly, because before
+the level cap a long night came out 37 seconds instead of 73.
+
+Duration is frames over frame rate. The rate is not free: it is capped at 60, and h264
+level caps it further by output size. So on a 2205-frame night the only way to reach 30
+seconds is to put fewer frames in, and `clip_seconds` is now honoured by sampling evenly
+across the night — 900 of 2204 frames at 30 fps, which is exactly 30 seconds.
+
+Nothing is lost that is kept anywhere else: every frame is still on the card and still in
+the nights browser. What changes is the pace of the clip, which is the thing the setting
+was asking about in the first place. A night with fewer frames than the target is left
+alone rather than padded by duplication.
+
 ### Auto-exposure was pinned all night and never said so
 
 The night ran at 25s and gain 22 — both ceilings, on a module whose gain ceiling *is* 22

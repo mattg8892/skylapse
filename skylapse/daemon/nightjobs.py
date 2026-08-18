@@ -93,6 +93,31 @@ def scale_filter(width: int, height: int, resolution: str) -> str:
     return f"scale=trunc(iw*min(1\\,sqrt({budget}/(iw*ih)))/2)*2:-2"
 
 
+
+def select_frames(frames: list, clip_seconds: int, fps: int) -> list:
+    """Evenly spaced frames, so the clip comes out the length that was asked for.
+
+    Duration is frames / fps, so with the frame rate pinned there is exactly one
+    free variable left: how many frames go in. A 2205-frame night wants 74 fps to
+    fit 30 seconds; the ceiling is 60, and h264 level pulls it to 30 — so it came
+    out 73 seconds while the setting said 30. That setting had never been honoured
+    on a long night, which in summer is every night.
+
+    Sampling loses nothing that is kept anywhere else: every frame is still on the
+    card and still in the nights browser. What it changes is the pace of the clip,
+    which is the thing the setting is asking about.
+
+    A night with fewer frames than the target is left alone — there is nothing to
+    sample, and padding it out would mean duplicating frames to reach a length
+    nobody would notice.
+    """
+    wanted = max(1, clip_seconds * fps)
+    if len(frames) <= wanted:
+        return frames
+    step = len(frames) / wanted
+    return [frames[min(len(frames) - 1, int(i * step))] for i in range(wanted)]
+
+
 def usable_frames(folder: Path) -> list[Path]:
     """The night's frames, minus any that ffmpeg could not open.
 
@@ -232,17 +257,22 @@ def render_night(folder: Path, settings=None, force: bool = False) -> Path | Non
             attempt_fps = min(fps, max_playable_fps(out_w, out_h))
             if attempt_fps != fps:
                 log.info("Capping %d fps to %d so %dx%d stays inside h264 "
-                         "level 5.1 (the clip gets longer, and it plays)",
-                         fps, attempt_fps, out_w, out_h)
-        error = _run_ffmpeg(folder, frames, out, attempt_fps, crf, scale) \
-            or validate_render(out, len(frames))
+                         "level 5.1", fps, attempt_fps, out_w, out_h)
+        # With the rate settled, the frame count is what sets the duration.
+        shown = select_frames(frames, target, attempt_fps)
+        if len(shown) != len(frames):
+            log.info("Sampling %d of %d frames for a %ds clip at %d fps",
+                     len(shown), len(frames), target, attempt_fps)
+        error = _run_ffmpeg(folder, shown, out, attempt_fps, crf, scale) \
+            or validate_render(out, len(shown))
         if not error:
-            log.info("Rendered %s (%d frames @ %d fps, %s%s)", out.name,
-                     len(frames), attempt_fps, resolution,
+            log.info("Rendered %s (%d of %d frames @ %d fps, %s%s)", out.name,
+                     len(shown), len(frames), attempt_fps, resolution,
                      f", retried after failing at {attempts[0]}" if attempt else "")
             notify.notify("timelapse_ready", "Timelapse ready",
                           f"Last night's timelapse is done: {out.name} "
-                          f"({len(frames)} frames)")
+                          f"({len(shown)} of {len(frames)} frames, "
+                          f"{len(shown) / attempt_fps:.0f}s)")
             return out
         log.warning("Timelapse render at %s failed: %s", resolution, error)
         out.unlink(missing_ok=True)

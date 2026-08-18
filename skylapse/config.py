@@ -47,7 +47,9 @@ class RawPolicy(BaseModel):
 class TimelapseConfig(BaseModel):
     """Three user-facing knobs, sane defaults. Codec/format stay hard-baked."""
     auto_render: bool = True             # render at dawn automatically
-    clip_seconds: int = 30               # target length; fps derived, clamped 12-60
+    clip_seconds: int = 30               # target length, honoured by sampling
+                                         # frames — the rate is set by what the
+                                         # output size can legally play at
     quality: str = "high"                # standard | high | max -> CRF 23/20/17
     # Output size as a pixel budget. "4k" is the default because it is the
     # largest that reliably plays: h264 level is set by macroblock count, so a

@@ -334,3 +334,41 @@ def test_an_unmeasurable_frame_does_not_stall_the_render():
 
 def test_the_cap_never_goes_below_the_floor():
     assert nightjobs.max_playable_fps(20000, 20000) == nightjobs.FPS_MIN
+
+
+# -- clip length, which is what the setting actually promises -----------------
+
+def test_a_long_night_is_sampled_to_the_target_length():
+    """The setting said 30 seconds and the night came out 73. Duration is
+    frames over fps, and with the rate pinned by h264 level the only variable
+    left is how many frames go in."""
+    fps = nightjobs.max_playable_fps(3326, 2492)          # 30, for a 4K-budget frame
+    shown = nightjobs.select_frames(list(range(2204)), 30, fps)
+    assert len(shown) / fps == 30.0
+
+
+def test_sampling_spans_the_whole_night():
+    """Evenly spaced, not the first N — a clip of the first twenty minutes is
+    not a timelapse of the night."""
+    shown = nightjobs.select_frames(list(range(2204)), 30, 30)
+    assert shown[0] == 0
+    assert shown[-1] > 2100
+    gaps = {b - a for a, b in zip(shown, shown[1:])}
+    assert max(gaps) - min(gaps) <= 1, "spacing should be even to within a frame"
+
+
+def test_a_short_night_keeps_every_frame():
+    """Nothing to sample. Padding it out would mean duplicating frames to reach
+    a length nobody would notice."""
+    frames = list(range(400))
+    assert nightjobs.select_frames(frames, 30, 30) == frames
+
+
+def test_selection_never_returns_more_than_it_was_given():
+    assert len(nightjobs.select_frames(list(range(10)), 600, 60)) == 10
+
+
+def test_no_frame_index_runs_off_the_end():
+    for n in (13, 101, 999, 2204, 5000):
+        shown = nightjobs.select_frames(list(range(n)), 30, 30)
+        assert max(shown) < n
