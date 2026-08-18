@@ -141,3 +141,44 @@ def test_manual_exposure_never_reports_pinned():
     loop = _Pinned(25_000_000, 22)
     _run(loop, manual, 5)
     assert loop.ae_pinned == 0
+
+
+# -- picking a target for someone who should not have to ---------------------
+
+def test_a_pinned_rig_is_given_a_target_it_can_reach():
+    """The night that prompted this: aiming at 90, reaching 41, pinned at both
+    ceilings for hours. Aiming AT 41 would leave it pinned exactly where it
+    already is, so it aims under."""
+    from skylapse.daemon.scheduler import suggest_target
+    target, why = suggest_target(41.0, at_limits=True, current_target=90)
+    assert target < 41
+    assert "41" in why and str(target) in why
+
+
+def test_a_rig_that_is_coping_is_left_alone():
+    """A working number is not improved by being nudged."""
+    from skylapse.daemon.scheduler import suggest_target
+    target, why = suggest_target(88.0, at_limits=False, current_target=90)
+    assert target == 90 and "nothing to change" in why
+
+
+def test_it_never_suggests_a_target_of_near_black():
+    """A cloudy, moonless frame measures almost nothing. Chasing that would set
+    a target auto-exposure can hit with the lens cap on."""
+    from skylapse.daemon.scheduler import MIN_USEFUL_TARGET, suggest_target
+    target, _ = suggest_target(2.0, at_limits=True, current_target=90)
+    assert target == MIN_USEFUL_TARGET
+
+
+def test_it_declines_without_a_measurement():
+    from skylapse.daemon.scheduler import suggest_target
+    target, why = suggest_target(None, at_limits=True, current_target=90)
+    assert target == 90 and "no frame" in why
+
+
+def test_it_does_not_raise_a_target_that_is_only_just_out_of_reach():
+    """Pinned, but nearly there — lowering it would cost real brightness for a
+    problem that is about to solve itself as the sky darkens."""
+    from skylapse.daemon.scheduler import suggest_target
+    target, why = suggest_target(89.0, at_limits=True, current_target=90)
+    assert target == 90 and "leave alone" in why

@@ -122,3 +122,52 @@ def next_exposure(profile: CaptureProfile, last_mean_brightness: float | None,
 
     exposure = max(100, exposure)
     return exposure, gain
+
+
+# Below this the frame is closer to black than to a picture, and a target down
+# here means auto-exposure is chasing nothing.
+MIN_USEFUL_TARGET = 15
+# How far under what the rig actually reaches to aim, so exposure settles below
+# its ceilings with somewhere to go when the sky changes. Aiming AT the measured
+# value would leave it pinned exactly where it already is.
+TARGET_HEADROOM = 0.85
+# Pinned but within this fraction of the target is close enough to leave alone.
+# Being at the ceilings while reaching 89 of 90 is not a misconfigured target,
+# it is a sky that is one point darker than asked for — and cutting the target
+# by fifteen to fix that would cost real brightness for nothing.
+NEAR_ENOUGH = 0.9
+
+
+def suggest_target(measured: float | None, at_limits: bool,
+                   current_target: int) -> tuple[int, str]:
+    """A brightness target this camera can actually reach.
+
+    The number is unitless and unguessable, and getting it wrong is not obvious:
+    set it above what the optics can deliver and auto-exposure pins at both
+    ceilings, every frame comes out as bright as the rig can make it, and the
+    setting stops doing anything at all. That is not a hypothetical — it is what
+    a whole night did, aiming at 90 while reaching about 41.
+
+    So the answer comes from measurement rather than advice. If the rig is out of
+    road, aim just under what it demonstrably manages; if it is already hitting
+    the target, there is nothing to fix and saying so is more useful than
+    nudging a working number.
+    """
+    if measured is None:
+        return current_target, "no frame has been measured yet"
+    if not at_limits:
+        return current_target, (
+            f"already reaching {round(measured)} of {current_target}, so "
+            f"auto-exposure has room to work — nothing to change")
+    if measured >= current_target * NEAR_ENOUGH:
+        return current_target, (
+            f"at its limits, but reaching {round(measured)} of {current_target} "
+            f"— close enough to leave alone")
+    suggested = max(MIN_USEFUL_TARGET, int(measured * TARGET_HEADROOM))
+    if suggested >= current_target:
+        return current_target, (
+            "at its limits, but not far off the target — leaving it alone")
+    return suggested, (
+        f"at both limits and reaching only {round(measured)}, so the target "
+        f"moves to {suggested} — low enough that exposure settles below its "
+        f"ceilings and can still respond to the sky")

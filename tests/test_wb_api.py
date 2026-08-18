@@ -115,3 +115,64 @@ def test_the_preview_buffer_is_smaller_than_the_frame(rig):
     process.write_wb_preview(frame(big), "picam-imx477", config.RUN_DIR)
     stored, _ = process.read_wb_preview(config.RUN_DIR)
     assert stored.size < big.size / 4
+
+
+# -- the "set it for me" endpoint --------------------------------------------
+
+def test_auto_target_lowers_an_unreachable_target(tmp_path, monkeypatch):
+    import json
+    from fastapi.testclient import TestClient
+    from skylapse import config
+    from skylapse.api import main as api
+
+    monkeypatch.setattr(config, "CONFIG_PATH", tmp_path / "config.yaml")
+    monkeypatch.setattr(config, "RUN_DIR", tmp_path / "run")
+    cfg = config.Config()
+    cam = cfg.camera("picam-imx477")
+    cam.night.auto_exposure = True
+    cam.night.target_brightness = 90
+    config.save(cfg)
+    config.write_run_file("daemon.json", json.dumps(
+        {"period": "night", "brightness": 41.0, "ae_at_limits": True}))
+
+    client = TestClient(api.app)
+    body = client.post("/api/exposure/auto-target",
+                       json={"camera_id": "picam-imx477", "period": "night"}).json()
+    assert body["changed"] is True and body["target"] < 41
+    assert config.load().cameras["picam-imx477"].night.target_brightness == body["target"]
+
+
+def test_auto_target_ignores_a_daylight_measurement(tmp_path, monkeypatch):
+    """A night target set from a daylight frame would be nonsense."""
+    import json
+    from fastapi.testclient import TestClient
+    from skylapse import config
+    from skylapse.api import main as api
+
+    monkeypatch.setattr(config, "CONFIG_PATH", tmp_path / "config.yaml")
+    monkeypatch.setattr(config, "RUN_DIR", tmp_path / "run")
+    cfg = config.Config()
+    cfg.camera("picam-imx477").night.auto_exposure = True
+    config.save(cfg)
+    config.write_run_file("daemon.json", json.dumps(
+        {"period": "day", "brightness": 200.0, "ae_at_limits": False}))
+
+    client = TestClient(api.app)
+    body = client.post("/api/exposure/auto-target",
+                       json={"camera_id": "picam-imx477", "period": "night"}).json()
+    assert body["changed"] is False and "no frame" in body["why"]
+
+
+def test_auto_target_refuses_in_manual_mode(tmp_path, monkeypatch):
+    from fastapi.testclient import TestClient
+    from skylapse import config
+    from skylapse.api import main as api
+
+    monkeypatch.setattr(config, "CONFIG_PATH", tmp_path / "config.yaml")
+    monkeypatch.setattr(config, "RUN_DIR", tmp_path / "run")
+    cfg = config.Config()
+    cfg.camera("picam-imx477").night.auto_exposure = False
+    config.save(cfg)
+    assert TestClient(api.app).post(
+        "/api/exposure/auto-target",
+        json={"camera_id": "picam-imx477", "period": "night"}).status_code == 409

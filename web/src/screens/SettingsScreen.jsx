@@ -57,9 +57,11 @@ export default function SettingsScreen({ showToast, storage }) {
   const [testResult, setTestResult] = useState(null)
   const [cameraInfo, refreshCameras] = useCameras()
 
-  useEffect(() => {
+  const reloadConfig = useCallback(() => {
     fetch('/api/config').then((r) => r.json()).then(setCfg).catch(() => {})
   }, [])
+
+  useEffect(() => { reloadConfig() }, [reloadConfig])
 
   /** PUT a partial config. Optimistic: the UI already shows the new value. */
   const save = async (patch, next) => {
@@ -129,7 +131,8 @@ export default function SettingsScreen({ showToast, storage }) {
         <CameraSettings
           key={id} id={id} cam={cam} storage={storage}
           onCamera={(patch) => saveCamera(id, patch)}
-          onProfile={(period, patch) => saveProfile(id, period, patch)} />
+          onProfile={(period, patch) => saveProfile(id, period, patch)}
+          onApplied={reloadConfig} />
       ))}
 
       {/* Notifications */}
@@ -276,7 +279,9 @@ function RenderPlan({ cameraId }) {
  * mystery ("why is it dark?") into a decision ("this rig cannot reach 90; lower
  * it, or get faster glass").
  */
-function BrightnessGuide({ target, period, maxGain }) {
+function BrightnessGuide({ target, period, maxGain, cameraId, onApplied }) {
+  const [busy, setBusy] = useState(false)
+  const [result, setResult] = useState(null)
   const [daemon, setDaemon] = useState(null)
 
   useEffect(() => {
@@ -295,6 +300,23 @@ function BrightnessGuide({ target, period, maxGain }) {
   const live = daemon?.period === period ? daemon : null
   const measured = live?.brightness
   const short = measured != null && measured < target * 0.85
+
+  const setItForMe = async () => {
+    setBusy(true)
+    const r = await fetch('/api/exposure/auto-target', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ camera_id: cameraId, period }),
+    }).catch(() => null)
+    setBusy(false)
+    if (!r?.ok) {
+      const detail = await r?.json().catch(() => null)
+      return setResult({ why: detail?.detail || 'Could not work it out.' })
+    }
+    const out = await r.json()
+    setResult(out)
+    if (out.changed) onApplied?.()
+  }
 
   return (
     <>
@@ -330,6 +352,16 @@ function BrightnessGuide({ target, period, maxGain }) {
             </p>
           )}
         </div>
+      )}
+
+      <Button onClick={setItForMe} disabled={busy} className="w-full">
+        {busy ? 'Measuring…' : 'Set it for me'}
+      </Button>
+      {result && (
+        <p className="-mt-1 text-xs text-zinc-400">
+          {result.changed === true && `Set to ${result.target}. `}
+          {result.why}
+        </p>
       )}
 
       <p className="text-xs text-zinc-500">
@@ -530,7 +562,7 @@ function NetworkCard({ showToast }) {
 
 /* -- per-camera capture / timelapse / overlay ------------------------------ */
 
-function CameraSettings({ id, cam, storage, onCamera, onProfile }) {
+function CameraSettings({ id, cam, storage, onCamera, onProfile, onApplied }) {
   // Day and night are independent profiles in config; editing only one of them
   // silently would be a trap, so the period is an explicit control.
   const [period, setPeriod] = useState('night')
@@ -616,7 +648,8 @@ function CameraSettings({ id, cam, storage, onCamera, onProfile }) {
                 onChange={(target_brightness) =>
                   onProfile(period, { target_brightness })} />
               <BrightnessGuide target={profile.target_brightness ?? 90}
-                period={period} maxGain={profile.max_gain} />
+                period={period} maxGain={profile.max_gain}
+                cameraId={id} onApplied={onApplied} />
             </div>
           )}
         </div>
