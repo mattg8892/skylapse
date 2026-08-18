@@ -302,3 +302,35 @@ def test_a_current_timelapse_is_left_alone(tmp_path):
         out = nightjobs.render_night(night)
     run.assert_not_called()
     assert out == mp4
+
+
+# -- h264 level, which is set by macroblocks per second ----------------------
+
+def test_a_long_night_at_4k_is_capped_to_a_playable_rate():
+    """The 2026-08-17 night, exactly. 2205 frames over a 30-second target asks
+    for 74 fps; clamped to 60 it produced a level 5.2 file, which a phone may
+    refuse. The resolution budget had done its job — 3326x2492 is inside level
+    5.1's per-frame ceiling — and the frame RATE took it over anyway.
+    """
+    assert nightjobs.max_playable_fps(3326, 2492) == 30
+
+
+def test_small_output_is_not_slowed_down_for_nothing():
+    """1080p has macroblocks to spare, so the cap must not touch it."""
+    assert nightjobs.max_playable_fps(1920, 1440) == nightjobs.FPS_MAX
+
+
+def test_native_resolution_is_capped_hardest():
+    """Full sensor is the case the UI already warns about; it gets the lowest
+    rate rather than an unplayable file."""
+    assert nightjobs.max_playable_fps(4056, 3040) < 30
+
+
+def test_an_unmeasurable_frame_does_not_stall_the_render():
+    """Falls back to the ordinary ceiling rather than to zero fps, which would
+    be a failed render for a night that is otherwise fine."""
+    assert nightjobs.max_playable_fps(0, 0) == nightjobs.FPS_MAX
+
+
+def test_the_cap_never_goes_below_the_floor():
+    assert nightjobs.max_playable_fps(20000, 20000) == nightjobs.FPS_MIN

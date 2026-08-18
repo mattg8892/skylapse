@@ -23,6 +23,30 @@ log = logging.getLogger("skylapse.nightjobs")
 FPS_MIN, FPS_MAX = 12, 60
 CRF = {"standard": "23", "high": "20", "max": "17"}
 
+# h264 level is what decides whether a phone will play the file, and level is
+# set by macroblocks per SECOND — not by resolution alone. The resolution budget
+# below fixes the spatial half; this fixes the temporal half, which it does not.
+#
+# Measured on the rig: the 2205-frame night of 2026-08-17 came out inside the 4K
+# budget at 3326x2492 — 32,448 macroblocks, comfortably under level 5.1's 36,864
+# per-frame ceiling — and still landed at level 5.2, because 2205 frames over a
+# 30-second target asks for 74 fps, clamps to 60, and 32,448 x 60 is 1.9M MB/s
+# against level 5.1's 983,040. A long night is exactly the case that trips this,
+# which is to say the case that matters.
+#
+# So the frame rate is capped to whatever keeps the output inside 5.1. The clip
+# comes out longer than asked for, and that is the right trade: a 73-second
+# timelapse that plays beats a 37-second one that does not.
+LEVEL_51_MB_PER_S = 983_040
+
+
+def max_playable_fps(width: int, height: int) -> int:
+    """Highest frame rate that keeps this frame size inside h264 level 5.1."""
+    if not width or not height:
+        return FPS_MAX
+    macroblocks = ((width + 15) // 16) * ((height + 15) // 16)
+    return max(FPS_MIN, min(FPS_MAX, LEVEL_51_MB_PER_S // max(1, macroblocks)))
+
 
 # Output size, as a pixel budget rather than a width. Level is what decides
 # whether a phone can play the file, and level is set by macroblock count — so
@@ -201,11 +225,20 @@ def render_night(folder: Path, settings=None, force: bool = False) -> Path | Non
 
     for attempt, resolution in enumerate(attempts):
         scale = scale_filter(width, height, resolution)
-        error = _run_ffmpeg(folder, frames, out, fps, crf, scale) \
+        # Only now is the output size known, and the rate depends on it.
+        attempt_fps = fps
+        if width and height:
+            out_w, out_h = output_size(width, height, resolution)
+            attempt_fps = min(fps, max_playable_fps(out_w, out_h))
+            if attempt_fps != fps:
+                log.info("Capping %d fps to %d so %dx%d stays inside h264 "
+                         "level 5.1 (the clip gets longer, and it plays)",
+                         fps, attempt_fps, out_w, out_h)
+        error = _run_ffmpeg(folder, frames, out, attempt_fps, crf, scale) \
             or validate_render(out, len(frames))
         if not error:
             log.info("Rendered %s (%d frames @ %d fps, %s%s)", out.name,
-                     len(frames), fps, resolution,
+                     len(frames), attempt_fps, resolution,
                      f", retried after failing at {attempts[0]}" if attempt else "")
             notify.notify("timelapse_ready", "Timelapse ready",
                           f"Last night's timelapse is done: {out.name} "
