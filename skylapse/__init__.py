@@ -5,4 +5,4 @@ updater compares it against the latest GitHub release. Keep it in step with
 pyproject.toml's version and with the release tag (v<version>).
 """
 
-__version__ = "0.3.5"
+__version__ = "0.3.6"
