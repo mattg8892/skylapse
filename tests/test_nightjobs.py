@@ -372,3 +372,63 @@ def test_no_frame_index_runs_off_the_end():
     for n in (13, 101, 999, 2204, 5000):
         shown = nightjobs.select_frames(list(range(n)), 30, 30)
         assert max(shown) < n
+
+
+# -- explaining the render before it happens ---------------------------------
+
+def test_jpeg_size_reads_the_header_without_decoding(tmp_path):
+    import cv2
+    import numpy as np
+    path = tmp_path / "img_0001.jpg"
+    cv2.imwrite(str(path), np.zeros((3040, 4056, 3), dtype=np.uint8))
+    assert nightjobs.jpeg_size(path) == (4056, 3040)
+
+
+def test_jpeg_size_survives_a_file_that_is_not_one(tmp_path):
+    junk = tmp_path / "img_0001.jpg"
+    junk.write_bytes(b"not a jpeg at all")
+    assert nightjobs.jpeg_size(junk) == (0, 0)
+
+
+def _night(tmp_path, count, w=4056, h=3040):
+    import cv2
+    import numpy as np
+    frame = np.zeros((h, w, 3), dtype=np.uint8)
+    folder = tmp_path / "2026-08-17"
+    folder.mkdir()
+    for i in range(count):
+        cv2.imwrite(str(folder / f"img_{i:05d}.jpg"), frame)
+    return folder
+
+
+def test_the_plan_matches_what_the_renderer_would_do(tmp_path):
+    """It has to be the same arithmetic, or the label becomes a second source of
+    truth that drifts from the thing it describes."""
+    from skylapse.config import TimelapseConfig
+    folder = _night(tmp_path, 300)
+    settings = TimelapseConfig(clip_seconds=5)
+    plan = nightjobs.plan_render(folder, settings)
+
+    frames = nightjobs.usable_frames(folder)
+    out_w, out_h = nightjobs.output_size(4056, 3040, settings.resolution)
+    fps = min(max(nightjobs.FPS_MIN,
+                  min(nightjobs.FPS_MAX, round(len(frames) / 5))),
+              nightjobs.max_playable_fps(out_w, out_h))
+    assert plan["fps"] == fps
+    assert plan["used"] == len(nightjobs.select_frames(frames, 5, fps))
+    assert plan["seconds"] == round(plan["used"] / fps, 1)
+
+
+def test_the_plan_says_when_frames_are_being_left_out(tmp_path):
+    from skylapse.config import TimelapseConfig
+    plan = nightjobs.plan_render(_night(tmp_path, 600),
+                                 TimelapseConfig(clip_seconds=5))
+    assert plan["used"] < plan["frames"]
+    assert plan["every_nth"] > 1
+
+
+def test_an_empty_night_plans_nothing_rather_than_dividing_by_zero(tmp_path):
+    folder = tmp_path / "2026-08-17"
+    folder.mkdir()
+    plan = nightjobs.plan_render(folder)
+    assert plan["frames"] == 0 and plan["used"] == 0 and plan["seconds"] == 0.0

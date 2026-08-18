@@ -440,6 +440,13 @@ the nights browser. What changes is the pace of the clip, which is the thing the
 was asking about in the first place. A night with fewer frames than the target is left
 alone rather than padded by duplication.
 
+And it says so. `plan_render()` answers what a render would produce without doing one —
+frames in, frames used, rate, size, duration — and the settings screen shows it: *"Last
+night: 2,204 frames → 30s at 30 fps, using 900 of them, roughly every 2.4th frame."* Built
+from the functions the renderer actually calls, so the label cannot drift from the
+behaviour. Sampling silently is what let the old mismatch go unnoticed for as long as it
+did; a setting nobody can see the effect of is a suggestion.
+
 ### Auto-exposure was pinned all night and never said so
 
 The night ran at 25s and gain 22 — both ceilings, on a module whose gain ceiling *is* 22

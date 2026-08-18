@@ -328,3 +328,77 @@ def check_storage_warning(camera_root: Path, free_gb_floor: float) -> None:
 
 def _free_gb(path: Path) -> float:
     return shutil.disk_usage(path).free / 1e9
+
+
+# -- explaining a render before it happens -----------------------------------
+
+# JPEG start-of-frame markers, the ones that carry the dimensions.
+_SOF_MARKERS = {0xC0, 0xC1, 0xC2, 0xC3, 0xC5, 0xC6, 0xC7,
+                0xC9, 0xCA, 0xCB, 0xCD, 0xCE, 0xCF}
+_JPEG_MAGIC = 0xFFD8
+_PAD = 0xFF
+
+
+def jpeg_size(path: Path) -> tuple[int, int]:
+    """Width and height from a JPEG header, without decoding the image.
+
+    The settings screen asks what tonight's render will look like, and decoding
+    a 12 MP frame to answer that — on a Pi, while it is capturing — is not a
+    reasonable price for a label.
+    """
+    try:
+        with open(path, "rb") as fh:
+            if int.from_bytes(fh.read(2), "big") != _JPEG_MAGIC:
+                return 0, 0
+            while True:
+                byte = fh.read(1)
+                while byte and byte[0] != _PAD:
+                    byte = fh.read(1)
+                marker = fh.read(1)
+                while marker and marker[0] == _PAD:
+                    marker = fh.read(1)
+                if not marker:
+                    return 0, 0
+                if marker[0] in _SOF_MARKERS:
+                    fh.read(3)                      # precision + skip
+                    height = int.from_bytes(fh.read(2), "big")
+                    width = int.from_bytes(fh.read(2), "big")
+                    return width, height
+                length = int.from_bytes(fh.read(2), "big")
+                if length < 2:
+                    return 0, 0
+                fh.seek(length - 2, 1)
+    except (OSError, IndexError):
+        return 0, 0
+
+
+def plan_render(folder: Path, settings=None) -> dict:
+    """What rendering this folder would produce, without rendering it.
+
+    Exists because the sampling is otherwise invisible. A clip that honours the
+    length you asked for does so by leaving frames out, and being told that
+    afterwards — or not at all — is how the old behaviour went unnoticed for as
+    long as it did. Built from the same functions the renderer uses, so this
+    answer cannot drift from what actually happens.
+    """
+    from ..config import TimelapseConfig
+    settings = settings or TimelapseConfig()
+    frames = usable_frames(folder)
+    target = max(5, settings.clip_seconds)
+    plan = {"frames": len(frames), "clip_seconds": target,
+            "resolution": settings.resolution}
+    if not frames:
+        return {**plan, "fps": 0, "used": 0, "seconds": 0.0, "every_nth": 0,
+                "width": 0, "height": 0}
+
+    width, height = jpeg_size(frames[0])
+    out_w, out_h = (output_size(width, height, settings.resolution)
+                    if width and height else (0, 0))
+    fps = max(FPS_MIN, min(FPS_MAX, round(len(frames) / target)))
+    if out_w and out_h:
+        fps = min(fps, max_playable_fps(out_w, out_h))
+    used = len(select_frames(frames, target, fps))
+    return {**plan, "fps": fps, "used": used, "seconds": round(used / fps, 1),
+            # How the sampling reads to a person: "every 2nd frame".
+            "every_nth": round(len(frames) / used, 1) if used else 0,
+            "width": out_w, "height": out_h}

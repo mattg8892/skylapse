@@ -204,6 +204,63 @@ export default function SettingsScreen({ showToast, storage }) {
   )
 }
 
+
+/**
+ * What tonight's render will actually produce.
+ *
+ * The clip length is honoured by leaving frames out, and doing that silently is
+ * how the setting managed to be ignored on every long night without anyone
+ * noticing — a 2205-frame night asked for 30 seconds and got 73. Saying it in
+ * numbers, from the same functions the renderer uses, is the difference between
+ * a setting and a suggestion.
+ */
+function RenderPlan({ cameraId }) {
+  const [plan, setPlan] = useState(null)
+
+  useEffect(() => {
+    let live = true
+    fetch(`/api/timelapse/plan/${encodeURIComponent(cameraId)}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((p) => live && setPlan(p))
+      .catch(() => {})
+    return () => { live = false }
+  }, [cameraId])
+
+  if (!plan?.frames) return null
+  const sampled = plan.used < plan.frames
+
+  return (
+    <div className="rounded-lg bg-zinc-800/60 p-3 text-xs text-zinc-400">
+      <p className="text-zinc-300">
+        Last night: {plan.frames.toLocaleString()} frames →{' '}
+        {plan.seconds}s at {plan.fps} fps
+        {plan.width ? `, ${plan.width}×${plan.height}` : ''}
+      </p>
+      {sampled ? (
+        <p className="mt-1">
+          To fit {plan.clip_seconds}s it uses{' '}
+          <b className="text-zinc-300">{plan.used.toLocaleString()}</b> of them
+          — roughly every {plan.every_nth}
+          {plan.every_nth === 2 ? 'nd' : plan.every_nth === 3 ? 'rd' : 'th'}{' '}
+          frame, spread evenly across the whole night. Every frame stays on the
+          card and in Nights; only the pace of the clip changes.
+        </p>
+      ) : (
+        <p className="mt-1">
+          Every frame is used. A shorter night than the target length can only
+          be as long as the frames it has.
+        </p>
+      )}
+      {plan.fps < 60 && (
+        <p className="mt-1">
+          The frame rate is capped by what a phone will decode at this size.
+          Choosing a smaller resolution allows a faster one.
+        </p>
+      )}
+    </div>
+  )
+}
+
 /* -- remote access --------------------------------------------------------- */
 
 /**
@@ -523,10 +580,10 @@ function CameraSettings({ id, cam, storage, onCamera, onProfile }) {
               desktop.
             </p>
           )}
+          <RenderPlan cameraId={id} />
           <p className="text-xs text-zinc-500">
-            Frame rate is derived from the night’s frame count to hit that length,
-            clamped to 12–60 fps. Resolution is a pixel budget, not a width, so
-            it works out the same on a square sensor as on a wide one.
+            Resolution is a pixel budget, not a width, so it works out the same
+            on a square sensor as on a wide one.
           </p>
         </div>
       </Card>

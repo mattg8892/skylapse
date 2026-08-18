@@ -1224,6 +1224,29 @@ def timelapse_file(camera_id: str, night: str):
     return FileResponse(path, media_type="video/mp4")
 
 
+@app.get("/api/timelapse/plan/{camera_id}")
+def timelapse_plan(camera_id: str) -> dict:
+    """What a render would produce, without doing one.
+
+    The clip length is honoured by leaving frames out, and until this existed
+    that happened silently — which is precisely how the setting managed to be
+    ignored on every long night without anyone noticing. The settings screen
+    reads this so it can say, in numbers, what tonight will look like.
+    """
+    from ..daemon import nightjobs
+    root = config.IMAGE_ROOT / camera_id
+    nights = sorted((d for d in root.iterdir() if d.is_dir()),
+                    key=lambda d: d.name) if root.is_dir() else []
+    if not nights:
+        raise HTTPException(404, "no nights captured yet")
+    cfg = config.load()
+    # Plain lookup, not cfg.camera(): that one is fetch-or-create and would
+    # invent a registry entry every time the settings screen was opened.
+    entry = cfg.cameras.get(camera_id)
+    settings = entry.timelapse if entry else None
+    return {"night": nights[-1].name, **nightjobs.plan_render(nights[-1], settings)}
+
+
 @app.post("/api/timelapse/render/{camera_id}/{night}")
 def render_timelapse(camera_id: str, night: str, force: bool = False,
                      clip_seconds: int | None = None,
