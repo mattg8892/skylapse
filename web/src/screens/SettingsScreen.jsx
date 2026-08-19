@@ -280,17 +280,23 @@ function RenderPlan({ cameraId }) {
 //
 // The rungs are multiplicative because brightness is: a fixed step of 10 is
 // enormous at the dark end and imperceptible at the bright one.
-const DEFAULT_TARGET = 90
+// Anchored per period, not to one number for both: day aims at 120 and night at
+// 90 out of the box, so a single anchor put the day slider at "+1 — a little
+// brighter" while it was sitting at its own default and doing nothing unusual.
+// Centre has to mean "as shipped" on whichever screen you are looking at.
+const DEFAULT_TARGET = { day: 120, night: 90 }
 const NUDGE_STEP = 1.25
 const NUDGE_RANGE = 5
 
-const nudgeToTarget = (n) =>
-  Math.max(15, Math.min(255, Math.round(DEFAULT_TARGET * NUDGE_STEP ** n)))
+const nudgeToTarget = (n, period) =>
+  Math.max(15, Math.min(255,
+    Math.round((DEFAULT_TARGET[period] ?? 90) * NUDGE_STEP ** n)))
 
-const targetToNudge = (target) => {
+const targetToNudge = (target, period) => {
   let best = 0
   for (let n = -NUDGE_RANGE; n <= NUDGE_RANGE; n += 1) {
-    if (Math.abs(nudgeToTarget(n) - target) < Math.abs(nudgeToTarget(best) - target)) {
+    if (Math.abs(nudgeToTarget(n, period) - target)
+        < Math.abs(nudgeToTarget(best, period) - target)) {
       best = n
     }
   }
@@ -306,7 +312,7 @@ const NUDGE_WORDS = {
 
 function ExposureNudge({ target, period, cameraId, onChange }) {
   const [daemon, setDaemon] = useState(null)
-  const nudge = targetToNudge(target)
+  const nudge = targetToNudge(target, period)
 
   useEffect(() => {
     let live = true
@@ -319,14 +325,27 @@ function ExposureNudge({ target, period, cameraId, onChange }) {
 
   // Only meaningful against the period actually being captured: a night setting
   // means nothing measured against a daylight frame.
-  const live = daemon?.period === period ? daemon : null
+  // Twilight runs on the night profile, so "night" is live then too.
+  const activePeriod = daemon?.period === 'day' ? 'day' : 'night'
+  const live = daemon && activePeriod === period ? daemon : null
   const pinned = !!live?.ae_at_limits
 
   return (
     <>
+      {daemon && !live && (
+        /* Otherwise you sit there moving a slider that is doing nothing
+           visible, and conclude the slider is broken. It is simply not the
+           profile that is running. */
+        <p className="rounded-lg bg-zinc-800/60 p-3 text-xs text-zinc-400">
+          The camera is in <b className="text-zinc-300">{activePeriod}</b> right
+          now, so these {period} settings take effect
+          {period === 'night' ? ' at dusk' : ' at sunrise'} — nothing you change
+          here will show up on the dashboard until then.
+        </p>
+      )}
       <Slider label="Brightness" value={nudge} min={-NUDGE_RANGE} max={NUDGE_RANGE}
         step={1} display={NUDGE_WORDS[String(nudge)]}
-        onChange={(n) => onChange(nudgeToTarget(n))} />
+        onChange={(n) => onChange(nudgeToTarget(n, period))} />
       <p className="-mt-1 text-xs text-zinc-500">
         The camera reads every frame and works out the exposure the sky needs —
         this only says whether you want the result a little brighter or darker
@@ -655,7 +674,7 @@ function CameraSettings({ id, cam, storage, onCamera, onProfile }) {
                camera's own idea, and that is a nudge, not a number. */
             <div className="space-y-4 rounded-xl bg-zinc-800/40 p-4">
               <ExposureNudge
-                target={profile.target_brightness ?? DEFAULT_TARGET}
+                target={profile.target_brightness ?? DEFAULT_TARGET[period]}
                 period={period} cameraId={id}
                 onChange={(target_brightness) =>
                   onProfile(period, { target_brightness })} />
