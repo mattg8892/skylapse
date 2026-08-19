@@ -131,8 +131,7 @@ export default function SettingsScreen({ showToast, storage }) {
         <CameraSettings
           key={id} id={id} cam={cam} storage={storage}
           onCamera={(patch) => saveCamera(id, patch)}
-          onProfile={(period, patch) => saveProfile(id, period, patch)}
-          onApplied={reloadConfig} />
+          onProfile={(period, patch) => saveProfile(id, period, patch)} />
       ))}
 
       {/* Notifications */}
@@ -268,111 +267,133 @@ function RenderPlan({ cameraId }) {
 }
 
 
-/**
- * What target brightness means, and whether this rig is reaching it.
- *
- * The setting on its own is a number between 1 and 255 with no units and no
- * feedback, which makes it a dial nobody should be expected to turn. The
- * measurement beside it is the whole point: on the first real night the target
- * was 90, the sky came in around 41, and auto-exposure sat at both its ceilings
- * for hours with nothing anywhere saying so. Showing the gap is what turns a
- * mystery ("why is it dark?") into a decision ("this rig cannot reach 90; lower
- * it, or get faster glass").
- */
-function BrightnessGuide({ target, period, maxGain, cameraId, onApplied }) {
-  const [busy, setBusy] = useState(false)
-  const [result, setResult] = useState(null)
+/* -- exposure, as one nudge ------------------------------------------------ */
+
+// Auto-exposure aims at an average frame brightness. That number is unitless,
+// unguessable and, on the evidence, actively misleading: a whole night aimed at
+// 90 while its optics could deliver 41, and nothing about the number said so.
+//
+// So it is not a number any more. The camera's own judgement is the middle of a
+// slider, and the only question put to a person is the one they can actually
+// answer by looking at last night's frames — a bit brighter, or a bit darker?
+// Nudge it, sleep on it, nudge again. Three nights and you are done forever.
+//
+// The rungs are multiplicative because brightness is: a fixed step of 10 is
+// enormous at the dark end and imperceptible at the bright one.
+const DEFAULT_TARGET = 90
+const NUDGE_STEP = 1.25
+const NUDGE_RANGE = 5
+
+const nudgeToTarget = (n) =>
+  Math.max(15, Math.min(255, Math.round(DEFAULT_TARGET * NUDGE_STEP ** n)))
+
+const targetToNudge = (target) => {
+  let best = 0
+  for (let n = -NUDGE_RANGE; n <= NUDGE_RANGE; n += 1) {
+    if (Math.abs(nudgeToTarget(n) - target) < Math.abs(nudgeToTarget(best) - target)) {
+      best = n
+    }
+  }
+  return best
+}
+
+const NUDGE_WORDS = {
+  '-5': 'Much darker', '-4': 'Darker', '-3': 'Darker', '-2': 'A little darker',
+  '-1': 'A little darker', 0: 'As the camera judges it',
+  1: 'A little brighter', 2: 'A little brighter', 3: 'Brighter',
+  4: 'Brighter', 5: 'Much brighter',
+}
+
+function ExposureNudge({ target, period, cameraId, onChange }) {
   const [daemon, setDaemon] = useState(null)
+  const nudge = targetToNudge(target)
 
   useEffect(() => {
     let live = true
-    const read = () => fetch('/api/status')
-      .then((r) => r.json())
-      .then((d) => live && setDaemon(d.daemon))
-      .catch(() => {})
+    const read = () => fetch('/api/status').then((r) => r.json())
+      .then((d) => live && setDaemon(d.daemon)).catch(() => {})
     read()
     const id = setInterval(read, 10000)
     return () => { live = false; clearInterval(id) }
   }, [])
 
-  // Only meaningful against the period actually being captured: a night target
-  // means nothing next to a daylight measurement.
+  // Only meaningful against the period actually being captured: a night setting
+  // means nothing measured against a daylight frame.
   const live = daemon?.period === period ? daemon : null
-  const measured = live?.brightness
-  const short = measured != null && measured < target * 0.85
-
-  const setItForMe = async () => {
-    setBusy(true)
-    const r = await fetch('/api/exposure/auto-target', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ camera_id: cameraId, period }),
-    }).catch(() => null)
-    setBusy(false)
-    if (!r?.ok) {
-      const detail = await r?.json().catch(() => null)
-      return setResult({ why: detail?.detail || 'Could not work it out.' })
-    }
-    const out = await r.json()
-    setResult(out)
-    if (out.changed) onApplied?.()
-  }
+  const pinned = !!live?.ae_at_limits
 
   return (
     <>
-      <p className="-mt-2 text-xs text-zinc-500">
-        The average brightness of the whole frame, 0–255, that auto-exposure
-        aims at. It lengthens the exposure to reach it, and only then raises
-        gain — so a higher target means longer exposures, fewer frames, and a
-        brighter, less natural-looking sky. A lower one gives darker frames,
-        shorter exposures and more of them.
+      <Slider label="Brightness" value={nudge} min={-NUDGE_RANGE} max={NUDGE_RANGE}
+        step={1} display={NUDGE_WORDS[String(nudge)]}
+        onChange={(n) => onChange(nudgeToTarget(n))} />
+      <p className="-mt-1 text-xs text-zinc-500">
+        The camera reads every frame and works out the exposure the sky needs —
+        this only says whether you want the result a little brighter or darker
+        than its own judgement. Leave it in the middle unless a few nights of
+        frames tell you otherwise, then nudge one step and see how the next
+        night looks.
       </p>
 
-      {measured != null && (
-        <div className={`rounded-lg p-3 text-xs ${short
-          ? 'border border-amber-700/60 bg-amber-950/40 text-amber-200/90'
-          : 'bg-zinc-800/60 text-zinc-400'}`}>
-          <p className={short ? 'text-amber-300' : 'text-zinc-300'}>
-            Reaching {Math.round(measured)} of {target} right now
-            {live?.ae_at_limits && ' — at both its limits'}
+      {pinned && (
+        /* The one case where turning it up does nothing at all, and the one
+           the old numeric field gave no hint about. */
+        <div className="rounded-lg border border-amber-700/60 bg-amber-950/40
+                        p-3 text-xs text-amber-200/90">
+          <p className="text-amber-300">This is as bright as it gets tonight.</p>
+          <p className="mt-1">
+            The exposure and gain are both at their limits and the sky is still
+            darker than this setting asks for, so turning it up changes nothing
+            — and until the sky rises past it, auto-exposure cannot respond to
+            it getting brighter either, so a moon coming up would go
+            uncorrected. Nudging down gives it room to work again. Faster glass
+            is the real fix.
           </p>
-          {short ? (
-            <p className="mt-1">
-              This rig cannot get there tonight, and the cost is not just
-              darker frames. Pinned at both ceilings, auto-exposure can only
-              respond to the sky getting <i>brighter than this target</i> —
-              never to anything below it. A moon coming up would go uncorrected
-              until the frames pass {target}. Set the target near what the
-              camera actually reaches and it comes off its ceilings, regulating
-              in both directions again. Or put faster glass in front of it.
-            </p>
-          ) : (
-            <p className="mt-1">
-              Comfortably reached, so auto-exposure still has room to respond
-              when the sky changes.
+          {live?.brightness != null && (
+            <p className="mt-1 text-amber-200/70">
+              Reaching {Math.round(live.brightness)} of {target}.
             </p>
           )}
         </div>
       )}
-
-      <Button onClick={setItForMe} disabled={busy} className="w-full">
-        {busy ? 'Measuring…' : 'Set it for me'}
-      </Button>
-      {result && (
-        <p className="-mt-1 text-xs text-zinc-400">
-          {result.changed === true && `Set to ${result.target}. `}
-          {result.why}
-        </p>
-      )}
-
-      <p className="text-xs text-zinc-500">
-        There is no correct number — 90 is a bright, detailed night sky, 40–60
-        looks closer to how a dark sky looks to the eye. What matters is that it
-        is reachable: a target this camera cannot hit is the same as no
-        auto-exposure at all. Gain is capped at {maxGain} by this camera, which
-        is usually what runs out first.
-      </p>
     </>
+  )
+}
+
+/**
+ * The ceilings. Real controls, but not first-screen ones.
+ *
+ * "The longest exposure will obviously always be maxed — it takes what it needs
+ * and nothing more" is right for the brightness question, and it is the wrong
+ * way round for the other one this setting decides: how MANY frames a night
+ * has. 40s exposures give half the frames of 20s ones, and frame count is what
+ * makes a timelapse smooth and what catches a meteor. Worth having, worth
+ * hiding.
+ */
+function AdvancedExposure({ profile, onProfile }) {
+  const [open, setOpen] = useState(false)
+  if (!open) {
+    return (
+      <button onClick={() => setOpen(true)}
+        className="text-xs text-sky-400 underline">
+        Exposure limits
+      </button>
+    )
+  }
+  return (
+    <div className="space-y-3 border-t border-zinc-700 pt-4">
+      <NumberField
+        label="Longest exposure" suffix="s" min={0.1} max={120} step={5}
+        value={Number(((profile.max_exposure_us ?? 0) / 1e6).toFixed(1))}
+        onChange={(s) => onProfile({ max_exposure_us: Math.round(s * 1e6) })} />
+      <p className="-mt-1 text-xs text-zinc-500">
+        Auto-exposure takes what it needs and no more, so this is a ceiling
+        rather than a setting — but it also decides how many frames a night
+        has. Longer exposures mean fewer, smoother-but-choppier timelapses and
+        less chance of catching something brief. Gain is capped at{' '}
+        {profile.max_gain} by this camera, which is usually what runs out first.
+      </p>
+    </div>
   )
 }
 
@@ -563,7 +584,7 @@ function NetworkCard({ showToast }) {
 
 /* -- per-camera capture / timelapse / overlay ------------------------------ */
 
-function CameraSettings({ id, cam, storage, onCamera, onProfile, onApplied }) {
+function CameraSettings({ id, cam, storage, onCamera, onProfile }) {
   // Day and night are independent profiles in config; editing only one of them
   // silently would be a trap, so the period is an explicit control.
   const [period, setPeriod] = useState('night')
@@ -628,29 +649,19 @@ function CameraSettings({ id, cam, storage, onCamera, onProfile, onApplied }) {
               </label>
             </div>
           ) : (
-            /* The two knobs auto-exposure actually aims at. They were in the
-               config and nowhere in the UI, so a rig whose sky was darker than
-               its target had no way to say so and no way to fix it. */
+            /* One control. Auto-exposure already reads every frame and works
+               out the exposure the sky needs; the only judgement left to a
+               person is whether they want it a bit brighter or darker than the
+               camera's own idea, and that is a nudge, not a number. */
             <div className="space-y-4 rounded-xl bg-zinc-800/40 p-4">
-              <NumberField
-                label="Longest exposure" suffix="s" min={0.1} max={120} step={5}
-                value={Number(((profile.max_exposure_us ?? 0) / 1e6).toFixed(1))}
-                onChange={(s) =>
-                  onProfile(period, { max_exposure_us: Math.round(s * 1e6) })} />
-              <p className="-mt-2 text-xs text-zinc-500">
-                How long a single frame may be exposed for. Longer means
-                brighter stars and fewer frames in the night — and the
-                timelapse gets shorter as a result.
-              </p>
-
-              <NumberField
-                label="Target brightness" min={1} max={255}
-                value={profile.target_brightness ?? 90}
+              <ExposureNudge
+                target={profile.target_brightness ?? DEFAULT_TARGET}
+                period={period} cameraId={id}
                 onChange={(target_brightness) =>
                   onProfile(period, { target_brightness })} />
-              <BrightnessGuide target={profile.target_brightness ?? 90}
-                period={period} maxGain={profile.max_gain}
-                cameraId={id} onApplied={onApplied} />
+
+              <AdvancedExposure profile={profile}
+                onProfile={(patch) => onProfile(period, patch)} />
             </div>
           )}
         </div>

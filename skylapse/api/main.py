@@ -727,51 +727,6 @@ def put_config(body: dict) -> dict:
     return {"ok": True}
 
 
-# -- auto-exposure target ----------------------------------------------------
-
-class AutoTarget(BaseModel):
-    camera_id: str
-    period: str = "night"            # night | day
-
-
-@app.post("/api/exposure/auto-target")
-def exposure_auto_target(body: AutoTarget) -> dict:
-    """Pick a brightness target this camera can actually reach.
-
-    The setting is a unitless number nobody can guess, and getting it wrong
-    fails silently: aim above what the optics can deliver and auto-exposure pins
-    at both ceilings, every frame comes out as bright as the rig can manage, and
-    the number stops meaning anything. So this measures instead of advising.
-    """
-    from ..daemon.scheduler import suggest_target
-
-    if body.period not in ("night", "day"):
-        raise HTTPException(400, "period must be night or day")
-    cfg = config.load()
-    entry = cfg.cameras.get(body.camera_id)
-    if entry is None:
-        raise HTTPException(404, "no such camera")
-    profile = entry.night if body.period == "night" else entry.day
-    if not profile.auto_exposure:
-        raise HTTPException(409, "this profile is in manual exposure")
-
-    daemon = _read_status("daemon")
-    # Only a measurement of the period being set is worth anything: a daylight
-    # frame says nothing about what the night reaches.
-    live = daemon.get("period") == body.period
-    measured = daemon.get("brightness") if live else None
-    target, why = suggest_target(measured, bool(daemon.get("ae_at_limits")),
-                                 profile.target_brightness)
-
-    changed = target != profile.target_brightness
-    if changed:
-        profile.target_brightness = target
-        config.save(cfg)
-    return {"ok": True, "target": target, "changed": changed,
-            "measured": round(measured, 1) if measured is not None else None,
-            "why": why}
-
-
 # -- time sync (standalone mode) --------------------------------------------
 
 class TimeSync(BaseModel):

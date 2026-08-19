@@ -424,6 +424,39 @@ was clear an hour ago is a dew alarm**, and a better one than a dedicated sensor
 it measures the thing that actually matters — whether the sky is still visible through
 the dome. Not built; the notification hook and the dew heater are the obvious consumers.
 
+### Auto exposure has one control, and it is not a number
+
+Target brightness was surfaced as a field — 1 to 255, unitless — which is a dial
+nobody should be expected to turn. Worse, getting it wrong fails silently and
+invisibly: a whole night aimed at 90 on optics that deliver 41, pinned at both
+ceilings, with nothing anywhere saying so.
+
+It is now a slider whose middle is the camera's own judgement, and whose only
+question is one a person can answer by looking at last night's frames: brighter,
+or darker? Nudge one step, sleep on it, nudge again. Rungs are multiplicative
+(x1.25) because brightness is — a fixed step of 10 is enormous at the dark end
+and imperceptible at the bright one — and the stored value is still an absolute
+target, so nothing in the daemon changed and there is no migration.
+
+Two things follow from taking the number away, and both are the point:
+
+- **The exposure ceiling moves behind "Exposure limits".** "It will always be
+  maxed, it takes what it needs and nothing more" is correct for the brightness
+  question. It is the wrong way round for the other thing that setting decides —
+  how many frames a night has, which is what makes a timelapse smooth and what
+  catches something brief. A real control, not a first-screen one.
+- **The one case the slider cannot fix has to announce itself.** Pinned at both
+  ceilings, turning it up does nothing, and auto-exposure cannot respond to the
+  sky brightening until it passes the target either — so a moonrise goes
+  uncorrected. That warning appears only in that state, says nudging down gives
+  it room to work, and says faster glass is the real fix.
+
+A "set it for me" button was built first and then deleted. With the measurement
+shown and the rule explained it was saving one multiplication, and it was a
+permanent control that in most states did nothing but say "nothing to change" —
+which teaches people to ignore controls. The slider makes it redundant: nudging
+down IS the fix, and it takes one drag.
+
 ### The clip length setting was never honoured on a long night
 
 Reported straight after the first good render: the clip is 1:13 and the setting says 30
