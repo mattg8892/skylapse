@@ -628,7 +628,24 @@ function CameraSettings({ id, cam, storage, onCamera, onProfile }) {
             </p>
           </div>
 
-          <Segmented value={period} onChange={setPeriod} options={PERIOD_OPTIONS} />
+          {/* An unlabelled Day/Night toggle is easy to miss entirely, and
+              missing it means adjusting one set of settings while watching the
+              other one run — which is exactly what happened, with the slider
+              taking the blame. Everything below this line belongs to whichever
+              side is selected. */}
+          <div className="rounded-xl border border-zinc-700 bg-zinc-900/60 p-3">
+            <p className="mb-2 text-sm text-zinc-300">
+              Which half of the day are you setting up?
+            </p>
+            <Segmented value={period} onChange={setPeriod} options={PERIOD_OPTIONS} />
+            <p className="mt-2 text-xs text-zinc-500">
+              Day and night keep <b className="text-zinc-400">separate</b>{' '}
+              settings — gap, exposure and brightness below all belong to{' '}
+              <b className="text-zinc-400">{period}</b> only, and changing them
+              leaves the other alone. Twilight uses the night settings, since
+              that is when the interesting sky starts.
+            </p>
+          </div>
 
           <NumberField
             label="Gap between frames" suffix="s" min={0} max={3600}
