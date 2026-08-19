@@ -144,3 +144,58 @@ def test_new_camera_profiles_are_fitted_to_its_limits(tmp_path, monkeypatch):
     assert entry.day.max_gain <= 22
     # A limit the camera comfortably exceeds must not be raised to meet it.
     assert entry.day.max_exposure_us == 100_000
+
+
+def test_the_gain_floor_is_not_clamped_onto_the_ceiling(tmp_path, monkeypatch):
+    """Found outside, in daylight, on the first night with a fast lens.
+
+    `gain` is auto-exposure's floor — what it walks back down to once exposure
+    has room again. The clamp treated it as another ceiling, so on a module
+    whose maximum gain is 22 the ZWO-shaped default of 100 became 22 and the
+    floor met the ceiling. Gain could then never move: every frame that camera
+    ever took was at maximum amplification. It read "pinned at both limits" all
+    night, and pointed at a daylit sky through an f/2 fisheye it could not
+    expose correctly at any shutter speed the sensor has — 0.1s, gain 22,
+    saturated, with the brightness slider already at its lowest.
+    """
+    from skylapse import config
+    from skylapse.daemon.main import MIN_GAIN
+    from skylapse.daemon.drivers.base import BayerPattern, CameraInfo
+
+    monkeypatch.setattr(config, "CONFIG_PATH", tmp_path / "config.yaml")
+    cfg = config.Config()
+    entry = cfg.camera("picam-imx477")
+    assert entry.night.gain == 100, "precondition: the ZWO-shaped default"
+
+    info = CameraInfo(name="Pi Camera (imx477)", camera_id="picam-imx477",
+                      driver="picam", width=4056, height=3040,
+                      bayer=BayerPattern.BGGR, bit_depth=16,
+                      max_exposure_us=694_422_939, min_exposure_us=110,
+                      max_gain=22)
+
+    for profile in (entry.day, entry.night):
+        for field, ceiling in (("max_gain", info.max_gain),
+                               ("max_exposure_us", info.max_exposure_us)):
+            if getattr(profile, field) > ceiling:
+                setattr(profile, field, ceiling)
+        if profile.gain >= info.max_gain:
+            profile.gain = MIN_GAIN
+
+    for profile in (entry.day, entry.night):
+        assert profile.gain == MIN_GAIN
+        assert profile.gain < profile.max_gain, \
+            "floor and ceiling are the same value; gain can never move"
+
+
+def test_a_camera_with_room_keeps_its_baseline(tmp_path, monkeypatch):
+    """A ZWO tops out in the hundreds, so the default baseline is fine there and
+    must not be dragged down to 1."""
+    from skylapse import config
+    from skylapse.daemon.main import MIN_GAIN
+
+    monkeypatch.setattr(config, "CONFIG_PATH", tmp_path / "config.yaml")
+    entry = config.Config().camera("zwo-asi676mc")
+    max_gain = 600
+    if entry.night.gain >= max_gain:
+        entry.night.gain = MIN_GAIN
+    assert entry.night.gain == 100

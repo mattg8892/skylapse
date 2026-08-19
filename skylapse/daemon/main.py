@@ -41,6 +41,9 @@ COMMAND_POLL_S = 0.5             # how often a gap is interrupted to look for
 # Consecutive frames pinned at BOTH auto-exposure ceilings before it is worth
 # saying so. Three, because one is a cloud crossing and three is the sky.
 AE_PINNED_FRAMES = 3
+# Auto-exposure's gain floor. Unity: no amplification, the cleanest frame the
+# sensor can give, and where a night should start before exposure runs out.
+MIN_GAIN = 1
 # Command files the UI drops in RUN_DIR. Seeing any of these ends a gap early.
 COMMAND_FILES = ("focus_start", "focus_stop", "keeper_cmd", "resume_cmd",
                  "focus_cmd.json")
@@ -128,11 +131,24 @@ class CaptureDaemon:
                 # so clamping it is not overriding a choice. Only ever downward.
                 for profile in (entry.day, entry.night):
                     for field, ceiling in (("max_gain", info.max_gain),
-                                           ("gain", info.max_gain),
                                            ("max_exposure_us", info.max_exposure_us)):
                         if getattr(profile, field) > ceiling:
                             setattr(profile, field, ceiling)
                             changed = True
+                    # `gain` is auto-exposure's FLOOR — the value it walks back
+                    # down to once exposure has room again — and clamping a
+                    # floor to the ceiling welds them together. The default is
+                    # 100, ZWO-shaped; an IMX477 tops out at 22, so both became
+                    # 22 and gain could never move. Every frame that camera
+                    # took was at maximum gain: it read "pinned at both limits"
+                    # all night, and in daylight with a fast lens it could not
+                    # expose correctly at any shutter speed the sensor has.
+                    #
+                    # Unity, because gain is what you add when exposure runs
+                    # out, not something to start from.
+                    if profile.gain >= info.max_gain:
+                        profile.gain = MIN_GAIN
+                        changed = True
                 if changed:
                     config.save(cfg)
                 self.cfg = cfg
