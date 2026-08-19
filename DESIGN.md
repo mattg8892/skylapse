@@ -492,6 +492,17 @@ dashboard shows and logs once per episode. Three frames because one is a cloud c
 It is not an error and is not notified — it is a fact about the sky that the operator
 needs in order to decide whether to spend more exposure on it.
 
+**The diagnosis above was wrong, and the flag is what proved it.** This was read as a slow
+lens against a dark sky, and the advice given was faster glass. The following evening the
+same camera could not expose a *daylit* sky either — 0.1s at gain 22, pure white — which
+no lens explains. The cause was a clamp that pinned auto-exposure's gain floor onto its
+ceiling, so gain was welded at 22 and every frame ever taken was at maximum
+amplification. Worth recording as a reasoning failure and not just a bug: "the rig has run
+out of road" was consistent with everything observed at night, and it took a measurement
+in daylight — where the answer is not debatable — to show that the road had been fenced
+off rather than ended. A symptom that only appears in the dark should be checked in the
+light.
+
 ## Capture scheduler
 
 - Sun altitude via `astral` decides day / twilight / night profiles.
