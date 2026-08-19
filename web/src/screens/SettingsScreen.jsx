@@ -338,12 +338,13 @@ function BrightnessGuide({ target, period, maxGain, cameraId, onApplied }) {
           </p>
           {short ? (
             <p className="mt-1">
-              This rig cannot get there tonight. Auto-exposure has nothing left
-              to give once the exposure and gain ceilings are hit, and every
-              frame after that is as bright as it can make it — the target stops
-              having any effect at all. Either set the target near what it
-              actually reaches, so exposure settles below its ceilings and can
-              still respond to the sky, or put faster glass in front of it.
+              This rig cannot get there tonight, and the cost is not just
+              darker frames. Pinned at both ceilings, auto-exposure can only
+              respond to the sky getting <i>brighter than this target</i> —
+              never to anything below it. A moon coming up would go uncorrected
+              until the frames pass {target}. Set the target near what the
+              camera actually reaches and it comes off its ceilings, regulating
+              in both directions again. Or put faster glass in front of it.
             </p>
           ) : (
             <p className="mt-1">
