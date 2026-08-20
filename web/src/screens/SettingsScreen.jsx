@@ -193,8 +193,8 @@ export default function SettingsScreen({ showToast, storage }) {
         </Card>
       </Section>
 
-      <Section title="Set up once" collapsible
-        summary="Network, remote access, password, updates and config backup — the parts of the camera you configure when you install it and then leave alone.">
+      <Section title="Set up once"
+        subtitle="Configured when you install the camera, then left alone">
         {/* Network */}
         <NetworkCard showToast={showToast} />
         {/* Remote access */}
