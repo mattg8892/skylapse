@@ -956,6 +956,20 @@ function WhiteBalanceCard({ id, cam, onCamera }) {
         </p>
       )}
 
+      <label className="mt-4 flex items-start justify-between gap-3 text-sm">
+        <span>
+          <span className="text-zinc-300">Let the camera set it</span>
+          <span className="mt-1 block text-xs text-zinc-500">
+            Measured every twentieth frame once the exposure has settled, and
+            moved a fifth of the way each time so nothing passing can recolour
+            a night. Moving either slider below turns this off — a value you
+            set by hand should not be quietly overwritten.
+          </span>
+        </span>
+        <Toggle checked={cam.wb_auto ?? true} label="Let the camera set it"
+          onChange={(wb_auto) => onCamera({ wb_auto })} />
+      </label>
+
       <div className="mt-4 flex flex-wrap gap-2">
         <Button onClick={autoSeed} className="flex-1">Auto from current frame</Button>
         <Button onClick={() => setPending({ r: 1.0, b: 1.0 })}
@@ -963,7 +977,8 @@ function WhiteBalanceCard({ id, cam, onCamera }) {
           Reset to neutral
         </Button>
         <Button tone="accent" disabled={!dirty} className="w-full"
-          onClick={() => onCamera({ wb_r: pending.r, wb_b: pending.b })}>
+          onClick={() => onCamera({ wb_r: pending.r, wb_b: pending.b,
+                                    wb_auto: false })}>
           {dirty ? 'Apply — takes effect from the next frame' : 'Applied'}
         </Button>
       </div>

@@ -127,6 +127,13 @@ class CameraEntry(BaseModel):
     # existing rig's output moves until its own sliders do.
     wb_r: float = Field(1.0, ge=0.1, le=8.0)
     wb_b: float = Field(1.0, ge=0.1, le=8.0)
+    # Let the camera keep its own white balance, the way it keeps its own
+    # exposure. On by default because the alternative is what actually happens:
+    # a night is shot, and only afterwards does anyone notice the multipliers
+    # were still 1.0 and every frame came out green. Touching either slider
+    # turns it off — a manual value that a background process quietly overwrites
+    # is not a manual value.
+    wb_auto: bool = True
 
 
 class AuthConfig(BaseModel):

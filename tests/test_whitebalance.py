@@ -279,3 +279,25 @@ def test_a_neutral_camera_is_not_charged_for_the_colour_stage():
     every unconfigured rig do not pay for a full-frame float round trip."""
     arr = np.zeros((64, 64, 3), dtype=np.uint16)
     assert process.apply_wb(arr, 1.0, 1.0) is arr
+
+
+# -- automatic white balance -------------------------------------------------
+
+def test_auto_wb_defaults_on_for_a_new_camera():
+    """Asked for after a whole night came back green because the multipliers
+    had never been set. That is not a mistake worth making twice."""
+    from skylapse import config
+    assert config.Config().camera("picam-imx477").wb_auto is True
+
+
+def test_the_blend_cannot_be_swung_by_one_frame():
+    """A car's headlights crossing the frame must not recolour the night, so
+    each measurement moves it only a fraction of the way."""
+    from skylapse.daemon.main import AUTO_WB_BLEND
+    current, wild = 1.0, 3.0
+    after = (1 - AUTO_WB_BLEND) * current + AUTO_WB_BLEND * wild
+    assert after < 1.5, f"one frame moved it to {after}"
+    settled = current
+    for _ in range(30):
+        settled = (1 - AUTO_WB_BLEND) * settled + AUTO_WB_BLEND * wild
+    assert settled > 2.9, "but a sustained change must still arrive"

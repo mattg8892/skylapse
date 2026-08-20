@@ -42,6 +42,13 @@ COMMAND_POLL_S = 0.5             # how often a gap is interrupted to look for
 # Consecutive frames pinned at BOTH auto-exposure ceilings before it is worth
 # saying so. Three, because one is a cloud crossing and three is the sky.
 AE_PINNED_FRAMES = 3
+# Auto white balance. Every twentieth frame, because colour drifts over hours;
+# a fifth of the way each time, so nothing transient can recolour a night; and
+# only once exposure has settled, since a frame caught mid-hunt is not a colour
+# measurement.
+AUTO_WB_EVERY_FRAMES = 20
+AUTO_WB_BLEND = 0.2
+AUTO_WB_SETTLED_BAND = 0.15
 # The shortest focus exposure worth asking for. Sensors floor this
 # themselves; going lower just wastes a round trip.
 FOCUS_MIN_EXPOSURE_US = 50
@@ -125,6 +132,7 @@ class CaptureDaemon:
         # says so once rather than every frame.
         self.ae_pinned = 0
         self.ae_pinned_said = False
+        self.frames_since_wb = 0
         self.focus: FocusSession | None = None
         self.focus_started = 0.0
         self.focus_controls: tuple[int, int] | None = None
@@ -402,6 +410,7 @@ class CaptureDaemon:
             frame._raw_means = process.plane_means(frame)
             self.last_brightness = process.metered_brightness(
                 frame._raw_means, frame.bit_depth, self._wb(cam))
+            self._maybe_auto_wb(cam, frame._raw_means)
             self.consecutive_bright = (self.consecutive_bright + 1
                                        if self.last_brightness >= SAFETY_BRIGHT_LEVEL
                                        else 0)
@@ -728,6 +737,50 @@ class CaptureDaemon:
             data = {}
         data[for_period] = {"exposure_us": self.exposure_us, "gain": self.gain}
         config.write_run_file("ae_state.json", json.dumps(data))
+
+    def _maybe_auto_wb(self, cam, means) -> None:
+        """Keep white balance the way exposure is kept: by the camera.
+
+        Asked for after a night came back green because the multipliers had
+        never been set — which is not a mistake anyone makes twice, and is
+        exactly the sort of thing a camera should not need to be told.
+
+        Three things make this safe to leave running. It waits for exposure to
+        settle, because a frame captured while auto-exposure is still hunting is
+        not a colour measurement. It moves a fraction of the way at a time, so a
+        car's headlights crossing the frame cannot recolour the night. And it
+        only acts every so often, because white balance drifts over hours, not
+        seconds.
+
+        Grey-world is the estimate — it assumes the scene averages to grey,
+        which a sky does not exactly, which is why the setting stays adjustable
+        and why touching it turns this off.
+        """
+        if not getattr(cam, "wb_auto", True) or self.last_brightness is None:
+            return
+        profile = profile_for(self.cfg, cam)
+        if profile.auto_exposure:
+            settled = abs(self.last_brightness - profile.target_brightness)                 <= profile.target_brightness * AUTO_WB_SETTLED_BAND
+            if not settled or self.ae_pinned >= AE_PINNED_FRAMES:
+                return                       # still hunting, or out of road
+        self.frames_since_wb += 1
+        if self.frames_since_wb < AUTO_WB_EVERY_FRAMES:
+            return
+        self.frames_since_wb = 0
+
+        try:
+            measured_r, measured_b = process.gray_world(means)
+        except (ValueError, ZeroDivisionError):
+            return
+        blend = AUTO_WB_BLEND
+        new_r = (1 - blend) * cam.wb_r + blend * max(0.5, min(3.0, measured_r))
+        new_b = (1 - blend) * cam.wb_b + blend * max(0.5, min(3.0, measured_b))
+        if abs(new_r - cam.wb_r) < 0.01 and abs(new_b - cam.wb_b) < 0.01:
+            return                           # already there; do not churn config
+        cam.wb_r, cam.wb_b = round(new_r, 3), round(new_b, 3)
+        config.save(self.cfg)
+        log.info("Auto white balance: R %.2f B %.2f (measured %.2f/%.2f)",
+                 cam.wb_r, cam.wb_b, measured_r, measured_b)
 
     def _check_ae_headroom(self, profile) -> None:
         """Notice when auto-exposure has run out of room.
