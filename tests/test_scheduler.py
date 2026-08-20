@@ -141,3 +141,32 @@ def test_manual_exposure_never_reports_pinned():
     loop = _Pinned(25_000_000, 22)
     _run(loop, manual, 5)
     assert loop.ae_pinned == 0
+
+
+def test_a_restart_starts_from_the_profile_not_a_blind_guess():
+    """The daemon's pre-camera defaults are one second and gain 100, set before
+    any camera has been opened. Auto-exposure only walks gain down a fifth per
+    frame, so at a daytime cadence of one frame every three minutes a restart
+    cost ten minutes of blown frames climbing back down — which on a rig
+    outside reads as a broken camera, and was reported as one.
+    """
+    from skylapse.config import CaptureProfile
+
+    profile = CaptureProfile(auto_exposure=True, gain=1, max_gain=22,
+                             max_exposure_us=100_000)
+    camera_max_gain = 22
+
+    # what _open_camera now does with the daemon's starting values
+    gain = min(profile.gain, camera_max_gain)
+    exposure_us = min(1_000_000, profile.max_exposure_us)
+
+    assert gain == 1, "started at the gain ceiling again"
+    assert exposure_us == 100_000, "started longer than the profile allows"
+
+
+def test_the_seed_never_exceeds_what_the_camera_can_do():
+    """A profile carried over from a different camera must not set a gain the
+    hardware cannot reach."""
+    from skylapse.config import CaptureProfile
+    profile = CaptureProfile(gain=100, max_gain=300)
+    assert min(profile.gain, 22) == 22

@@ -155,6 +155,18 @@ class CaptureDaemon:
                 if changed:
                     config.save(cfg)
                 self.cfg = cfg
+
+                # Start where this camera's profile says to, not at the
+                # pre-camera defaults of one second and gain 100. Those are
+                # necessarily blind guesses — they are set before any camera has
+                # been opened — and auto-exposure walks gain down by a fifth per
+                # frame, so at a daytime cadence of one frame every three
+                # minutes a restart cost ten minutes of blown-out frames while
+                # it climbed back down. On a rig outside that reads as a broken
+                # camera, and it was reported as one.
+                profile = profile_for(cfg, entry)
+                self.gain = min(profile.gain, info.max_gain)
+                self.exposure_us = min(self.exposure_us, profile.max_exposure_us)
                 self._write_status({"camera": info.name,
                                     "camera_id": self.camera_id,
                                     "state": "capturing"})
