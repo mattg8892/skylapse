@@ -36,3 +36,38 @@ def test_every_component_used_is_defined(path):
     assert not missing, (
         f"{path.name} renders {missing} but never defines or imports them — "
         f"this builds cleanly and shows a blank screen")
+
+
+# -- serving the frontend ----------------------------------------------------
+
+def test_index_html_is_never_cached(tmp_path, monkeypatch):
+    """The one file that must always be fresh.
+
+    Vite fingerprints every asset, so those can be cached forever. index.html
+    is what says which fingerprints are current — and a stale one names a
+    bundle that has been deleted, which the camera answers with a 404 and the
+    browser renders as a black screen. Seen exactly that way after an update,
+    with the working build already installed and serving.
+    """
+    from fastapi.testclient import TestClient
+    from skylapse import config
+    from skylapse.api import main as api
+
+    monkeypatch.setattr(config, "CONFIG_PATH", tmp_path / "config.yaml")
+    monkeypatch.setattr(config, "RUN_DIR", tmp_path / "run")
+    config.save(config.Config())
+
+    dist = tmp_path / "dist"
+    (dist / "assets").mkdir(parents=True)
+    (dist / "index.html").write_text("<!doctype html><script src=/assets/x.js>")
+    (dist / "assets" / "x.js").write_text("console.log(1)")
+
+    app = api.FastAPI()
+    app.mount("/", api._Frontend(directory=dist, html=True), name="web")
+    client = TestClient(app)
+
+    index = client.get("/")
+    assert "no-cache" in index.headers.get("cache-control", "")
+    # Fingerprinted assets are free to cache; only the index must revalidate.
+    asset = client.get("/assets/x.js")
+    assert "no-cache" not in asset.headers.get("cache-control", "")

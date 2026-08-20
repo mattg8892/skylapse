@@ -1506,6 +1506,28 @@ def remote_disable() -> dict:
 
 # -- static frontend (mounted last so /api wins) -----------------------------
 
+class _Frontend(StaticFiles):
+    """Static files, with index.html deliberately never cached.
+
+    Vite fingerprints every asset — index-a1b2c3.js — so those may be cached
+    forever, and should be. index.html is the opposite: it is the one file that
+    says which fingerprints are current, and a stale copy points at a bundle
+    that no longer exists on disk.
+
+    That is not theoretical. After an update the browser kept an index.html
+    naming the previous bundle, the camera returned 404 for it, and the settings
+    page went black — with the fix already installed and serving correctly. The
+    only way in was a hard reload, which is not something to ask of somebody
+    holding a phone in a field.
+    """
+
+    def file_response(self, full_path, stat_result, scope, status_code=200):
+        response = super().file_response(full_path, stat_result, scope, status_code)
+        if str(full_path).endswith(".html"):
+            response.headers["Cache-Control"] = "no-cache, must-revalidate"
+        return response
+
+
 _web_dist = Path(__file__).resolve().parents[2] / "web" / "dist"
 if _web_dist.exists():
-    app.mount("/", StaticFiles(directory=_web_dist, html=True), name="web")
+    app.mount("/", _Frontend(directory=_web_dist, html=True), name="web")
