@@ -10,6 +10,7 @@ import collections
 import json
 import logging
 import signal
+import subprocess
 import time
 
 import numpy as np
@@ -44,12 +45,56 @@ AE_PINNED_FRAMES = 3
 # The shortest focus exposure worth asking for. Sensors floor this
 # themselves; going lower just wastes a round trip.
 FOCUS_MIN_EXPOSURE_US = 50
+# Breathing room between focus frames. Not for the sensor's sake — for
+# the power supply's.
+FOCUS_FRAME_GAP_S = 0.35
 # Auto-exposure's gain floor. Unity: no amplification, the cleanest frame the
 # sensor can give, and where a night should start before exposure runs out.
 MIN_GAIN = 1
 # Command files the UI drops in RUN_DIR. Seeing any of these ends a gap early.
 COMMAND_FILES = ("focus_start", "focus_stop", "keeper_cmd", "resume_cmd",
                  "focus_cmd.json")
+
+
+
+# The firmware's throttle register, which is the only place a Pi says out loud
+# that its supply is sagging. Bits 0-3 are live; 16-19 latch anything that has
+# happened since boot.
+THROTTLED_UNDERVOLTAGE = 0x1
+THROTTLED_UNDERVOLTAGE_SEEN = 0x10000
+THROTTLED_CAPPED = 0x2
+THROTTLED_THROTTLED = 0x4
+# Asking the firmware costs a process; the answer moves slowly and focus mode
+# would otherwise ask several times a second.
+_POWER_TTL_S = 20
+_power_cache: dict = {"at": 0.0, "value": {}}
+
+
+def power_health() -> dict:
+    """Whether the supply is holding up, straight from the SoC.
+
+    Undervoltage is invisible from inside the application otherwise: it looks
+    like a camera that hangs, a Wi-Fi link that rots, or a board that stops
+    dead — all of which were diagnosed as something else today before the red
+    LED made it obvious. The firmware knew the whole time.
+    """
+    now = time.time()
+    if now - _power_cache["at"] < _POWER_TTL_S:
+        return _power_cache["value"]
+    value: dict = {}
+    try:
+        out = subprocess.run(["vcgencmd", "get_throttled"], capture_output=True,
+                             text=True, timeout=5).stdout
+        bits = int(out.strip().split("=", 1)[1], 16)
+        value = {
+            "undervoltage": bool(bits & THROTTLED_UNDERVOLTAGE),
+            "undervoltage_seen": bool(bits & THROTTLED_UNDERVOLTAGE_SEEN),
+            "throttled": bool(bits & (THROTTLED_CAPPED | THROTTLED_THROTTLED)),
+        }
+    except (OSError, subprocess.SubprocessError, ValueError, IndexError):
+        pass                      # not a Pi, or vcgencmd is absent: say nothing
+    _power_cache.update(at=now, value=value)
+    return value
 
 
 class CaptureDaemon:
@@ -236,6 +281,16 @@ class CaptureDaemon:
                 else:
                     self.state = "focusing"
                     self._focus_frame()
+                    # Focus used to capture back to back with no gap at all:
+                    # full-sensor reads and a JPEG encode as fast as the
+                    # hardware allows, for up to fifteen minutes. That is the
+                    # heaviest sustained load this camera ever runs, and on a
+                    # supply that is marginal it is where the brownouts show
+                    # up — reported from the field, twice, in focus mode and
+                    # nowhere else. A third of a second between frames is
+                    # slower than anyone can turn a focus ring and takes a
+                    # large bite out of the duty cycle.
+                    self._sleep_interruptible(FOCUS_FRAME_GAP_S)
                     continue
 
             # Manual-mode safety: pause before capturing into daylight or
@@ -656,7 +711,11 @@ class CaptureDaemon:
 
     def _write_status(self, extra: dict) -> None:
         config.RUN_DIR.mkdir(parents=True, exist_ok=True)
-        status = {"updated": time.time(), **extra}
+        # Power goes into every status write, cached, so whatever the dashboard
+        # is showing it can always say the supply is the problem. A sagging
+        # supply presents as a dozen different faults and none of them look
+        # electrical.
+        status = {"updated": time.time(), **power_health(), **extra}
         config.write_run_file("daemon.json", json.dumps(status))
 
 

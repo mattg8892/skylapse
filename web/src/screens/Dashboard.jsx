@@ -252,6 +252,19 @@ function StatusLine({ daemon: d }) {
           Not a fault, but it has to be visible: a whole night ran pinned at
           gain 22 on a module whose ceiling is 22, and the only symptom was a
           sky that looked darker than it should have. */}
+      {/* A sagging supply presents as a dozen unrelated faults — a camera that
+          hangs, a Wi-Fi link that rots, a board that stops dead — and none of
+          them look electrical. The firmware knew all along; this just asks it. */}
+      {(d.undervoltage || d.undervoltage_seen) && (
+        <p className="mt-1 text-sm text-rose-400">
+          {d.undervoltage
+            ? 'Power supply is browning out right now'
+            : 'Power supply browned out since boot'}
+          {' — '}check the supply and the USB-C cable. This causes hangs,
+          dropped Wi-Fi and sudden reboots, and focus mode is where it shows
+          first because it draws the most.
+        </p>
+      )}
       {d.ae_at_limits && (
         <p className="mt-1 text-sm text-amber-400">
           AE at limits — sky darker than target. Raise the longest exposure in

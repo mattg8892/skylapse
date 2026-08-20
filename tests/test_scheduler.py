@@ -170,3 +170,42 @@ def test_the_seed_never_exceeds_what_the_camera_can_do():
     from skylapse.config import CaptureProfile
     profile = CaptureProfile(gain=100, max_gain=300)
     assert min(profile.gain, 22) == 22
+
+
+def test_power_health_says_nothing_when_it_cannot_ask():
+    """Off a Pi there is no vcgencmd. An empty answer means "no claim", which
+    is what the dashboard checks — inventing False would assert the supply is
+    fine on hardware that was never asked."""
+    from skylapse.daemon import main
+    main._power_cache.update(at=0.0, value={})
+    health = main.power_health()
+    assert health == {} or set(health) == {"undervoltage", "undervoltage_seen",
+                                           "throttled"}
+
+
+def test_the_throttle_bits_are_decoded_the_way_the_firmware_means_them(monkeypatch):
+    """0x50005: undervoltage now and since boot, plus throttling. Getting the
+    latched bits wrong would report a supply that failed hours ago as healthy."""
+    import subprocess
+    from skylapse.daemon import main
+
+    monkeypatch.setattr(main.subprocess, "run",
+                        lambda *a, **kw: subprocess.CompletedProcess(
+                            a, 0, "throttled=0x50005\n", ""))
+    main._power_cache.update(at=0.0, value={})
+    health = main.power_health()
+    assert health["undervoltage"] is True
+    assert health["undervoltage_seen"] is True
+    assert health["throttled"] is True
+
+
+def test_a_healthy_supply_reports_healthy(monkeypatch):
+    import subprocess
+    from skylapse.daemon import main
+
+    monkeypatch.setattr(main.subprocess, "run",
+                        lambda *a, **kw: subprocess.CompletedProcess(
+                            a, 0, "throttled=0x0\n", ""))
+    main._power_cache.update(at=0.0, value={})
+    health = main.power_health()
+    assert health["undervoltage"] is False and health["undervoltage_seen"] is False
