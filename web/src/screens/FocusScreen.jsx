@@ -23,6 +23,27 @@ const TREND_CLASS = {
 // early is bouncing the user out of the screen they just opened.
 const START_TIMEOUT_MS = 90_000
 
+
+// Exposure spans daylight to starlight — 0.1ms to 2s — so the slider is
+// logarithmic. Linear travel here would put every useful daytime value inside
+// the first pixel.
+const FOCUS_MS_MIN = 0.1
+const FOCUS_MS_MAX = 2000
+
+const sliderToMs = (pos) => {
+  const ms = FOCUS_MS_MIN * (FOCUS_MS_MAX / FOCUS_MS_MIN) ** (pos / 100)
+  return ms < 1 ? Math.round(ms * 100) / 100 : Math.round(ms * 10) / 10
+}
+
+const msToSlider = (ms) => Math.round(
+  100 * Math.log(Math.max(FOCUS_MS_MIN, ms) / FOCUS_MS_MIN)
+      / Math.log(FOCUS_MS_MAX / FOCUS_MS_MIN))
+
+const formatExposure = (ms) =>
+  ms >= 1000 ? `${(ms / 1000).toFixed(1)} s`
+    : ms >= 1 ? `${ms.toFixed(ms < 10 ? 1 : 0)} ms`
+      : `${(ms * 1000).toFixed(0)} µs`
+
 export default function FocusScreen({ showToast, onExit }) {
   // 'starting' until the daemon confirms, then 'running'. Only a transition out
   // of 'running' counts as the session ending — before confirmation, "not
@@ -249,9 +270,20 @@ export default function FocusScreen({ showToast, onExit }) {
           ))}
         </div>
 
-        <Slider label="Exposure" value={exposureMs} min={50} max={2000} step={50}
-          display={`${exposureMs} ms`}
-          onChange={(v) => { setExposureMs(v); pushControls(v, gain) }} />
+        {/* Logarithmic, because this has to span daylight and starlight — a
+            fraction of a millisecond to two seconds is four orders of
+            magnitude, and a linear slider spends 97% of its travel in the dark
+            end. It used to start at 50ms, which is fine for stars and about
+            four stops over-exposed on a sunlit tree: focusing on a distant
+            object by day, the sane way to set infinity before dark, was simply
+            not reachable. */}
+        <Slider label="Exposure" value={msToSlider(exposureMs)} min={0} max={100}
+          step={1} display={formatExposure(exposureMs)}
+          onChange={(pos) => {
+            const ms = sliderToMs(pos)
+            setExposureMs(ms)
+            pushControls(ms, gain)
+          }} />
         <Slider label="Gain" value={gain} min={0} max={maxGain} step={5}
           display={String(gain)}
           onChange={(v) => { setGain(v); pushControls(exposureMs, v) }} />

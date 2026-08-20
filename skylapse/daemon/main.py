@@ -41,6 +41,9 @@ COMMAND_POLL_S = 0.5             # how often a gap is interrupted to look for
 # Consecutive frames pinned at BOTH auto-exposure ceilings before it is worth
 # saying so. Three, because one is a cloud crossing and three is the sky.
 AE_PINNED_FRAMES = 3
+# The shortest focus exposure worth asking for. Sensors floor this
+# themselves; going lower just wastes a round trip.
+FOCUS_MIN_EXPOSURE_US = 50
 # Auto-exposure's gain floor. Unity: no amplification, the cleanest frame the
 # sensor can give, and where a night should start before exposure runs out.
 MIN_GAIN = 1
@@ -502,14 +505,19 @@ class CaptureDaemon:
         session start, so moving a slider on the phone lands on the very next
         capture — which is the whole point of a live view.
         """
-        exposure_ms, gain = FOCUS_DEFAULT_EXPOSURE_MS, FOCUS_DEFAULT_GAIN
+        exposure_ms, gain = float(FOCUS_DEFAULT_EXPOSURE_MS), FOCUS_DEFAULT_GAIN
         try:
             data = json.loads((config.RUN_DIR / "focus_ctl.json").read_text())
-            exposure_ms = int(data.get("exposure_ms", exposure_ms))
+            exposure_ms = float(data.get("exposure_ms", exposure_ms))
             gain = int(data.get("gain", gain))
         except (OSError, ValueError, TypeError):
             pass                      # no file yet, or garbage: use defaults
-        return max(1, exposure_ms) * 1000, max(0, gain)
+        # Float, and floored in microseconds rather than whole milliseconds.
+        # Focusing on a distant object in daylight — which is how you set
+        # infinity before dark — wants a fraction of a millisecond; one whole
+        # one is already several stops over. The driver clamps to whatever the
+        # sensor can actually do.
+        return max(FOCUS_MIN_EXPOSURE_US, int(exposure_ms * 1000)), max(0, gain)
 
     def _focus_frame(self) -> None:
         """One rapid frame -> preview + score -> status. Never saved to the store."""

@@ -1143,7 +1143,9 @@ def focus_stop() -> dict:
 
 
 class FocusControls(BaseModel):
-    exposure_ms: int = 500
+    # Float, because focusing in daylight needs a fraction of a millisecond and
+    # a whole one is already several stops over-exposed on a fast lens.
+    exposure_ms: float = 500
     gain: int = 250
 
 
@@ -1152,7 +1154,7 @@ def focus_controls(body: FocusControls) -> dict:
     """Exposure/gain for the live view. The daemon re-reads this before every
     focus frame, so a slider move applies on the next capture."""
     config.RUN_DIR.mkdir(parents=True, exist_ok=True)
-    payload = {"exposure_ms": max(1, body.exposure_ms), "gain": max(0, body.gain)}
+    payload = {"exposure_ms": max(0.05, body.exposure_ms), "gain": max(0, body.gain)}
     config.write_run_file("focus_ctl.json", json.dumps(payload))
     return {"ok": True, **payload}
 
