@@ -158,3 +158,46 @@ export function ConfirmDialog({ open, title, consequence, confirmLabel,
     </div>
   )
 }
+
+
+/**
+ * A named group of cards.
+ *
+ * Settings grew a card at a time until it was twelve of them in one flat
+ * scroll, with the things you tune every night — exposure, colour, timelapse —
+ * interleaved with the things you set once and never touch again, and nothing
+ * saying which was which or which camera they belonged to.
+ *
+ * Grouping rather than hiding behind navigation, deliberately: the last
+ * usability failure here was a Day/Night toggle overlooked while it was on
+ * screen, and burying controls a tap deeper makes that worse, not better.
+ * Everything stays one swipe away; only the set-once group starts folded, and
+ * it says what is inside it.
+ */
+export function Section({ title, subtitle, children, collapsible = false,
+                          summary = '' }) {
+  const [open, setOpen] = useState(!collapsible)
+  return (
+    <section className="flex flex-col gap-5">
+      <div className="flex items-baseline justify-between border-b
+                      border-zinc-800 pb-2">
+        <div>
+          <h2 className="text-xs font-medium uppercase tracking-widest
+                         text-zinc-400">
+            {title}
+          </h2>
+          {subtitle && <p className="mt-0.5 text-xs text-zinc-500">{subtitle}</p>}
+        </div>
+        {collapsible && (
+          <button onClick={() => setOpen(!open)} aria-expanded={open}
+            className="shrink-0 text-xs text-sky-400">
+            {open ? 'Hide' : 'Show'}
+          </button>
+        )}
+      </div>
+      {open ? children : (
+        <p className="-mt-2 text-xs text-zinc-500">{summary}</p>
+      )}
+    </section>
+  )
+}
