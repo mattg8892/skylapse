@@ -209,3 +209,33 @@ def test_a_healthy_supply_reports_healthy(monkeypatch):
     main._power_cache.update(at=0.0, value={})
     health = main.power_health()
     assert health["undervoltage"] is False and health["undervoltage_seen"] is False
+
+
+def test_converging_from_dark_beats_converging_from_bright():
+    """Why startup now begins at the sensor's shortest exposure.
+
+    A saturated frame carries no information: every pixel clips, the mean reads
+    255 whether it is twice too bright or a hundred times, and auto-exposure can
+    only inch down by its minimum step while blind. Underexposed, every
+    measurement is a real number it can divide by.
+    """
+    from skylapse.config import CaptureProfile
+    from skylapse.daemon.scheduler import next_exposure
+
+    profile = CaptureProfile(auto_exposure=True, target_brightness=120,
+                             max_exposure_us=100_000, max_gain=22, gain=1)
+    correct_us = 5000
+
+    def frames_to_settle(start_us):
+        exposure, gain = start_us, 1
+        for n in range(30):
+            measured = min(255.0, 120.0 * (exposure / correct_us))
+            if abs(measured - 120) < 12:
+                return n
+            exposure, gain = next_exposure(profile, measured, exposure, gain)
+        return 30
+
+    from_dark = frames_to_settle(110)          # sensor minimum
+    from_bright = frames_to_settle(100_000)    # the old blind start
+    assert from_dark < from_bright, f"dark {from_dark} vs bright {from_bright}"
+    assert from_dark <= 6, f"took {from_dark} frames from dark"

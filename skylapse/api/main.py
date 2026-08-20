@@ -1104,6 +1104,80 @@ def night_raw(camera_id: str, night: str, name: str):
                         filename=dng.name, content_disposition_type="attachment")
 
 
+# -- deleting -----------------------------------------------------------------
+#
+# Nothing could remove a frame before this. The only thing that deleted anything
+# was the automatic cleanup at the low-space floor, which takes the OLDEST night
+# first — the exact opposite of what a night of setup junk needs. So the answer
+# to "I have seven hundred useless frames from getting the thing working" was to
+# either keep them forever or take the card out.
+#
+# Destructive and immediate, with no undo. The UI confirms; this does not, since
+# a confirmation an API asks for is one an API cannot enforce.
+
+
+def _frame_family(folder: Path, name: str) -> list[Path]:
+    """A frame is four files: the JPEG, its sidecar, maybe a DNG, and the
+    filmstrip thumbnail. Deleting one and orphaning the rest leaves a folder
+    that is not empty, will not tidy up, and counts wrong."""
+    stem = Path(name).stem
+    family = [folder / f"{stem}{suffix}" for suffix in (".jpg", ".json", ".dng")]
+    family.append(process.thumb_path(folder / f"{stem}.jpg"))
+    return [f for f in family if f.exists()]
+
+
+@app.delete("/api/nights/{camera_id}/{night}/frame/{name}")
+def delete_frame(camera_id: str, night: str, name: str) -> dict:
+    """One frame and everything that belongs to it."""
+    folder = _night_dir(camera_id, night)
+    jpeg = (folder / name).resolve()
+    if not jpeg.is_relative_to(folder) or not jpeg.name.startswith("img_")             or jpeg.suffix != ".jpg":
+        raise HTTPException(404, "No such frame")
+    removed = _frame_family(folder, jpeg.name)
+    if not removed:
+        raise HTTPException(404, "No such frame")
+    for path in removed:
+        path.unlink(missing_ok=True)
+    return {"ok": True, "deleted": len(removed), "frame": jpeg.name}
+
+
+@app.delete("/api/nights/{camera_id}/{night}")
+def delete_night(camera_id: str, night: str, before: float | None = None) -> dict:
+    """A whole night, or everything in it up to a moment.
+
+    `before` is what makes this usable on the night you are standing in: a
+    setup evening leaves hundreds of junk frames and then turns into the real
+    night at some point, and the folder is still being written to. Trimming by
+    time clears the mess without touching the folder the daemon is using or the
+    frames that arrive after.
+    """
+    folder = _night_dir(camera_id, night)
+    frames = sorted(folder.glob(FRAME_GLOB))
+    if before is not None:
+        frames = [f for f in frames if f.stat().st_mtime < before]
+
+    deleted = files = 0
+    for jpeg in frames:
+        for path in _frame_family(folder, jpeg.name):
+            path.unlink(missing_ok=True)
+            files += 1
+        deleted += 1
+
+    # The timelapse only goes when the whole night does — it is the distilled
+    # keepsake, and trimming the front of a night does not invalidate it.
+    if before is None:
+        for extra in folder.glob("timelapse_*.mp4"):
+            extra.unlink(missing_ok=True)
+            files += 1
+        for leftover in folder.glob("thumb_*.jpg"):
+            leftover.unlink(missing_ok=True)
+            files += 1
+        if not any(folder.iterdir()):
+            folder.rmdir()
+    return {"ok": True, "frames_deleted": deleted, "files_deleted": files,
+            "night": night, "folder_removed": before is None and not folder.exists()}
+
+
 # -- sky quality --------------------------------------------------------------
 
 @app.get("/api/stars/{camera_id}/{night}")

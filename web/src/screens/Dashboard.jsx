@@ -236,6 +236,11 @@ function StatusLine({ daemon: d }) {
   if (d.state !== 'capturing') {
     return <p className="text-sm text-zinc-500">{d.state ?? 'idle'}</p>
   }
+  // Far from target and not stuck at the ceilings: it is on its way, not lost.
+  const settling = d.brightness != null && d.target_brightness != null
+    && !d.ae_at_limits
+    && Math.abs(d.brightness - d.target_brightness) > d.target_brightness * 0.35
+
   const bits = [
     d.period,
     `${(d.exposure_us / 1e6).toFixed(1)}s`,
@@ -263,6 +268,16 @@ function StatusLine({ daemon: d }) {
           {' — '}check the supply and the USB-C cable. This causes hangs,
           dropped Wi-Fi and sudden reboots, and focus mode is where it shows
           first because it draws the most.
+        </p>
+      )}
+      {/* Auto-exposure needs a few frames to find the sky after a restart, and
+          it now walks UP from dark rather than down from blown out. Without
+          saying so, the first minute of a fresh boot looks like a broken
+          camera — which is how it was reported. */}
+      {settling && (
+        <p className="mt-1 text-sm text-sky-300">
+          Auto-exposure is still finding the sky — the first few frames after a
+          restart are dark on purpose, and it settles within a few of them.
         </p>
       )}
       {d.ae_at_limits && (

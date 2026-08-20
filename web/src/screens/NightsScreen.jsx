@@ -1,7 +1,7 @@
 // Nights browser: pick a night, then scrub it. The star chart is the "find the
 // clear part of the night" tool — click a peak and the filmstrip seeks there.
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Button, Card, Select } from '../components/ui.jsx'
+import { Button, Card, ConfirmDialog, Select } from '../components/ui.jsx'
 
 const QUALITY_OPTIONS = [
   { value: 'standard', label: 'Standard' },
@@ -315,6 +315,9 @@ function NightView({ cameraId, night, showToast, onBack }) {
   const [stars, setStars] = useState([])
   const [fullscreen, setFullscreen] = useState(false)
   const [hasTimelapse, setHasTimelapse] = useState(false)
+  // Bumped after a delete so the index is pulled again — the frames on screen
+  // are gone and showing them would offer a fullscreen view of a 404.
+  const [reloadKey, setReloadKey] = useState(0)
 
   // Pull the whole index in pages. It is small (~100 bytes/frame) and the
   // scrubber needs the full timeline; the images themselves stay lazy.
@@ -340,7 +343,7 @@ function NightView({ cameraId, night, showToast, onBack }) {
         !!ns.find((n) => n.night === night)?.has_timelapse))
       .catch(() => {})
     return () => { alive = false }
-  }, [cameraId, night])
+  }, [cameraId, night, reloadKey])
 
   // Keeper-saved frames are the ones worth finding again, and a badge alone
   // does not help when they are three needles in 1200 frames.
@@ -401,6 +404,10 @@ function NightView({ cameraId, night, showToast, onBack }) {
 
       <TimelapsePanel cameraId={cameraId} night={night} present={hasTimelapse}
         showToast={showToast} onRendered={() => setHasTimelapse(true)} />
+
+      <TidyUp cameraId={cameraId} night={night} frames={frames}
+        current={frame} showToast={showToast} onBack={onBack}
+        onDeleted={() => { setIndex(0); setReloadKey((k) => k + 1) }} />
 
       <Card title="Frames"
         right={<span className="text-sm text-zinc-500">
@@ -479,6 +486,91 @@ function NightView({ cameraId, night, showToast, onBack }) {
 }
 
 /* -- filmstrip ------------------------------------------------------------- */
+
+
+/**
+ * Getting rid of frames, which nothing could do before this.
+ *
+ * The only thing that deleted anything was the low-space cleanup, and that
+ * takes the OLDEST night first — precisely backwards for the case that actually
+ * turns up, which is an evening of setup junk in the folder you are still
+ * filling. Hence the middle option: clear what is there now and keep the night
+ * running, without touching what arrives next.
+ */
+function TidyUp({ cameraId, night, frames, current, showToast, onDeleted, onBack }) {
+  const [pending, setPending] = useState(null)
+  const [busy, setBusy] = useState(false)
+
+  const run = async (url, done, after) => {
+    setBusy(true)
+    const r = await fetch(url, { method: 'DELETE' }).catch(() => null)
+    setBusy(false)
+    setPending(null)
+    if (!r?.ok) return showToast?.('Could not delete that')
+    const body = await r.json().catch(() => ({}))
+    showToast?.(done(body))
+    after?.()
+  }
+
+  return (
+    <Card title="Tidy up">
+      <p className="mt-1 text-sm text-zinc-400">
+        Setting a camera up leaves a lot of frames that are of nothing. Deleting
+        them is permanent — there is no undo, and nothing is copied anywhere
+        first.
+      </p>
+
+      <div className="mt-4 space-y-3">
+        <Button className="w-full" disabled={busy || !current}
+          onClick={() => setPending({ kind: 'frame' })}>
+          Delete this frame
+        </Button>
+        <Button className="w-full" disabled={busy || !frames.length}
+          onClick={() => setPending({ kind: 'sofar' })}>
+          Delete everything up to now
+        </Button>
+        <Button tone="warn" className="w-full" disabled={busy || !frames.length}
+          onClick={() => setPending({ kind: 'night' })}>
+          Delete this whole night
+        </Button>
+      </div>
+
+      <ConfirmDialog
+        open={!!pending}
+        title={pending?.kind === 'frame' ? 'Delete this frame?'
+          : pending?.kind === 'sofar' ? 'Delete everything so far?'
+            : 'Delete the whole night?'}
+        consequence={pending?.kind === 'frame'
+          ? `${current?.name} and its RAW file, if it has one. Permanent.`
+          : pending?.kind === 'sofar'
+            ? `Every frame captured before right now — about `
+              + `${frames.length.toLocaleString()} of them — is deleted, and `
+              + `the camera carries on filling this night with whatever comes `
+              + `next. The timelapse, if there is one, is left alone. Permanent.`
+            : `All ${frames.length.toLocaleString()} frames and the timelapse `
+              + `are deleted and the night disappears from this list. `
+              + `Permanent.`}
+        confirmLabel="Delete"
+        tone="warn"
+        onCancel={() => setPending(null)}
+        onConfirm={() => {
+          if (pending.kind === 'frame') {
+            return run(`/api/nights/${cameraId}/${night}/frame/${current.name}`,
+                       () => 'Frame deleted', onDeleted)
+          }
+          if (pending.kind === 'sofar') {
+            return run(
+              `/api/nights/${cameraId}/${night}?before=${Date.now() / 1000}`,
+              (b) => `${b.frames_deleted.toLocaleString()} frames deleted`,
+              onDeleted)
+          }
+          return run(`/api/nights/${cameraId}/${night}`,
+                     (b) => `Night deleted (${b.frames_deleted.toLocaleString()} frames)`,
+                     onBack)
+        }} />
+    </Card>
+  )
+}
 
 function Filmstrip({ cameraId, night, frames, index, onPick }) {
   const ref = useRef(null)

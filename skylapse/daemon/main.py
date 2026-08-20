@@ -211,7 +211,25 @@ class CaptureDaemon:
                 # camera, and it was reported as one.
                 profile = profile_for(cfg, entry)
                 self.gain = min(profile.gain, info.max_gain)
+                # Resume where the last run left off if there is a note of it,
+                # and otherwise start DARK — at the shortest exposure the sensor
+                # has, with gain on the floor.
+                #
+                # Dark rather than bright because a saturated frame carries no
+                # information: every pixel clips, the measurement reads 255
+                # whether it is twice too bright or a hundred times, and
+                # auto-exposure can only inch down by its minimum step while
+                # blind. Simulated against the real loop in today's light,
+                # starting 20x over took more than eight frames and was still
+                # not settled; starting 45x UNDER settled in five, because every
+                # measurement on the way up is a real number it can divide by.
+                remembered = self._remembered_exposure(period(cfg))
+                if remembered:
+                    self.exposure_us, self.gain = remembered
+                else:
+                    self.exposure_us = max(info.min_exposure_us, 1)
                 self.exposure_us = min(self.exposure_us, profile.max_exposure_us)
+                self.gain = min(self.gain, info.max_gain)
                 self._write_status({"camera": info.name,
                                     "camera_id": self.camera_id,
                                     "state": "capturing"})
@@ -359,6 +377,7 @@ class CaptureDaemon:
                           profile.target_brightness, self.exposure_us,
                           prev_exposure, self.gain, prev_gain)
                 self._check_ae_headroom(profile)
+                self._remember_exposure(now_period)
                 self.driver.set_controls(self.exposure_us, self.gain)
                 frame = self.driver.capture()
             except CameraError:
@@ -434,6 +453,9 @@ class CaptureDaemon:
                 # Surfaced so the dashboard can say the exposure is maxed out,
                 # rather than leaving a dark night looking like a broken camera.
                 "ae_at_limits": self.ae_pinned >= AE_PINNED_FRAMES,
+                # So the UI can tell "settling" from "settled" without
+                # duplicating the profile lookup and getting it subtly wrong.
+                "target_brightness": profile.target_brightness,
                 "brightness": round(self.last_brightness, 1),
                 "stars": getattr(frame, "_stars", None),
                 "kp": self.last_kp,
@@ -681,6 +703,31 @@ class CaptureDaemon:
             start, end = cam.raw.window_start, cam.raw.window_end
             return (start <= now or now < end) if start > end else (start <= now < end)
         return False
+
+    def _remembered_exposure(self, for_period: str) -> tuple[int, int] | None:
+        """What auto-exposure had settled on before the last restart.
+
+        Kept in /run, which a reboot wipes and a service restart does not —
+        which is exactly the distinction that matters. Restarting the service
+        for an update should not cost several minutes of settling; a cold boot,
+        where the sky may be anything, should start from scratch.
+        """
+        try:
+            data = json.loads((config.RUN_DIR / "ae_state.json").read_text())
+            saved = data.get(for_period)
+            if not saved:
+                return None
+            return int(saved["exposure_us"]), int(saved["gain"])
+        except (OSError, ValueError, TypeError, KeyError):
+            return None
+
+    def _remember_exposure(self, for_period: str) -> None:
+        try:
+            data = json.loads((config.RUN_DIR / "ae_state.json").read_text())
+        except (OSError, ValueError):
+            data = {}
+        data[for_period] = {"exposure_us": self.exposure_us, "gain": self.gain}
+        config.write_run_file("ae_state.json", json.dumps(data))
 
     def _check_ae_headroom(self, profile) -> None:
         """Notice when auto-exposure has run out of room.
