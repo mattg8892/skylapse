@@ -239,3 +239,45 @@ def test_converging_from_dark_beats_converging_from_bright():
     from_bright = frames_to_settle(100_000)    # the old blind start
     assert from_dark < from_bright, f"dark {from_dark} vs bright {from_bright}"
     assert from_dark <= 6, f"took {from_dark} frames from dark"
+
+
+# -- the deadband, which is why a night kept "stalling" ----------------------
+
+def _night_profile(**kw):
+    from skylapse.config import CaptureProfile
+    return CaptureProfile(auto_exposure=True, target_brightness=90,
+                          max_exposure_us=25_000_000, max_gain=22, gain=1, **kw)
+
+
+def test_a_settled_sky_does_not_move_the_controls():
+    """The loop applied 60% of any correction however small, so it never came
+    to rest: measured on a real night, exposure dithered 34s, 35s, 34s from
+    dusk to dawn. Every one of those changes made the driver discard frames
+    while libcamera applied it, and at 40s exposures that cost minutes each —
+    about 40% of the night's frames, reported as the camera stalling."""
+    from skylapse.daemon.scheduler import next_exposure
+    profile = _night_profile()
+    exposure, gain = 20_000_000, 10
+    for measured in (88, 92, 87, 93, 90, 89, 91):
+        assert next_exposure(profile, measured, exposure, gain) == (exposure, gain)
+
+
+def test_a_real_change_still_moves_them():
+    """A deadband that swallows the sky getting dark is not a deadband, it is a
+    broken loop."""
+    from skylapse.daemon.scheduler import next_exposure
+    exposure, gain = next_exposure(_night_profile(), 40.0, 20_000_000, 10)
+    assert exposure > 20_000_000
+
+
+def test_the_deadband_is_relative_to_the_target():
+    """Eight percent of 90 is seven; eight percent of 20 is under two. A fixed
+    number of counts would be a wide band on a dark target and a hair on a
+    bright one."""
+    from skylapse.daemon.scheduler import AE_DEADBAND, next_exposure
+    dark = _night_profile()
+    dark.target_brightness = 20
+    inside = 20 + 20 * AE_DEADBAND * 0.5
+    outside = 20 + 20 * AE_DEADBAND * 2
+    assert next_exposure(dark, inside, 20_000_000, 10) == (20_000_000, 10)
+    assert next_exposure(dark, outside, 20_000_000, 10) != (20_000_000, 10)

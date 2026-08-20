@@ -92,6 +92,12 @@ def safety_should_stop(profile: CaptureProfile, current_period: str,
     return None
 
 
+# How close to the target counts as arrived. Wide enough that ordinary
+# frame-to-frame noise in the sky does not move the controls, narrow enough that
+# a real change in the sky still does.
+AE_DEADBAND = 0.08
+
+
 def next_exposure(profile: CaptureProfile, last_mean_brightness: float | None,
                   current_exposure_us: int, current_gain: int) -> tuple[int, int]:
     """One auto-exposure step: nudge exposure (then gain) toward the target
@@ -104,6 +110,19 @@ def next_exposure(profile: CaptureProfile, last_mean_brightness: float | None,
 
     target = float(profile.target_brightness)
     measured = max(1.0, last_mean_brightness)
+
+    # Close enough. Without this the loop applies 60% of any correction however
+    # tiny, so it never comes to rest — measured on a real night, exposure
+    # dithered 34s, 35s, 34s, 35s from dusk to dawn.
+    #
+    # That is not merely untidy. Every control change makes the driver discard
+    # frames while libcamera applies it, and at a 40 second exposure those
+    # discards cost minutes: the night of 2026-08-19 expected a frame every 70
+    # seconds and averaged one every five minutes, losing about 40% of the
+    # night to a loop chasing differences too small to see.
+    if abs(measured - target) <= target * AE_DEADBAND:
+        return current_exposure_us, current_gain
+
     ratio = target / measured
     # Damp: apply only 60% of the correction per frame, capped at 4x per step.
     ratio = min(4.0, max(0.25, 1.0 + (ratio - 1.0) * 0.6))

@@ -48,6 +48,12 @@ FRAME_DURATION_MARGIN_US = 1_000
 # which is how 100ms, 500ms and 2s captures came back byte-for-byte identical.
 SETTLE_FRAMES = 8
 
+# And never longer than this in wall-clock, whatever that works out to in
+# frames. Discarding eight frames is free at 100ms and costs five and a half
+# minutes at forty seconds; a frame exposed at nearly the right settings beats
+# no frame at all.
+SETTLE_MAX_S = 90.0
+
 # The sensor quantises exposure to its line time (100000us is honoured as
 # 99954us), so settling is judged on a tolerance, never on equality.
 SETTLE_TOLERANCE = 0.02
@@ -172,12 +178,24 @@ class PiCamDriver(CameraDriver):
         every frame of a manual-exposure night, the first request is taken.
         """
         budget = SETTLE_FRAMES if self._settling else 0
+        # Bounded by time as well as by frames. Eight discards is nothing at a
+        # 100ms exposure and five and a half minutes at forty seconds — which is
+        # how a night lost 40% of its frames to a loop that kept nudging the
+        # controls. Past the deadline the next frame is taken and labelled with
+        # what the sensor actually did, which is a slightly stale exposure
+        # rather than a missing one.
+        deadline = time.monotonic() + SETTLE_MAX_S
         for _ in range(budget):
             request = self._picam.capture_request()
             if self._settled(request.get_metadata()):
                 self._settling = False
                 return request
             request.release()
+            if time.monotonic() > deadline:
+                log.warning("Controls unsettled after %.0fs; taking the next "
+                            "frame rather than spending more of the night",
+                            SETTLE_MAX_S)
+                break
         # Out of budget: take the next frame and report what it really was
         # rather than blocking a night waiting for the sensor to agree.
         if self._settling:

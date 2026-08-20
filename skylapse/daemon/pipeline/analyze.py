@@ -54,8 +54,23 @@ MIN_AREA = 2               # px; one bright pixel is a cosmic ray or a hot pixel
 MAX_AREA = 30              # px; above this it is a droplet, a light, or the moon
 MAX_ASPECT = 1.5           # long edge / short edge; stars are round
 MIN_FILL = 0.5             # blob area / bounding box; rejects edge fragments
-DARK_BACKGROUND = 60       # 8-bit; a star cannot be seen against a brighter sky
+# Glare, relative to this frame's own background rather than an absolute level.
+# It was absolute — "local background under 60" — which quietly stopped working
+# the moment auto-exposure got its full range back: AE normalises every frame to
+# the same mean, so absolute background level stops saying anything about how
+# dark the sky is. Measured on 2026-08-19, a well-exposed 2 AM frame had a
+# background of 182 under its stars and scored 9, while a dim twilight frame
+# scored 221. The gate was reading exposure, not darkness.
+GLARE_FACTOR = 1.8         # x the frame's median background: a light, not sky
 SKY_SATURATED = 200        # 8-bit background p90 above this = no stars, at all
+
+# How much light the sky needed, as exposure-seconds times gain. THIS is the
+# thing AE cannot hide: a twilight sky is properly exposed in a fiftieth of a
+# second at unity gain, a dark one needs half a minute at gain fifteen — four
+# orders of magnitude apart, while both frames come out the same brightness.
+# Measured across that night: twilight and dawn sat at 0.0-0.8, real darkness at
+# 363-600. Fifty has a wide margin on both sides.
+MIN_LIGHT_GATHERING = 50.0
 SANITY_CAP = 20_000        # a real frame never has more; anything more is a bug
 
 
@@ -86,13 +101,24 @@ def measure_noise(residual: np.ndarray) -> float:
     return max(1.4826 * mad, 1.0)
 
 
-def star_count(arr: np.ndarray, bayer: BayerPattern | None = None) -> int:
+def star_count(arr: np.ndarray, bayer: BayerPattern | None = None,
+               exposure_us: int | None = None, gain: int | None = None) -> int:
     """How many star-like points are in this frame.
 
     Doubles as a cloud detector: the per-night chart of this IS the sky quality
     trend, and a count that craters on a clear night means something arrived
     between the camera and the sky — cloud, or dew on the dome.
+
+    Exposure and gain are not optional extras. They are the only evidence left
+    that says how dark the sky actually was, because auto-exposure spends its
+    whole life removing that difference from the pixels.
     """
+    # Too bright for stars to exist in, whatever the pixels look like. A sky
+    # correctly exposed in a fiftieth of a second at unity gain has the sun
+    # not far below the horizon, and nothing in it is a star.
+    if exposure_us is not None and gain is not None:
+        if (exposure_us / 1e6) * max(1, gain) < MIN_LIGHT_GATHERING:
+            return 0
     plane = _grey_plane(arr, bayer)
     kernel = cv2.getStructuringElement(
         cv2.MORPH_ELLIPSE, (BACKGROUND_KERNEL, BACKGROUND_KERNEL))
@@ -124,9 +150,12 @@ def star_count(arr: np.ndarray, bayer: BayerPattern | None = None) -> int:
     keep &= (long_edge / short_edge) <= MAX_ASPECT
     keep &= (area / np.maximum(1, width * height)) >= MIN_FILL
 
+    # Reject only genuine glare — a streetlight, the moon's surround — judged
+    # against this frame's own background rather than a fixed number.
     rows = np.clip(centroids[1:, 1].astype(int), 0, background.shape[0] - 1)
     cols = np.clip(centroids[1:, 0].astype(int), 0, background.shape[1] - 1)
-    keep &= background[rows, cols] < DARK_BACKGROUND
+    glare = max(8.0, float(np.median(background)) * GLARE_FACTOR)
+    keep &= background[rows, cols] < glare
 
     return int(min(keep.sum(), SANITY_CAP))
 

@@ -24,9 +24,16 @@ def sky(n_stars, cloud_blur=0.0, background=1500, noise=60):
         # A real sky is mostly faint stars and a few bright ones, which is what
         # makes the detection threshold matter: raise it and the faint ones go
         # first. A field of identically-bright stars would hide that entirely.
+        # Added to the sky, not painted over it. Light accumulates, so a faint
+        # star on a bright background is still brighter than that background —
+        # whereas setting an absolute value made faint "stars" come out DARKER
+        # than the sky they sat on, which is not a star, and made the fixture
+        # disagree with the detector for the wrong reason.
         peak = 30000 * (0.04 + 0.96 * (i / max(1, n_stars - 1)) ** 2)
-        cv2.circle(img, (int(rng.integers(10, 390)), int(rng.integers(10, 290))),
-                   1, peak, -1)
+        y, x = int(rng.integers(10, 290)), int(rng.integers(10, 390))
+        patch = np.zeros_like(img)
+        cv2.circle(patch, (x, y), 1, peak, -1)
+        img += patch
     if cloud_blur:
         img = cv2.GaussianBlur(img, (0, 0), cloud_blur)
     return np.clip(img, 0, 65535).astype(np.uint16)
@@ -152,3 +159,37 @@ def test_no_alert_in_daylight(kp, note):
 def test_fetch_failure_is_silent(kp):
     alerted, kp_val = aurora.check(_cfg(42.7), "night", already_alerted=False)
     assert not alerted and kp_val is None
+
+
+# -- what the second real night taught it ------------------------------------
+
+def test_a_sky_that_needed_no_exposure_has_no_stars():
+    """Twilight, in one line. A sky correctly exposed in a fiftieth of a second
+    at unity gain has the sun just below the horizon and nothing in it is a
+    star — whatever the pixels look like. Reported 221 on such a frame."""
+    assert star_count(sky(300), exposure_us=50_000, gain=1) == 0
+
+
+def test_a_dark_sky_is_counted_normally():
+    """Half a minute at gain fifteen is a genuinely dark sky."""
+    assert star_count(sky(120), exposure_us=34_000_000, gain=15) > 0
+
+
+def test_the_glare_gate_is_relative_not_absolute():
+    """The bug this replaced: the gate was an absolute background level, and
+    auto-exposure normalises every frame to the same mean — so it stopped
+    saying anything about darkness. A well-exposed 2 AM frame scored 9 while a
+    dim twilight frame scored 221, purely because the good frame was brighter.
+
+    Here the same star field is rendered at two exposure levels. The count must
+    not collapse simply because the frame as a whole is brighter.
+    """
+    dim = star_count(sky(100, background=1200), exposure_us=30_000_000, gain=15)
+    bright = star_count(sky(100, background=24000), exposure_us=30_000_000, gain=15)
+    assert bright >= dim * 0.5, f"bright frame lost its stars: {bright} vs {dim}"
+
+
+def test_exposure_and_gain_are_optional():
+    """Callers without metadata — the tests above, and anything analysing a
+    saved frame — still get a count rather than a crash or a silent zero."""
+    assert star_count(sky(100)) > 0

@@ -407,7 +407,7 @@ class CaptureDaemon:
                                        else 0)
             frame._stars = star_count(
                 corrected if corrected is not arr else arr,
-                frame.bayer) \
+                frame.bayer, frame.exposure_us, frame.gain) \
                 if period(self.cfg) != "day" else None
             jpeg = process.save_jpeg(frame, self.camera_id, self.cfg.jpeg_quality,
                                      overlay=cam.overlay, stars=frame._stars,
