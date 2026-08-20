@@ -229,6 +229,213 @@ export default function SettingsScreen({ showToast, storage }) {
   )
 }
 
+
+/* -- exposure, as one nudge ----------------------------------------------- */
+
+// Auto-exposure aims at an average frame brightness. That number is unitless,
+// unguessable and, on the evidence, actively misleading: a whole night aimed at
+// 90 while its optics could deliver 41, and nothing about the number said so.
+//
+// So it is not a number any more. The camera's own judgement is the middle of a
+// slider, and the only question put to a person is the one they can actually
+// answer by looking at last night's frames — a bit brighter, or a bit darker?
+// Nudge it, sleep on it, nudge again. Three nights and you are done forever.
+//
+// The rungs are multiplicative because brightness is: a fixed step of 10 is
+// enormous at the dark end and imperceptible at the bright one.
+// Anchored per period, not to one number for both: day aims at 120 and night at
+// 90 out of the box, so a single anchor put the day slider at "+1 — a little
+// brighter" while it was sitting at its own default and doing nothing unusual.
+// Centre has to mean "as shipped" on whichever screen you are looking at.
+const DEFAULT_TARGET = { day: 120, night: 90 }
+const NUDGE_STEP = 1.25
+const NUDGE_RANGE = 5
+
+const nudgeToTarget = (n, period) =>
+  Math.max(15, Math.min(255,
+    Math.round((DEFAULT_TARGET[period] ?? 90) * NUDGE_STEP ** n)))
+
+const targetToNudge = (target, period) => {
+  let best = 0
+  for (let n = -NUDGE_RANGE; n <= NUDGE_RANGE; n += 1) {
+    if (Math.abs(nudgeToTarget(n, period) - target)
+        < Math.abs(nudgeToTarget(best, period) - target)) {
+      best = n
+    }
+  }
+  return best
+}
+
+const NUDGE_WORDS = {
+  '-5': 'Much darker', '-4': 'Darker', '-3': 'Darker', '-2': 'A little darker',
+  '-1': 'A little darker', 0: 'As the camera judges it',
+  1: 'A little brighter', 2: 'A little brighter', 3: 'Brighter',
+  4: 'Brighter', 5: 'Much brighter',
+}
+
+function ExposureNudge({ target, period, cameraId, onChange }) {
+  const [daemon, setDaemon] = useState(null)
+  const nudge = targetToNudge(target, period)
+
+  useEffect(() => {
+    let live = true
+    const read = () => fetch('/api/status').then((r) => r.json())
+      .then((d) => live && setDaemon(d.daemon)).catch(() => {})
+    read()
+    const id = setInterval(read, 10000)
+    return () => { live = false; clearInterval(id) }
+  }, [])
+
+  // Only meaningful against the period actually being captured: a night setting
+  // means nothing measured against a daylight frame.
+  // Twilight runs on the night profile, so "night" is live then too.
+  const activePeriod = daemon?.period === 'day' ? 'day' : 'night'
+  const live = daemon && activePeriod === period ? daemon : null
+  const pinned = !!live?.ae_at_limits
+
+  return (
+    <>
+      {daemon && !live && (
+        /* Otherwise you sit there moving a slider that is doing nothing
+           visible, and conclude the slider is broken. It is simply not the
+           profile that is running. */
+        <p className="rounded-lg bg-zinc-800/60 p-3 text-xs text-zinc-400">
+          The camera is in <b className="text-zinc-300">{activePeriod}</b> right
+          now, so these {period} settings take effect
+          {period === 'night' ? ' at dusk' : ' at sunrise'} — nothing you change
+          here will show up on the dashboard until then.
+        </p>
+      )}
+      <Slider label="Brightness" value={nudge} min={-NUDGE_RANGE} max={NUDGE_RANGE}
+        step={1} display={NUDGE_WORDS[String(nudge)]}
+        onChange={(n) => onChange(nudgeToTarget(n, period))} />
+      <p className="-mt-1 text-xs text-zinc-500">
+        The camera reads every frame and works out the exposure the sky needs —
+        this only says whether you want the result a little brighter or darker
+        than its own judgement. Leave it in the middle unless a few nights of
+        frames tell you otherwise, then nudge one step and see how the next
+        night looks.
+      </p>
+
+      {pinned && (
+        /* The one case where turning it up does nothing at all, and the one
+           the old numeric field gave no hint about. */
+        <div className="rounded-lg border border-amber-700/60 bg-amber-950/40
+                        p-3 text-xs text-amber-200/90">
+          <p className="text-amber-300">This is as bright as it gets tonight.</p>
+          <p className="mt-1">
+            The exposure and gain are both at their limits and the sky is still
+            darker than this setting asks for, so turning it up changes nothing
+            — and until the sky rises past it, auto-exposure cannot respond to
+            it getting brighter either, so a moon coming up would go
+            uncorrected. Nudging down gives it room to work again. Faster glass
+            is the real fix.
+          </p>
+          {live?.brightness != null && (
+            <p className="mt-1 text-amber-200/70">
+              Reaching {Math.round(live.brightness)} of {target}.
+            </p>
+          )}
+        </div>
+      )}
+    </>
+  )
+}
+
+/**
+ * The ceilings. Real controls, but not first-screen ones.
+ *
+ * "The longest exposure will obviously always be maxed — it takes what it needs
+ * and nothing more" is right for the brightness question, and it is the wrong
+ * way round for the other one this setting decides: how MANY frames a night
+ * has. 40s exposures give half the frames of 20s ones, and frame count is what
+ * makes a timelapse smooth and what catches a meteor. Worth having, worth
+ * hiding.
+ */
+function AdvancedExposure({ profile, onProfile }) {
+  const [open, setOpen] = useState(false)
+  if (!open) {
+    return (
+      <button onClick={() => setOpen(true)}
+        className="text-xs text-sky-400 underline">
+        Exposure limits
+      </button>
+    )
+  }
+  return (
+    <div className="space-y-3 border-t border-zinc-700 pt-4">
+      <NumberField
+        label="Longest exposure" suffix="s" min={0.1} max={120} step={5}
+        value={Number(((profile.max_exposure_us ?? 0) / 1e6).toFixed(1))}
+        onChange={(s) => onProfile({ max_exposure_us: Math.round(s * 1e6) })} />
+      <p className="-mt-1 text-xs text-zinc-500">
+        Auto-exposure takes what it needs and no more, so this is a ceiling
+        rather than a setting — but it also decides how many frames a night
+        has. Longer exposures mean fewer, smoother-but-choppier timelapses and
+        less chance of catching something brief. Gain is capped at{' '}
+        {profile.max_gain} by this camera, which is usually what runs out first.
+      </p>
+    </div>
+  )
+}
+
+/**
+ * What tonight's render will actually produce.
+ *
+ * The clip length is honoured by leaving frames out, and doing that silently is
+ * how the setting managed to be ignored on every long night without anyone
+ * noticing — a 2205-frame night asked for 30 seconds and got 73. Saying it in
+ * numbers, from the same functions the renderer uses, is the difference between
+ * a setting and a suggestion.
+ */
+function RenderPlan({ cameraId }) {
+  const [plan, setPlan] = useState(null)
+
+  useEffect(() => {
+    let live = true
+    fetch(`/api/timelapse/plan/${encodeURIComponent(cameraId)}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((p) => live && setPlan(p))
+      .catch(() => {})
+    return () => { live = false }
+  }, [cameraId])
+
+  if (!plan?.frames) return null
+  const sampled = plan.used < plan.frames
+
+  return (
+    <div className="rounded-lg bg-zinc-800/60 p-3 text-xs text-zinc-400">
+      <p className="text-zinc-300">
+        Last night: {plan.frames.toLocaleString()} frames →{' '}
+        {plan.seconds}s at {plan.fps} fps
+        {plan.width ? `, ${plan.width}×${plan.height}` : ''}
+      </p>
+      {sampled ? (
+        <p className="mt-1">
+          To fit {plan.clip_seconds}s it uses{' '}
+          <b className="text-zinc-300">{plan.used.toLocaleString()}</b> of them
+          — roughly every {plan.every_nth}
+          {plan.every_nth === 2 ? 'nd' : plan.every_nth === 3 ? 'rd' : 'th'}{' '}
+          frame, spread evenly across the whole night. Every frame stays on the
+          card and in Nights; only the pace of the clip changes.
+        </p>
+      ) : (
+        <p className="mt-1">
+          Every frame is used. A shorter night than the target length can only
+          be as long as the frames it has.
+        </p>
+      )}
+      {plan.fps < 60 && (
+        <p className="mt-1">
+          The frame rate is capped by what a phone will decode at this size.
+          Choosing a smaller resolution allows a faster one.
+        </p>
+      )}
+    </div>
+  )
+}
+
+
 /* -- remote access --------------------------------------------------------- */
 
 /**
