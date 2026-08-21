@@ -194,15 +194,27 @@ def usable_frames(folder: Path) -> list[Path]:
     return frames
 
 
-def _probe(path: Path) -> dict:
-    """Frame count and dimensions of a rendered file, or {} if unreadable."""
+def _probe(path: Path) -> dict | None:
+    """Frame count and dimensions of a rendered file.
+
+    {} means ffprobe ran and could make nothing of the file — which is a real
+    fault. None means ffprobe is not installed, which says nothing about the
+    file and must not be treated as a failure.
+    """
     try:
         out = subprocess.run(
             ["ffprobe", "-v", "error", "-count_frames", "-select_streams", "v:0",
              "-show_entries", "stream=nb_read_frames,width,height",
              "-of", "default=noprint_wrappers=1:nokey=0", str(path)],
             capture_output=True, text=True, timeout=600).stdout
-    except (FileNotFoundError, subprocess.TimeoutExpired):
+    except FileNotFoundError:
+        # No ffprobe on this system. "Cannot check" is not "is broken": ffmpeg
+        # exited 0 and there is a file, and throwing that away would mean never
+        # producing a timelapse at all here. Returning None says unverified,
+        # which the caller accepts with a warning; {} still means it ran and
+        # told us nothing, which does mean broken.
+        return None
+    except subprocess.TimeoutExpired:
         return {}
     try:
         return dict(line.split("=", 1)
@@ -221,6 +233,10 @@ def validate_render(path: Path, expected_frames: int) -> str:
     if not path.exists() or path.stat().st_size == 0:
         return "no output file"
     probe = _probe(path)
+    if probe is None:
+        log.warning("ffprobe is not installed, so %s cannot be checked; "
+                    "accepting it unverified", path.name)
+        return ""
     if not probe:
         return "output does not probe as video"
     try:
@@ -255,7 +271,14 @@ def _run_ffmpeg(folder: Path, frames: list[Path], out: Path, fps: int,
         subprocess.run(
             ["ffmpeg", "-y", "-r", str(fps), "-f", "concat", "-safe", "0",
              "-i", str(listfile), "-c:v", "libx264", "-preset", "medium",
-             "-crf", crf, "-pix_fmt", "yuv420p", "-vf", scale, str(out)],
+             "-crf", crf, "-pix_fmt", "yuv420p", "-vf", scale,
+             # Stated, not inferred. ffmpeg picks the container from the output
+             # extension, and renders go to a .part file so a half-written one
+             # is never mistaken for a finished film — an extension ffmpeg has
+             # never heard of. Without this it exits immediately with "unable to
+             # find a suitable output format", which is how a release went out
+             # that could not render anything at all.
+             "-f", "mp4", str(out)],
             cwd=folder, capture_output=True, timeout=1800, check=True)
     except FileNotFoundError:
         return "ffmpeg not installed"
@@ -325,7 +348,11 @@ def render_night(folder: Path, settings=None, force: bool = False,
         if out.stat().st_mtime >= newest:          # nothing has arrived since
             return out
         log.info("%s predates the night's last frame; re-rendering", out.name)
-    out.unlink(missing_ok=True)
+    # The previous film stays exactly where it is until a new one has rendered
+    # AND passed validation, at which point it is replaced in one move. Deleting
+    # it up front means any failure — a bad flag, a full card, a killed
+    # process — costs a night that was already safely on disk. That is not
+    # hypothetical: it is what happened here.
 
     target = max(5, settings.clip_seconds)
     fps = max(FPS_MIN, min(FPS_MAX, round(len(frames) / target)))
@@ -381,7 +408,6 @@ def render_night(folder: Path, settings=None, force: bool = False,
             return out
         log.warning("Timelapse render at %s failed: %s", resolution, error)
         partial_path(out).unlink(missing_ok=True)
-        out.unlink(missing_ok=True)
 
     # Deliberately silent to the user's phone. A notification saying a
     # timelapse is ready, for a file that is not, is worse than no

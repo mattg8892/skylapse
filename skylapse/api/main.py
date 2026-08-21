@@ -1293,23 +1293,6 @@ def capture_resume() -> dict:
 
 # -- timelapse ---------------------------------------------------------------
 
-@app.get("/api/timelapse/{camera_id}/{night}")
-def timelapse_file(camera_id: str, night: str, variant: str = "night"):
-    """Serve a night's rendered mp4 so the dashboard can play it inline.
-
-    Declared before the render route only for readability — they never
-    collide, since this is GET and the render endpoint is POST under a
-    literal /render/ segment.
-    """
-    from ..daemon import nightjobs
-    if variant not in ("night", "day"):
-        raise HTTPException(400, "variant must be night or day")
-    path = nightjobs.output_name(config.IMAGE_ROOT / camera_id / night, variant)
-    if not path.is_file():
-        raise HTTPException(404, "No timelapse for that night")
-    return FileResponse(path, media_type="video/mp4")
-
-
 @app.get("/api/timelapse/plan/{camera_id}")
 def timelapse_plan(camera_id: str) -> dict:
     """What a render would produce, without doing one.
@@ -1331,6 +1314,23 @@ def timelapse_plan(camera_id: str) -> dict:
     entry = cfg.cameras.get(camera_id)
     settings = entry.timelapse if entry else None
     return {"night": nights[-1].name, **nightjobs.plan_render(nights[-1], settings)}
+
+
+@app.get("/api/timelapse/{camera_id}/{night}")
+def timelapse_file(camera_id: str, night: str, variant: str = "night"):
+    """Serve a night's rendered mp4 so the dashboard can play it inline.
+
+    Declared before the render route only for readability — they never
+    collide, since this is GET and the render endpoint is POST under a
+    literal /render/ segment.
+    """
+    from ..daemon import nightjobs
+    if variant not in ("night", "day"):
+        raise HTTPException(400, "variant must be night or day")
+    path = nightjobs.output_name(config.IMAGE_ROOT / camera_id / night, variant)
+    if not path.is_file():
+        raise HTTPException(404, "No timelapse for that night")
+    return FileResponse(path, media_type="video/mp4")
 
 
 @app.post("/api/timelapse/render/{camera_id}/{night}")

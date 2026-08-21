@@ -1,4 +1,5 @@
 """Timelapse render + cleanup ordering (timelapses die last)."""
+import shutil
 import subprocess
 from pathlib import Path
 from unittest import mock
@@ -563,3 +564,83 @@ def test_the_night_film_keeps_the_plain_name():
     folder = Path("/images/cam/2026-08-20")
     assert nightjobs.output_name(folder, "night").name == "timelapse_2026-08-20.mp4"
     assert nightjobs.output_name(folder, "day").name == "timelapse_2026-08-20_day.mp4"
+
+
+# -- the ffmpeg invocation itself --------------------------------------------
+#
+# Everything above stubs _run_ffmpeg, which is how a release shipped that could
+# not render anything: renders go to a .part file so a half-written one is never
+# mistaken for a finished film, ffmpeg picks its container from the output
+# extension, and it has never heard of .part. It exited immediately, every time,
+# and no test noticed because no test ran it.
+
+def test_the_output_format_is_stated_not_inferred(tmp_path, monkeypatch):
+    """The one flag whose absence made every render fail instantly."""
+    captured = {}
+
+    class Result:
+        returncode = 0
+        stderr = b""
+
+    def fake_run(cmd, **kw):
+        captured["cmd"] = cmd
+        Path(cmd[-1]).write_bytes(b"mp4")
+        return Result()
+
+    monkeypatch.setattr(nightjobs.subprocess, "run", fake_run)
+    folder = tmp_path / "2026-08-20"
+    folder.mkdir()
+    frames = []
+    for i in range(3):
+        f = folder / f"img_{i}.jpg"
+        f.write_bytes(b"x")
+        frames.append(f)
+
+    out = nightjobs.partial_path(folder / "timelapse_2026-08-20.mp4")
+    assert nightjobs._run_ffmpeg(folder, frames, out, 30, "20", "scale=64:64") == ""
+    cmd = captured["cmd"]
+    assert "-f" in cmd, "no container specified at all"
+    fmt = cmd[cmd.index("-f", cmd.index("-i")) + 1]
+    assert fmt == "mp4", f"output format is {fmt!r}, and the file ends .part"
+
+
+@pytest.mark.skipif(not shutil.which("ffmpeg"), reason="needs a real ffmpeg")
+def test_a_real_render_produces_a_file_that_opens(tmp_path):
+    """End to end, with the real encoder. This is the test that would have
+    caught it, and the only kind that could."""
+    import cv2
+    import numpy as np
+    from skylapse import config
+
+    folder = tmp_path / "2026-08-20"
+    folder.mkdir()
+    for i in range(20):
+        frame = np.full((120, 160, 3), i * 8, dtype=np.uint8)
+        cv2.imwrite(str(folder / f"img_{i:03d}.jpg"), frame)
+
+    out = nightjobs.render_night(folder, config.TimelapseConfig(clip_seconds=5))
+    assert out is not None and out.exists(), "produced nothing"
+    assert out.suffix == ".mp4", f"published as {out.name}"
+    assert not nightjobs.partial_path(out).exists(), "left its scratch file"
+    assert cv2.VideoCapture(str(out)).isOpened(), "the file does not open"
+
+
+def test_a_failed_render_keeps_the_film_that_was_already_there(tmp_path, monkeypatch):
+    """A re-render that fails must not cost a night that was safely on disk.
+    The old code deleted the previous film before starting, so a bad flag took
+    the good file with it — which is exactly how last night's was lost."""
+    import cv2
+    import numpy as np
+    folder = tmp_path / "2026-08-20"
+    folder.mkdir()
+    for i in range(20):
+        cv2.imwrite(str(folder / f"img_{i:03d}.jpg"),
+                    np.zeros((60, 80, 3), dtype=np.uint8))
+    good = folder / "timelapse_2026-08-20.mp4"
+    good.write_bytes(b"the film from this morning")
+
+    monkeypatch.setattr(nightjobs, "_run_ffmpeg",
+                        lambda *a, **k: "ffmpeg exited 1: nope")
+    assert nightjobs.render_night(folder, force=True) is None
+    assert good.exists(), "destroyed the previous film on a failed re-render"
+    assert good.read_bytes() == b"the film from this morning"
