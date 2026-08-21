@@ -757,6 +757,21 @@ function CameraSettings({ id, cam, storage, onCamera, onProfile }) {
               desktop.
             </p>
           )}
+          <label className="flex items-start justify-between gap-3 text-sm">
+            <span>
+              <span className="text-zinc-300">Daylight film too</span>
+              <span className="mt-1 block text-xs text-zinc-500">
+                A night runs noon to noon, so it holds the daylight either side
+                of the dark. That becomes its own film rather than being cut
+                onto the front of the night's, where the exposure changes by
+                three orders of magnitude in a single frame.
+              </span>
+            </span>
+            <Toggle checked={cam.timelapse?.day_clip ?? true} label="Daylight film too"
+              onChange={(day_clip) =>
+                onCamera({ timelapse: { ...cam.timelapse, day_clip } })} />
+          </label>
+
           <RenderPlan cameraId={id} />
           <p className="text-xs text-zinc-500">
             Resolution is a pixel budget, not a width, so it works out the same
