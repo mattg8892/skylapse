@@ -180,6 +180,20 @@ def validate_render(path: Path, expected_frames: int) -> str:
     return ""
 
 
+def partial_path(out: Path) -> Path:
+    """Where a render is written before it is finished.
+
+    An mp4's index is written last, so a render in progress is a large file
+    that no player can open. Serving that is how a night's timelapse showed up
+    as a blank player reading 0:00 while ffmpeg was still working on it — the
+    file existed, so everything downstream believed it was ready.
+
+    Rendering beside the real name and moving it into place at the end makes
+    the finished path mean finished, atomically, the way config.save does.
+    """
+    return out.with_suffix(out.suffix + ".part")
+
+
 def _run_ffmpeg(folder: Path, frames: list[Path], out: Path, fps: int,
                 crf: str, scale: str) -> str:
     """One render attempt. Returns an error string, or "" on success."""
@@ -263,9 +277,13 @@ def render_night(folder: Path, settings=None, force: bool = False) -> Path | Non
         if len(shown) != len(frames):
             log.info("Sampling %d of %d frames for a %ds clip at %d fps",
                      len(shown), len(frames), target, attempt_fps)
-        error = _run_ffmpeg(folder, shown, out, attempt_fps, crf, scale) \
-            or validate_render(out, len(shown))
+        working = partial_path(out)
+        error = _run_ffmpeg(folder, shown, working, attempt_fps,
+                            crf, scale) \
+            or validate_render(working, len(shown))
         if not error:
+            # Only now does the finished name exist, and it is finished.
+            working.replace(out)
             log.info("Rendered %s (%d of %d frames @ %d fps, %s%s)", out.name,
                      len(shown), len(frames), attempt_fps, resolution,
                      f", retried after failing at {attempts[0]}" if attempt else "")
@@ -275,6 +293,7 @@ def render_night(folder: Path, settings=None, force: bool = False) -> Path | Non
                           f"{len(shown) / attempt_fps:.0f}s)")
             return out
         log.warning("Timelapse render at %s failed: %s", resolution, error)
+        partial_path(out).unlink(missing_ok=True)
         out.unlink(missing_ok=True)
 
     # Deliberately silent to the user's phone. A notification saying a

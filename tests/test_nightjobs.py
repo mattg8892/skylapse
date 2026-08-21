@@ -432,3 +432,54 @@ def test_an_empty_night_plans_nothing_rather_than_dividing_by_zero(tmp_path):
     folder.mkdir()
     plan = nightjobs.plan_render(folder)
     assert plan["frames"] == 0 and plan["used"] == 0 and plan["seconds"] == 0.0
+
+
+# -- a render in progress is not a timelapse ---------------------------------
+
+def test_the_finished_name_only_exists_when_it_is_finished(tmp_path, monkeypatch):
+    """An mp4's index is written last, so a render in progress is a large file
+    no player can open. It was written straight to the final name, so
+    everything downstream believed it was ready: the night's page showed a
+    blank player reading 0:00 while ffmpeg was still working."""
+    import cv2
+    import numpy as np
+    folder = tmp_path / "2026-08-20"
+    folder.mkdir()
+    for i in range(30):
+        cv2.imwrite(str(folder / f"img_{i:05d}.jpg"),
+                    np.zeros((80, 120, 3), dtype=np.uint8))
+
+    final = folder / "timelapse_2026-08-20.mp4"
+    seen = {}
+
+    def fake_ffmpeg(folder_, frames, out, fps, crf, scale):
+        # Mid-render: whatever exists must not be the published name.
+        out.write_bytes(b"partial data with no index")
+        seen["wrote_to"] = out
+        seen["final_existed_during_render"] = final.exists()
+        return ""
+
+    monkeypatch.setattr(nightjobs, "_run_ffmpeg", fake_ffmpeg)
+    monkeypatch.setattr(nightjobs, "validate_render", lambda p, n: "")
+    monkeypatch.setattr(nightjobs.notify, "notify", lambda *a, **k: True)
+
+    nightjobs.render_night(folder)
+    assert seen["wrote_to"] == nightjobs.partial_path(final)
+    assert seen["final_existed_during_render"] is False
+    assert final.exists(), "never published"
+    assert not nightjobs.partial_path(final).exists(), "left its scratch file"
+
+
+def test_a_failed_render_leaves_nothing_behind(tmp_path, monkeypatch):
+    import cv2
+    import numpy as np
+    folder = tmp_path / "2026-08-20"
+    folder.mkdir()
+    for i in range(30):
+        cv2.imwrite(str(folder / f"img_{i:05d}.jpg"),
+                    np.zeros((80, 120, 3), dtype=np.uint8))
+
+    monkeypatch.setattr(nightjobs, "_run_ffmpeg",
+                        lambda *a, **k: "ffmpeg exited 1")
+    assert nightjobs.render_night(folder) is None
+    assert not list(folder.glob("timelapse_*"))

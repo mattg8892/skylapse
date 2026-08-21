@@ -315,6 +315,8 @@ function NightView({ cameraId, night, showToast, onBack }) {
   const [stars, setStars] = useState([])
   const [fullscreen, setFullscreen] = useState(false)
   const [hasTimelapse, setHasTimelapse] = useState(false)
+  // A render in progress is a real file that no player can open.
+  const [rendering, setRendering] = useState(false)
   // Bumped after a delete so the index is pulled again — the frames on screen
   // are gone and showing them would offer a fullscreen view of a 404.
   const [reloadKey, setReloadKey] = useState(0)
@@ -339,8 +341,12 @@ function NightView({ cameraId, night, showToast, onBack }) {
     fetch(`/api/stars/${cameraId}/${night}`)
       .then((r) => r.json()).then((s) => alive && setStars(s)).catch(() => {})
     fetch(`/api/nights/${cameraId}`).then((r) => r.json())
-      .then((ns) => alive && setHasTimelapse(
-        !!ns.find((n) => n.night === night)?.has_timelapse))
+      .then((ns) => {
+        if (!alive) return
+        const me = ns.find((n) => n.night === night)
+        setHasTimelapse(!!me?.has_timelapse)
+        setRendering(!!me?.rendering)
+      })
       .catch(() => {})
     return () => { alive = false }
   }, [cameraId, night, reloadKey])
@@ -403,7 +409,8 @@ function NightView({ cameraId, night, showToast, onBack }) {
       </div>
 
       <TimelapsePanel cameraId={cameraId} night={night} present={hasTimelapse}
-        showToast={showToast} onRendered={() => setHasTimelapse(true)} />
+        rendering={rendering} showToast={showToast}
+        onRendered={() => setHasTimelapse(true)} />
 
       <TidyUp cameraId={cameraId} night={night} frames={frames}
         current={frame} showToast={showToast} onBack={onBack}
@@ -704,7 +711,8 @@ function Fullscreen({ frameUrl, dngUrl, name, onClose }) {
 
 /* -- timelapse (relocated here from the dashboard) ------------------------- */
 
-export function TimelapsePanel({ cameraId, night, present, showToast, onRendered }) {
+export function TimelapsePanel({ cameraId, night, present, rendering,
+                                showToast, onRendered }) {
   const [clipSeconds, setClipSeconds] = useState(30)
   const [quality, setQuality] = useState('high')
   const [busy, setBusy] = useState(false)
@@ -732,7 +740,22 @@ export function TimelapsePanel({ cameraId, night, present, showToast, onRendered
 
   return (
     <Card title="Timelapse">
-      {present || version > 0 ? (
+      {rendering && !present ? (
+        /* A render in progress is a real file on disk that no player can open:
+           the index is written last. Showing the player anyway is how a night
+           came up as a blank frame reading 0:00 while ffmpeg was still going. */
+        <div className="mt-3 flex items-center gap-3 rounded-lg bg-zinc-800/60 p-4">
+          <span className="h-4 w-4 shrink-0 animate-spin rounded-full border-2
+                           border-sky-500 border-t-transparent" />
+          <div>
+            <p className="text-sm text-sky-300">Rendering this night…</p>
+            <p className="mt-1 text-xs text-zinc-400">
+              A full night takes several minutes on a Pi. It appears here on its
+              own when it is finished — nothing to press.
+            </p>
+          </div>
+        </div>
+      ) : present || version > 0 ? (
         <video key={version} controls playsInline preload="metadata"
           src={`/api/timelapse/${cameraId}/${night}?v=${version}`}
           className="mt-3 w-full rounded-xl border border-zinc-800 bg-black" />

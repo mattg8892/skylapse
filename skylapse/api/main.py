@@ -1027,6 +1027,9 @@ def nights(camera_id: str) -> list[dict]:
             "first": frames[0].stat().st_mtime,
             "last": frames[-1].stat().st_mtime,
             "has_timelapse": (night / f"timelapse_{night.name}.mp4").exists(),
+            # A render in progress is a large unplayable file, so the UI needs
+            # to know the difference between "not rendered" and "rendering".
+            "rendering": (night / f"timelapse_{night.name}.mp4.part").exists(),
             "bytes": night_bytes(night),
         })
     return out
