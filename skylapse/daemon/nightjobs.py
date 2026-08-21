@@ -14,6 +14,7 @@ from __future__ import annotations
 import logging
 import shutil
 import subprocess
+from datetime import datetime, timezone
 from pathlib import Path
 
 from .. import config, notify
@@ -94,6 +95,31 @@ def scale_filter(width: int, height: int, resolution: str) -> str:
 
 
 
+def classify_frames(frames: list, cfg=None) -> dict:
+    """Split a folder's frames into the night and the day around it.
+
+    A night folder runs noon to noon, so it holds the evening before dusk, the
+    night, and the morning after dawn — and those are shot on completely
+    different settings. Cutting them into one film puts a hard jump at each end
+    where the exposure changes by three orders of magnitude, which is jarring
+    to watch and was the first thing anyone said about it.
+
+    Judged by the sun's altitude at the moment each frame was taken, not by any
+    metadata, so it works on nights already sitting on the card. Twilight counts
+    as night: it is exposed on the night profile and blends with it, and it is
+    the part of the evening actually worth watching.
+    """
+    from ..config import load
+    from .scheduler import period
+
+    cfg = cfg or load()
+    out = {"night": [], "day": []}
+    for frame in frames:
+        when = datetime.fromtimestamp(frame.stat().st_mtime, timezone.utc)
+        out["day" if period(cfg, when) == "day" else "night"].append(frame)
+    return out
+
+
 def select_frames(frames: list, clip_seconds: int, fps: int) -> list:
     """Evenly spaced frames, so the clip comes out the length that was asked for.
 
@@ -114,8 +140,34 @@ def select_frames(frames: list, clip_seconds: int, fps: int) -> list:
     wanted = max(1, clip_seconds * fps)
     if len(frames) <= wanted:
         return frames
-    step = len(frames) / wanted
-    return [frames[min(len(frames) - 1, int(i * step))] for i in range(wanted)]
+
+    # Evenly spaced in TIME, not in frame number. Frames do not arrive at a
+    # constant rate — exposure changes through the night, and a gap where the
+    # sensor was settling leaves a hole — so picking every Nth frame makes the
+    # sky crawl through the dense stretches and leap across the sparse ones.
+    # That unevenness is what "jumpy" means. Sampling on a clock instead gives
+    # constant apparent motion, and a gap becomes a brief hold rather than a
+    # jump, which is both smoother and more honest about what was captured.
+    try:
+        times = [f.stat().st_mtime for f in frames]
+    except (OSError, AttributeError):
+        # No timestamps available (a caller passing plain values, or a file that
+        # vanished mid-render): fall back to every Nth, which is worse but works.
+        step = len(frames) / wanted
+        return [frames[min(len(frames) - 1, int(i * step))] for i in range(wanted)]
+
+    span = times[-1] - times[0]
+    if span <= 0:
+        step = len(frames) / wanted
+        return [frames[min(len(frames) - 1, int(i * step))] for i in range(wanted)]
+
+    chosen, cursor = [], 0
+    for i in range(wanted):
+        target = times[0] + span * i / (wanted - 1 if wanted > 1 else 1)
+        while cursor + 1 < len(times) and abs(times[cursor + 1] - target) <=                 abs(times[cursor] - target):
+            cursor += 1
+        chosen.append(frames[cursor])
+    return chosen
 
 
 def usable_frames(folder: Path) -> list[Path]:
@@ -217,7 +269,42 @@ def _run_ffmpeg(folder: Path, frames: list[Path], out: Path, fps: int,
     return ""
 
 
-def render_night(folder: Path, settings=None, force: bool = False) -> Path | None:
+def output_name(folder: Path, variant: str) -> Path:
+    """Where each film lands. The night keeps the original name — it is the one
+    anybody came for — and the day gets a suffix."""
+    stem = f"timelapse_{folder.name}"
+    return folder / (f"{stem}.mp4" if variant == "night" else f"{stem}_{variant}.mp4")
+
+
+def render_all(folder: Path, settings=None, force: bool = False) -> dict:
+    """Render the night, and the day around it, as separate films.
+
+    A night folder runs noon to noon, so it contains the evening before dusk and
+    the morning after dawn as well — shot at a fiftieth of a second at unity
+    gain, against twenty-five seconds at gain fifteen for the night itself.
+    Splicing those together puts a hard cut at each end where the picture
+    changes completely, which is the first thing anyone notices watching it.
+
+    So they are separate films now. Neither is a compromise, and the night one
+    no longer opens on daylight.
+    """
+    results = {}
+    groups = classify_frames(usable_frames(folder))
+    for variant in ("night", "day"):
+        if len(groups[variant]) < FPS_MIN:
+            continue
+        if variant == "day" and settings is not None                 and not getattr(settings, "day_clip", True):
+            continue
+        rendered = render_night(folder, settings, force=force,
+                                frames=groups[variant], variant=variant)
+        if rendered:
+            results[variant] = rendered
+    return results
+
+
+def render_night(folder: Path, settings=None, force: bool = False,
+                 frames: list | None = None,
+                 variant: str = "night") -> Path | None:
     """ffmpeg the folder's JPEGs into an mp4. Returns the path, or None.
 
     Idempotent unless force=True (the UI's re-render button after a settings
@@ -229,10 +316,10 @@ def render_night(folder: Path, settings=None, force: bool = False) -> Path | Non
     """
     from ..config import TimelapseConfig
     settings = settings or TimelapseConfig()
-    frames = usable_frames(folder)
+    frames = usable_frames(folder) if frames is None else frames
     if len(frames) < FPS_MIN:                      # not enough for a clip
         return None
-    out = folder / f"timelapse_{folder.name}.mp4"
+    out = output_name(folder, variant)
     if out.exists() and not force:
         newest = max(f.stat().st_mtime for f in frames)
         if out.stat().st_mtime >= newest:          # nothing has arrived since

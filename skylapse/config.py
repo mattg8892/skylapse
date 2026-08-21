@@ -56,6 +56,11 @@ class TimelapseConfig(BaseModel):
     # 12 MP native render comes out at level 6.0 and no phone or browser
     # hardware decoder will touch it. "full" is offered, and warned about.
     resolution: str = "4k"               # 4k | 1080p | full
+    # A night folder runs noon to noon, so it holds the daylight either side of
+    # the night. That gets its own film rather than being spliced onto the front
+    # of the night's, where the exposure changes by three orders of magnitude in
+    # one cut.
+    day_clip: bool = True
 
 
 class NetworkConfig(BaseModel):

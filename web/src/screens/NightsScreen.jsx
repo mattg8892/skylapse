@@ -1,7 +1,9 @@
 // Nights browser: pick a night, then scrub it. The star chart is the "find the
 // clear part of the night" tool — click a peak and the filmstrip seeks there.
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Button, Card, ConfirmDialog, Select } from '../components/ui.jsx'
+import {
+  Button, Card, ConfirmDialog, Segmented, Select,
+} from '../components/ui.jsx'
 
 const QUALITY_OPTIONS = [
   { value: 'standard', label: 'Standard' },
@@ -317,6 +319,8 @@ function NightView({ cameraId, night, showToast, onBack }) {
   const [hasTimelapse, setHasTimelapse] = useState(false)
   // A render in progress is a real file that no player can open.
   const [rendering, setRendering] = useState(false)
+  // The daylight either side of the night is its own film.
+  const [hasDay, setHasDay] = useState(false)
   // Bumped after a delete so the index is pulled again — the frames on screen
   // are gone and showing them would offer a fullscreen view of a 404.
   const [reloadKey, setReloadKey] = useState(0)
@@ -345,6 +349,7 @@ function NightView({ cameraId, night, showToast, onBack }) {
         if (!alive) return
         const me = ns.find((n) => n.night === night)
         setHasTimelapse(!!me?.has_timelapse)
+        setHasDay(!!me?.has_day_timelapse)
         setRendering(!!me?.rendering)
       })
       .catch(() => {})
@@ -409,7 +414,7 @@ function NightView({ cameraId, night, showToast, onBack }) {
       </div>
 
       <TimelapsePanel cameraId={cameraId} night={night} present={hasTimelapse}
-        rendering={rendering} showToast={showToast}
+        rendering={rendering} hasDay={hasDay} showToast={showToast}
         onRendered={() => setHasTimelapse(true)} />
 
       <TidyUp cameraId={cameraId} night={night} frames={frames}
@@ -712,7 +717,9 @@ function Fullscreen({ frameUrl, dngUrl, name, onClose }) {
 /* -- timelapse (relocated here from the dashboard) ------------------------- */
 
 export function TimelapsePanel({ cameraId, night, present, rendering,
-                                showToast, onRendered }) {
+                                hasDay, showToast, onRendered }) {
+  // Night is what anybody came for, so it is what opens.
+  const [variant, setVariant] = useState('night')
   const [clipSeconds, setClipSeconds] = useState(30)
   const [quality, setQuality] = useState('high')
   const [busy, setBusy] = useState(false)
@@ -740,6 +747,23 @@ export function TimelapsePanel({ cameraId, night, present, rendering,
 
   return (
     <Card title="Timelapse">
+      {hasDay && present && (
+        /* Two films, not one cut together. The night folder runs noon to noon,
+           so it holds the daylight either side; splicing that on puts a
+           three-orders-of-magnitude exposure change mid-clip. */
+        <div className="mt-3">
+          <Segmented value={variant} onChange={setVariant} options={[
+            { value: 'night', label: 'Night' },
+            { value: 'day', label: 'Daylight' },
+          ]} />
+          <p className="mt-2 text-xs text-zinc-500">
+            Separate films. The night runs dusk to dawn; daylight is the evening
+            and morning either side of it, shot on completely different
+            settings.
+          </p>
+        </div>
+      )}
+
       {rendering && !present ? (
         /* A render in progress is a real file on disk that no player can open:
            the index is written last. Showing the player anyway is how a night
@@ -756,8 +780,9 @@ export function TimelapsePanel({ cameraId, night, present, rendering,
           </div>
         </div>
       ) : present || version > 0 ? (
-        <video key={version} controls playsInline preload="metadata"
-          src={`/api/timelapse/${cameraId}/${night}?v=${version}`}
+        <video key={`${variant}-${version}`} controls playsInline preload="metadata"
+          src={`/api/timelapse/${cameraId}/${night}`
+            + `?variant=${variant}&v=${version}`}
           className="mt-3 w-full rounded-xl border border-zinc-800 bg-black" />
       ) : (
         <p className="mt-3 rounded-xl border border-dashed border-zinc-800 p-6

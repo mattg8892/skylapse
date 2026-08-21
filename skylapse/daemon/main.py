@@ -292,7 +292,7 @@ class CaptureDaemon:
                 latest_night = process.day_folder(time.time(), self.camera_id)
                 if latest_night.exists() and cam.timelapse.auto_render:
                     log.info("Rendering timelapse for %s", latest_night.name)
-                    nightjobs.render_night(latest_night, cam.timelapse)
+                    nightjobs.render_all(latest_night, cam.timelapse)
                 nightjobs.cleanup(cam_root, self.cfg.cleanup_free_gb)
             self.last_period = now_period
 

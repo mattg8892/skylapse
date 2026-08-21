@@ -357,6 +357,42 @@ def test_sampling_spans_the_whole_night():
     assert max(gaps) - min(gaps) <= 1, "spacing should be even to within a frame"
 
 
+class _Timed:
+    """A frame that knows when it was taken, which is what sampling needs."""
+
+    def __init__(self, when):
+        self.when = when
+
+    def stat(self):
+        return type("S", (), {"st_mtime": self.when})()
+
+
+def test_sampling_is_even_in_time_not_in_frame_number():
+    """What "jumpy" meant. Frames do not arrive at a constant rate — exposure
+    changes through the night and gaps appear where the sensor was settling — so
+    every Nth frame makes the sky crawl through the dense stretches and leap
+    across the sparse ones. Measured on a real night, that was 91 visible
+    lurches; sampling on a clock instead left one.
+    """
+    dense = [_Timed(t) for t in range(0, 3000, 30)]          # a frame every 30s
+    sparse = [_Timed(t) for t in range(9000, 12000, 300)]    # one every 5 min
+    shown = nightjobs.select_frames(dense + sparse, 4, 10)
+
+    steps = [b.when - a.when for a, b in zip(shown, shown[1:])]
+    moving = [s for s in steps if s > 0]
+    lurches = [s for s in moving if s > sorted(moving)[len(moving) // 2] * 3]
+    assert len(lurches) <= 1, f"{len(lurches)} lurches in the timeline"
+
+
+def test_a_gap_becomes_a_hold_rather_than_a_leap():
+    """There is no frame to show for time nobody captured. Holding the last one
+    is honest and brief; leaping is what reads as broken."""
+    before = [_Timed(t) for t in range(0, 600, 30)]
+    after = [_Timed(t) for t in range(3000, 3600, 30)]
+    shown = nightjobs.select_frames(before + after, 3, 10)
+    assert any(a is b for a, b in zip(shown, shown[1:])), "no hold across the gap"
+
+
 def test_a_short_night_keeps_every_frame():
     """Nothing to sample. Padding it out would mean duplicating frames to reach
     a length nobody would notice."""
@@ -483,3 +519,47 @@ def test_a_failed_render_leaves_nothing_behind(tmp_path, monkeypatch):
                         lambda *a, **k: "ffmpeg exited 1")
     assert nightjobs.render_night(folder) is None
     assert not list(folder.glob("timelapse_*"))
+
+
+# -- day and night are separate films ----------------------------------------
+
+def test_day_and_night_frames_are_kept_apart(tmp_path, monkeypatch):
+    """A night folder runs noon to noon, so it holds the evening before dusk and
+    the morning after dawn — shot at a fiftieth of a second at unity gain
+    against twenty-five seconds at gain fifteen. Cut together, the picture
+    changes completely at each end, which was the first thing anyone said about
+    watching it."""
+    import os
+    from datetime import datetime, timezone
+    from skylapse import config
+
+    monkeypatch.setattr(config, "CONFIG_PATH", tmp_path / "config.yaml")
+    cfg = config.Config()
+    cfg.location.latitude, cfg.location.longitude = 42.56, -87.88   # Racine
+    config.save(cfg)
+
+    folder = tmp_path / "2026-08-20"
+    folder.mkdir()
+    # Local noon and local midnight, expressed as instants.
+    noon = datetime(2026, 8, 20, 17, 0, tzinfo=timezone.utc).timestamp()
+    midnight = datetime(2026, 8, 21, 5, 0, tzinfo=timezone.utc).timestamp()
+    made = {}
+    for label, when in (("day", noon), ("night", midnight)):
+        for i in range(3):
+            f = folder / f"img_{label}_{i}.jpg"
+            f.write_bytes(b"x")
+            os.utime(f, (when + i, when + i))
+            made.setdefault(label, []).append(f)
+
+    groups = nightjobs.classify_frames(
+        sorted(folder.glob("img_*.jpg")), cfg)
+    assert {f.name for f in groups["day"]} == {f.name for f in made["day"]}
+    assert {f.name for f in groups["night"]} == {f.name for f in made["night"]}
+
+
+def test_the_night_film_keeps_the_plain_name():
+    """It is the one anybody came for, and every existing night on every card
+    is already called this."""
+    folder = Path("/images/cam/2026-08-20")
+    assert nightjobs.output_name(folder, "night").name == "timelapse_2026-08-20.mp4"
+    assert nightjobs.output_name(folder, "day").name == "timelapse_2026-08-20_day.mp4"

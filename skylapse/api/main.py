@@ -1027,9 +1027,13 @@ def nights(camera_id: str) -> list[dict]:
             "first": frames[0].stat().st_mtime,
             "last": frames[-1].stat().st_mtime,
             "has_timelapse": (night / f"timelapse_{night.name}.mp4").exists(),
+            # The daylight either side of the night is its own film, because
+            # splicing it on puts a three-orders-of-magnitude exposure cut in
+            # the middle of the one people actually watch.
+            "has_day_timelapse": (night / f"timelapse_{night.name}_day.mp4").exists(),
             # A render in progress is a large unplayable file, so the UI needs
             # to know the difference between "not rendered" and "rendering".
-            "rendering": (night / f"timelapse_{night.name}.mp4.part").exists(),
+            "rendering": any(night.glob("timelapse_*.mp4.part")),
             "bytes": night_bytes(night),
         })
     return out
@@ -1290,14 +1294,17 @@ def capture_resume() -> dict:
 # -- timelapse ---------------------------------------------------------------
 
 @app.get("/api/timelapse/{camera_id}/{night}")
-def timelapse_file(camera_id: str, night: str):
+def timelapse_file(camera_id: str, night: str, variant: str = "night"):
     """Serve a night's rendered mp4 so the dashboard can play it inline.
 
     Declared before the render route only for readability — they never
     collide, since this is GET and the render endpoint is POST under a
     literal /render/ segment.
     """
-    path = config.IMAGE_ROOT / camera_id / night / f"timelapse_{night}.mp4"
+    from ..daemon import nightjobs
+    if variant not in ("night", "day"):
+        raise HTTPException(400, "variant must be night or day")
+    path = nightjobs.output_name(config.IMAGE_ROOT / camera_id / night, variant)
     if not path.is_file():
         raise HTTPException(404, "No timelapse for that night")
     return FileResponse(path, media_type="video/mp4")
@@ -1343,7 +1350,8 @@ def render_timelapse(camera_id: str, night: str, force: bool = False,
         settings.clip_seconds = max(5, min(600, clip_seconds))
     if quality in ("standard", "high", "max"):
         settings.quality = quality
-    out = nightjobs.render_night(folder, settings, force=force)
+    rendered = nightjobs.render_all(folder, settings, force=force)
+    out = rendered.get("night") or rendered.get("day")
     if out is None:
         raise HTTPException(422, "Not enough frames or ffmpeg unavailable")
     return {"ok": True, "file": out.name}
