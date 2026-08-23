@@ -759,6 +759,16 @@ def dewheater_status() -> dict:
     }
 
 
+@app.get("/api/dewheater/diagnostics")
+def dewheater_diagnostics() -> dict:
+    """Which libraries are present, which backend drives the pin, why a read
+    failed. Written after a heater reported a successful test and did not
+    switch on -- no LED, nothing on a thermal camera -- because at that point
+    the card could say what it had tried and not what was actually there."""
+    from ..daemon import dewheater
+    return dewheater.diagnostics()
+
+
 @app.post("/api/system/reboot")
 def system_reboot() -> dict:
     """Restart the camera, gracefully.

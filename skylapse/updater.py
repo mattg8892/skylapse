@@ -404,7 +404,11 @@ def _build(changed: set[str]) -> None:
     root = repo_root()
     if any(p == "pyproject.toml" for p in changed):
         _set_status(state="running", message="Installing Python dependencies")
-        _run([str(root / "venv" / "bin" / "pip"), "install", "-e", "."],
+        # Same extras as install.sh. This said plain "." while the installer
+        # said "[zwo]", so an updated camera and a freshly imaged one did not
+        # have the same packages -- and the difference was invisible until a
+        # feature quietly could not work.
+        _run([str(root / "venv" / "bin" / "pip"), "install", "-e", ".[zwo,dewheater]"],
              timeout=1800)
     if any(p.startswith("web/") for p in changed):
         _set_status(state="running", message="Building the web interface")

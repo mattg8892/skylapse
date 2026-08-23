@@ -97,7 +97,12 @@ as_user "$ROOT/venv/bin/pip" install --quiet --upgrade pip
 # The [zwo] extra is the Python bindings only — a small pure-Python package, no
 # vendor code. They go in unconditionally so that installing ZWO support later
 # is one download rather than a rebuild of the venv on a camera in the field.
-as_user "$ROOT/venv/bin/pip" install --quiet -e "$ROOT[zwo]"
+#
+# [dewheater] for the same reason, and because leaving it out was worse than a
+# rebuild: the sensor probe is raw smbus2 and works without it, so the card
+# reported "sensor found" on a camera that could never take a single reading.
+# A half-installed feature that looks installed is the expensive kind.
+as_user "$ROOT/venv/bin/pip" install --quiet -e "$ROOT[zwo,dewheater]"
 
 echo "==> ZWO SDK (optional)"
 # Not installed here, and not installed by default anywhere: Skylapse targets Pi

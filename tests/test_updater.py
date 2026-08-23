@@ -598,3 +598,53 @@ def test_exit_127_names_the_line_ending_as_the_likely_cause(monkeypatch):
     ok, detail = updater._restart_services()
     assert ok is False
     assert "CRLF" in detail and "skylapse-admin" in detail
+
+
+# -- installer / updater parity ----------------------------------------------
+
+def test_the_updater_installs_the_same_extras_as_the_installer():
+    """A camera that was updated and one that was freshly imaged must end up
+    with the same packages.
+
+    They did not. install.sh installed `.[zwo]`, the updater installed plain
+    `.`, and the dew heater's libraries were in a third extra that neither
+    installed. The sensor probe is raw smbus2 and works without them, so the
+    settings card reported "sensor found" on a camera that could never take a
+    reading -- for two releases, while the fault was assumed to be wiring.
+    """
+    import re
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[1]
+    installer = (root / "install.sh").read_text(encoding="utf-8")
+    updater_src = (root / "skylapse" / "updater.py").read_text(encoding="utf-8")
+
+    def extras(text):
+        found = set()
+        for match in re.finditer(r"\[([a-z,\s]+)\]", text):
+            parts = {p.strip() for p in match.group(1).split(",")}
+            if parts <= {"zwo", "dewheater"} and parts:
+                found |= parts
+        return found
+
+    from_installer = extras(installer)
+    from_updater = extras(updater_src)
+    assert from_installer, "no extras found in install.sh -- has the parser drifted?"
+    assert from_installer == from_updater, (
+        f"install.sh installs {sorted(from_installer)} but the updater installs "
+        f"{sorted(from_updater)}; an updated camera and an imaged one would differ")
+
+
+def test_every_declared_extra_is_actually_installed_somewhere():
+    """An extra nobody installs is a feature that silently cannot work."""
+    import re
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[1]
+    pyproject = (root / "pyproject.toml").read_text(encoding="utf-8")
+    declared = set(re.findall(r"^(\w+)\s*=\s*\[", pyproject, re.M)) - {
+        "dependencies", "requires", "classifiers", "keywords", "authors",
+        "packages", "include", "exclude", "where", "namespaces", "scripts"}
+    installer = (root / "install.sh").read_text(encoding="utf-8")
+    for extra in declared:
+        assert extra in installer, (
+            f"pyproject declares the [{extra}] extra but install.sh never "
+            f"installs it, so anything depending on it cannot work")

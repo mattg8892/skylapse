@@ -674,11 +674,18 @@ function DewHeaterCard({ showToast }) {
           {pulse && (
             <div className="rounded-lg bg-zinc-800/60 p-3 text-sm">
               {pulse.rise_c == null ? (
-                <p className="text-zinc-400">
-                  Heater driven for {pulse.seconds}s and switched off. No sensor
-                  reading either side, so feel the resistors — they should be
-                  clearly warm.
-                </p>
+                <>
+                  <p className="text-zinc-400">
+                    Heater driven for {pulse.seconds}s and switched off, but there
+                    was no temperature reading to measure it by.
+                  </p>
+                  {pulse.sensor_error && (
+                    <p className="mt-1 text-xs text-amber-300">{pulse.sensor_error}</p>
+                  )}
+                  <p className="mt-1 text-xs text-zinc-500">
+                    Feel the resistors — they should be clearly warm.
+                  </p>
+                </>
               ) : (
                 <>
                   <p className={pulse.rise_c >= 0.3 ? 'text-emerald-400' : 'text-amber-300'}>
@@ -694,6 +701,13 @@ function DewHeaterCard({ showToast }) {
                       + ' see it. Feel the resistors before assuming a fault.'}
                   </p>
                 </>
+              )}
+              {pulse.pin_factory && (
+                <p className="mt-2 text-xs text-zinc-600">
+                  Driven through {pulse.pin_factory}
+                  {pulse.pin_factory.startsWith('Mock')
+                    && ' — which switches nothing. No real pin was touched.'}
+                </p>
               )}
             </div>
           )}

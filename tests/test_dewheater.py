@@ -222,3 +222,72 @@ def test_a_real_bme280_is_found_at_either_address(monkeypatch):
     monkeypatch.setitem(__import__("sys").modules, "smbus2",
                         type("M", (), {"SMBus": Bus}))
     assert dewheater.find_sensor() == 0x77
+
+
+# -- diagnostics -------------------------------------------------------------
+
+def test_diagnostics_names_the_missing_library(monkeypatch):
+    """The failure that hid for two releases.
+
+    Detection uses raw smbus2; reading needs RPi.bme280. Those were an optional
+    extra nothing installed, so the card said "sensor found" on a camera that
+    could not produce one reading. Detected-but-unreadable has to be a state
+    the software can name.
+    """
+    from skylapse.daemon import dewheater
+    import builtins
+    real = builtins.__import__
+
+    def no_bme280(name, *a, **kw):
+        if name == "bme280":
+            raise ImportError("No module named 'bme280'")
+        return real(name, *a, **kw)
+
+    monkeypatch.setattr(builtins, "__import__", no_bme280)
+    assert "RPi.bme280" in dewheater.read_error(0x76)
+
+
+def test_no_sensor_is_a_different_message_from_no_library():
+    """Two different next steps: wire something up, versus install something."""
+    from skylapse.daemon import dewheater
+    assert "answered" in dewheater.read_error(None)
+
+
+def test_the_pulse_reports_which_backend_drove_the_pin(monkeypatch):
+    """gpiozero will drive a mock and report success, which looks exactly like
+    working hardware from the outside. On a Pi 5 the backend has to be lgpio;
+    anything else is why the MOSFET never switched."""
+    from skylapse.daemon import dewheater
+    _fake_gpio(monkeypatch, [])
+    monkeypatch.setattr(dewheater, "find_sensor", lambda: None)
+    monkeypatch.setattr(dewheater, "read_sensor", lambda addr: None)
+    monkeypatch.setattr(dewheater, "pin_factory_name", lambda: "LGPIOFactory")
+
+    result = dewheater.test_pulse(18, 15)
+    assert result["pin_factory"] == "LGPIOFactory"
+
+
+def test_a_pulse_with_no_reading_says_why(monkeypatch):
+    """Silence was the actual problem: the test returned ok with no
+    temperatures and no explanation, so the only thing left to suspect was the
+    wiring."""
+    from skylapse.daemon import dewheater
+    _fake_gpio(monkeypatch, [])
+    monkeypatch.setattr(dewheater, "find_sensor", lambda: 0x76)
+    monkeypatch.setattr(dewheater, "read_sensor", lambda addr: None)
+    monkeypatch.setattr(dewheater, "read_error", lambda addr: "library missing")
+
+    result = dewheater.test_pulse(18, 15)
+    assert result["ok"] is True
+    assert result["sensor_error"] == "library missing"
+
+
+def test_diagnostics_reports_each_library_separately(monkeypatch):
+    from skylapse.daemon import dewheater
+    monkeypatch.setattr(dewheater, "find_sensor", lambda: 0x77)
+    monkeypatch.setattr(dewheater, "read_error", lambda addr: "")
+    monkeypatch.setattr(dewheater, "pin_factory_name", lambda: "LGPIOFactory")
+    info = dewheater.diagnostics()
+    for lib in ("smbus2", "bme280", "gpiozero"):
+        assert lib in info and isinstance(info[lib], bool)
+    assert info["sensor_addr"] == "0x77"

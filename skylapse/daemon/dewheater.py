@@ -147,6 +147,73 @@ def read_sensor(addr: int | None) -> tuple[float, float] | None:
         return None
 
 
+def read_error(addr: int | None) -> str:
+    """Why a read failed, as a sentence, or "" if it did not.
+
+    Detecting the chip and reading it use different libraries: the probe is raw
+    smbus2, the read needs RPi.bme280. So a camera can report "sensor found"
+    for ever and never produce a single reading -- which is exactly what
+    happened, because the dew heater's dependencies were an optional extra that
+    neither the installer nor the updater ever installed.
+    """
+    if addr is None:
+        return "no BME280 answered on the bus"
+    try:
+        import bme280         # noqa: F401
+    except Exception:
+        return ("the RPi.bme280 library is not installed, so the sensor can be "
+                "detected but not read")
+    try:
+        import smbus2
+        bus = smbus2.SMBus(1)
+        params = bme280.load_calibration_params(bus, addr)
+        bme280.sample(bus, addr, params)
+        return ""
+    except Exception as exc:
+        return f"reading the sensor failed: {exc}"
+
+
+def diagnostics() -> dict:
+    """What is actually present, rather than what is supposed to be.
+
+    Written after a heater that reported a successful test did not switch on:
+    no LED on the MOSFET, nothing on a thermal camera. The test could say it
+    had driven the pin, but not whether anything real was behind it -- and
+    gpiozero will happily drive a mock. Facts beat a hunt.
+    """
+    info: dict = {}
+    for name in ("smbus2", "bme280", "gpiozero"):
+        try:
+            __import__(name)
+            info[name] = True
+        except Exception:
+            info[name] = False
+
+    addr = find_sensor()
+    info["sensor_addr"] = hex(addr) if addr is not None else None
+    info["sensor_error"] = read_error(addr)
+    info["pin_factory"] = pin_factory_name()
+    return info
+
+
+def pin_factory_name() -> str | None:
+    """Which gpiozero backend is in play.
+
+    A MockFactory switches nothing and reports success, which is
+    indistinguishable from working hardware unless you go and look. On a Pi 5
+    the backend must be lgpio -- the older RPi.GPIO path does not drive this
+    board's pins at all.
+    """
+    try:
+        from gpiozero import Device
+        if Device.pin_factory is None:
+            Device._default_pin_factory()
+        return type(Device.pin_factory).__name__
+    except Exception as exc:
+        log.debug("Could not determine the gpiozero pin factory: %s", exc)
+        return None
+
+
 # -- commissioning ----------------------------------------------------------
 
 # The longest a manual test may run, whatever it is asked for. The pin goes low
@@ -190,11 +257,17 @@ def test_pulse(gpio_pin: int, seconds: float) -> dict:
         pin.on()
         _time.sleep(seconds)
         after = read_sensor(addr)
-        result = {"ok": True, "seconds": seconds, "gpio_pin": gpio_pin}
+        result = {"ok": True, "seconds": seconds, "gpio_pin": gpio_pin,
+                  # Which backend actually drove the pin. A test that says it
+                  # switched a heater on, on a rig where nothing switched, is
+                  # worse than no test -- it sends you to check the wiring.
+                  "pin_factory": pin_factory_name()}
         if before and after:
             result["temp_before_c"] = round(before[0], 2)
             result["temp_after_c"] = round(after[0], 2)
             result["rise_c"] = round(after[0] - before[0], 2)
+        else:
+            result["sensor_error"] = read_error(addr)
         return result
     except Exception as exc:
         return {"ok": False, "error": str(exc)}
