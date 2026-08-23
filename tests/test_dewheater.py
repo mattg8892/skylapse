@@ -88,8 +88,12 @@ def test_off_forces_gpio_low():
 # -- commissioning -----------------------------------------------------------
 
 def test_a_test_pulse_is_capped(monkeypatch):
-    """A heater left on unattended is the only genuinely dangerous failure this
-    hardware has. Asking for an hour gets you fifteen seconds."""
+    """Asking for an hour gets you TEST_MAX_SECONDS, whatever that is set to.
+
+    The cap moved from 15s to 120s once a heater actually existed to test --
+    six 3W resistor bodies take longer than fifteen seconds to become warm
+    enough to feel -- so this asserts against the constant, not a number.
+    """
     from skylapse.daemon import dewheater
 
     class FakePin:
@@ -127,3 +131,94 @@ def test_the_pin_goes_off_even_when_the_test_fails(monkeypatch):
     result = dewheater.test_pulse(18, 5)
     assert result["ok"] is False
     assert made and made[0].state is False, "left the heater on after a failure"
+
+
+def _fake_gpio(monkeypatch, pins):
+    class FakePin:
+        def __init__(self, *a, **kw): self.state = False
+        def on(self): self.state = True
+        def off(self): self.state = False
+        def close(self): pass
+    monkeypatch.setitem(__import__("sys").modules, "gpiozero",
+                        type("M", (), {"OutputDevice": lambda *a, **kw:
+                                       pins.append(FakePin()) or pins[-1]}))
+    import time
+    monkeypatch.setattr(time, "sleep", lambda s: None)
+
+
+def test_the_pulse_measures_the_temperature_it_caused(monkeypatch):
+    """"Does it get warm?" is a bad question to answer by hand.
+
+    The resistors may be inside a dome, behind glass, or simply cooler than a
+    finger resolves. The sensor is already there, so read it either side and
+    report a number instead of asking for a judgement.
+    """
+    from skylapse.daemon import dewheater
+    _fake_gpio(monkeypatch, [])
+    monkeypatch.setattr(dewheater, "find_sensor", lambda: 0x76)
+    samples = iter([(12.0, 80.0), (14.5, 72.0)])
+    monkeypatch.setattr(dewheater, "read_sensor", lambda addr: next(samples))
+
+    result = dewheater.test_pulse(18, 60)
+    assert result["ok"] is True
+    assert result["temp_before_c"] == 12.0
+    assert result["temp_after_c"] == 14.5
+    assert result["rise_c"] == 2.5
+
+
+def test_a_pulse_without_a_sensor_still_works(monkeypatch):
+    """The heater can be commissioned before the sensor is wired, and often is
+    -- that is the order the wiring guide gives. No reading is not an error."""
+    from skylapse.daemon import dewheater
+    pins = []
+    _fake_gpio(monkeypatch, pins)
+    monkeypatch.setattr(dewheater, "find_sensor", lambda: None)
+    monkeypatch.setattr(dewheater, "read_sensor", lambda addr: None)
+
+    result = dewheater.test_pulse(18, 30)
+    assert result["ok"] is True
+    assert "rise_c" not in result
+    assert pins and pins[0].state is False, "left the heater on"
+
+
+def test_a_sensor_that_fails_mid_pulse_does_not_fail_the_test(monkeypatch):
+    """An I2C read can glitch. Losing the measurement is a shame; losing the
+    heater test over it -- and leaving the pin state ambiguous -- is worse."""
+    from skylapse.daemon import dewheater
+    pins = []
+    _fake_gpio(monkeypatch, pins)
+    monkeypatch.setattr(dewheater, "find_sensor", lambda: 0x76)
+    samples = iter([(12.0, 80.0), None])
+    monkeypatch.setattr(dewheater, "read_sensor", lambda addr: next(samples))
+
+    result = dewheater.test_pulse(18, 30)
+    assert result["ok"] is True
+    assert "rise_c" not in result
+    assert pins[0].state is False
+
+
+def test_a_bmp280_is_not_accepted_as_a_bme280(monkeypatch):
+    """0x58 is a BMP280: same package, same address, no humidity sensor. A
+    dewpoint from one would be invented, so no sensor is the honest answer."""
+    from skylapse.daemon import dewheater
+
+    class Bus:
+        def __init__(self, n): pass
+        def read_byte_data(self, addr, reg): return 0x58
+    monkeypatch.setitem(__import__("sys").modules, "smbus2",
+                        type("M", (), {"SMBus": Bus}))
+    assert dewheater.find_sensor() is None
+
+
+def test_a_real_bme280_is_found_at_either_address(monkeypatch):
+    from skylapse.daemon import dewheater
+
+    class Bus:
+        def __init__(self, n): pass
+        def read_byte_data(self, addr, reg):
+            if addr == 0x77:
+                return 0x60
+            raise OSError("nothing here")
+    monkeypatch.setitem(__import__("sys").modules, "smbus2",
+                        type("M", (), {"SMBus": Bus}))
+    assert dewheater.find_sensor() == 0x77

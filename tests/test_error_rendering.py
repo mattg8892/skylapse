@@ -101,7 +101,7 @@ def test_the_heater_test_accepts_the_request_the_button_sends(client, monkeypatc
     r = client.post("/api/dewheater/test")          # no body, exactly as the UI does
     assert r.status_code == 200, \
         f"the commissioning button gets {r.status_code}: {r.text[:200]}"
-    assert r.json()["seconds"] == 5.0
+    assert r.json()["seconds"] == 60.0
 
 
 def test_an_explicit_duration_is_still_honoured(client, monkeypatch):

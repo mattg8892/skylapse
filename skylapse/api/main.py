@@ -798,7 +798,10 @@ def dewheater_enable_i2c() -> dict:
 
 
 class DewHeaterTest(BaseModel):
-    seconds: float = 5.0
+    # 60s, not the 5s this shipped with. Six resistor bodies take longer than
+    # five seconds to become warm enough to feel, so the original default made
+    # a correctly wired heater look dead.
+    seconds: float = 60.0
 
 
 @app.post("/api/dewheater/test")

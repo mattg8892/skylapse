@@ -91,32 +91,11 @@ class DewHeater:
     # -- hardware touch-points: UNVERIFIED, isolated on purpose --------------
 
     def _probe_sensor(self) -> bool:
-        try:
-            import smbus2
-            bus = smbus2.SMBus(1)
-            for addr in (BME280_ADDR, 0x77):
-                try:
-                    chip_id = bus.read_byte_data(addr, 0xD0)
-                    if chip_id == 0x60:              # BME280 (0x58 = BMP280: no
-                        self._addr = addr            # humidity -> useless here)
-                        return True
-                except OSError:
-                    continue
-            return False
-        except Exception:
-            return False
+        self._addr = find_sensor()
+        return self._addr is not None
 
     def _read_bme280(self) -> tuple[float, float] | None:
-        try:
-            import bme280
-            import smbus2
-            bus = smbus2.SMBus(1)
-            params = bme280.load_calibration_params(bus, self._addr)
-            sample = bme280.sample(bus, self._addr, params)
-            return sample.temperature, sample.humidity
-        except Exception as exc:
-            log.debug("BME280 read failed: %s", exc)
-            return None
+        return read_sensor(self._addr)
 
     def _set_gpio(self, on: bool) -> None:
         try:
@@ -129,23 +108,70 @@ class DewHeater:
             log.debug("GPIO set failed: %s", exc)
 
 
+# -- sensor -----------------------------------------------------------------
+
+def find_sensor() -> int | None:
+    """The I2C address a BME280 answers on, or None.
+
+    A BMP280 reports chip id 0x58 and is rejected: it looks identical, sits at
+    the same addresses, and cannot measure humidity -- which is the whole input
+    to a dewpoint. Better to report no sensor than to compute nonsense.
+    """
+    try:
+        import smbus2
+        bus = smbus2.SMBus(1)
+    except Exception:
+        return None
+    for addr in (BME280_ADDR, 0x77):
+        try:
+            if bus.read_byte_data(addr, 0xD0) == 0x60:
+                return addr
+        except OSError:
+            continue
+    return None
+
+
+def read_sensor(addr: int | None) -> tuple[float, float] | None:
+    """(temperature C, relative humidity %) or None."""
+    if addr is None:
+        return None
+    try:
+        import bme280
+        import smbus2
+        bus = smbus2.SMBus(1)
+        params = bme280.load_calibration_params(bus, addr)
+        sample = bme280.sample(bus, addr, params)
+        return sample.temperature, sample.humidity
+    except Exception as exc:
+        log.debug("BME280 read failed: %s", exc)
+        return None
+
+
 # -- commissioning ----------------------------------------------------------
 
-# The longest a manual test may run, whatever it is asked for. A heater left on
-# unattended is the one genuinely dangerous failure this hardware has, so the
-# test cannot be the thing that causes it: the pin goes low again even if the
-# caller disappears mid-request.
-TEST_MAX_SECONDS = 15
+# The longest a manual test may run, whatever it is asked for. The pin goes low
+# again even if the caller disappears mid-request.
+#
+# This was 15s, chosen before anyone had built one. Too short to be useful: a
+# dew heater is a handful of watts spread over resistor bodies with real
+# thermal mass, and fifteen seconds of that is not something a finger can
+# detect. A test you cannot read the result of is not a test.
+TEST_MAX_SECONDS = 120
 
 
 def test_pulse(gpio_pin: int, seconds: float) -> dict:
-    """Drive the heater pin for a few seconds, then hard off.
+    """Drive the heater pin, then hard off, and measure what it did.
 
     First power-on of a heater is the moment to be careful, and "switch it on
     and see" is not a thing anyone should have to do by editing config and
-    waiting for the dewpoint to be met. This drives the pin directly, briefly,
-    with the off in a finally block so a crash or a dropped connection still
-    ends with the heater off.
+    waiting for the dewpoint to be met. The off is in a finally block so a
+    crash or a dropped connection still ends with the heater off.
+
+    The sensor is read either side of the pulse, because "does it get warm?"
+    answered by hand is a poor test -- the resistors may be inside a dome, or
+    behind glass, or simply cooler than a finger can resolve. A number settles
+    it. No rise is not proof of a fault, though: it depends where the sensor
+    sits relative to the heat, so the reading is reported rather than judged.
     """
     import time as _time
 
@@ -155,12 +181,21 @@ def test_pulse(gpio_pin: int, seconds: float) -> dict:
     except Exception as exc:
         return {"ok": False, "error": f"no GPIO library available: {exc}"}
 
+    addr = find_sensor()
+    before = read_sensor(addr)
+
     pin = None
     try:
         pin = OutputDevice(gpio_pin, active_high=True, initial_value=False)
         pin.on()
         _time.sleep(seconds)
-        return {"ok": True, "seconds": seconds, "gpio_pin": gpio_pin}
+        after = read_sensor(addr)
+        result = {"ok": True, "seconds": seconds, "gpio_pin": gpio_pin}
+        if before and after:
+            result["temp_before_c"] = round(before[0], 2)
+            result["temp_after_c"] = round(after[0], 2)
+            result["rise_c"] = round(after[0] - before[0], 2)
+        return result
     except Exception as exc:
         return {"ok": False, "error": str(exc)}
     finally:

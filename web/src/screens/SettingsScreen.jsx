@@ -530,6 +530,8 @@ function DewHeaterCard({ showToast }) {
   const [state, setState] = useState(null)
   const [busy, setBusy] = useState('')
   const [needsReboot, setNeedsReboot] = useState(false)
+  const [testSeconds, setTestSeconds] = useState(60)
+  const [pulse, setPulse] = useState(null)
 
   const refresh = useCallback(() => {
     fetch('/api/dewheater').then((r) => r.json()).then(setState).catch(() => {})
@@ -540,10 +542,14 @@ function DewHeaterCard({ showToast }) {
     return () => clearInterval(id)
   }, [refresh])
 
-  const send = async (path, body, working, done) => {
+  // `method` is explicit rather than inferred from whether there is a body.
+  // It used to be `body ? 'PUT' : 'POST'`, which is fine right up until a POST
+  // needs to carry one -- and then it silently becomes a PUT to an endpoint
+  // that does not have one.
+  const send = async (path, body, working, done, method) => {
     setBusy(working)
     const r = await fetch(path, {
-      method: body ? 'PUT' : 'POST',
+      method: method || (body ? 'PUT' : 'POST'),
       headers: { 'Content-Type': 'application/json' },
       body: body ? JSON.stringify(body) : undefined,
     }).catch(() => null)
@@ -645,16 +651,59 @@ function DewHeaterCard({ showToast }) {
             </p>
           )}
 
-          <Button className="w-full" disabled={!!busy}
-            onClick={() => send('/api/dewheater/test', null, 'test',
-                                'Heater driven for 5 seconds, now off')}>
-            {busy === 'test' ? 'Testing…' : 'Test the heater for 5 seconds'}
-          </Button>
+          <div className="space-y-2">
+            <div className="flex items-center gap-2">
+              <span className="text-sm text-zinc-300">Test the heater for</span>
+              <Select value={testSeconds}
+                onChange={(e) => setTestSeconds(Number(e.target.value))}>
+                <option value={15}>15 seconds</option>
+                <option value={60}>1 minute</option>
+                <option value={120}>2 minutes</option>
+              </Select>
+            </div>
+            <Button className="w-full" disabled={!!busy}
+              onClick={async () => {
+                setPulse(null)
+                const d = await send('/api/dewheater/test', { seconds: testSeconds },
+                                     'test', 'Test finished — the heater is off',
+                                     'POST')
+                if (d?.ok) setPulse(d)
+              }}>
+              {busy === 'test' ? 'Heating…' : 'Run the test'}
+            </Button>
+          </div>
+
+          {pulse && (
+            <div className="rounded-lg bg-zinc-800/60 p-3 text-sm">
+              {pulse.rise_c == null ? (
+                <p className="text-zinc-400">
+                  Heater driven for {pulse.seconds}s and switched off. No sensor
+                  reading either side, so feel the resistors — they should be
+                  clearly warm.
+                </p>
+              ) : (
+                <>
+                  <p className={pulse.rise_c >= 0.3 ? 'text-emerald-400' : 'text-amber-300'}>
+                    {pulse.rise_c >= 0.3
+                      ? `Warmed by ${pulse.rise_c}°C — the heater is working.`
+                      : `Only ${pulse.rise_c}°C of change.`}
+                  </p>
+                  <p className="mt-1 text-xs text-zinc-500">
+                    {pulse.temp_before_c}°C before, {pulse.temp_after_c}°C after,
+                    over {pulse.seconds}s.
+                    {pulse.rise_c < 0.3 && ' That may mean nothing is switching —'
+                      + ' or just that the sensor sits too far from the heat to'
+                      + ' see it. Feel the resistors before assuming a fault.'}
+                  </p>
+                </>
+              )}
+            </div>
+          )}
+
           <p className="-mt-2 text-xs text-zinc-500">
-            Switches the heater on briefly so you can check the wiring and feel
-            for warmth, without waiting for weather. Capped at fifteen seconds
-            whatever happens, and switched off again even if this page
-            disconnects mid-test.
+            Switches the heater on so you can confirm the wiring without waiting
+            for weather. Capped at two minutes whatever happens, and switched
+            off again even if this page disconnects mid-test.
           </p>
 
           <label className="flex items-start justify-between gap-3 text-sm">
