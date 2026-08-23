@@ -94,7 +94,8 @@ usage() {
     echo "usage: skylapse-admin {camera-overlay <sensor>|zwo-sdk|reboot" >&2
     echo "                       |update <ref> [--now]|restart-services" >&2
     echo "                       |tailscale-install|tailscale-up" >&2
-    echo "                       |tailscale-serve|tailscale-down|tailscale-status}" >&2
+    echo "                       |tailscale-serve|tailscale-down|tailscale-status" >&2
+    echo "                       |reinstall-units|i2c-enable}" >&2
     exit 2
 }
 
@@ -369,6 +370,31 @@ case "${1:-}" in
 
   tailscale-status)
     tailscale status --json
+    ;;
+
+  i2c-enable)
+    # The BME280 the dew heater reads sits on I2C, and Raspberry Pi OS ships
+    # the bus switched off. Turning it on means a line in the boot config and a
+    # reboot — which on an appliance with no terminal is otherwise a dead end,
+    # exactly like the camera overlay was.
+    cp -n "$CONFIG" "$CONFIG.skylapse-backup" 2>/dev/null || true
+    if grep -q "^dtparam=i2c_arm=" "$CONFIG"; then
+        sed -i "s/^dtparam=i2c_arm=.*/dtparam=i2c_arm=on/" "$CONFIG"
+    else
+        printf "
+dtparam=i2c_arm=on
+" >> "$CONFIG"
+    fi
+    # Loadable now as well as at boot, so a sensor already wired up answers
+    # without waiting for the reboot.
+    if command -v modprobe >/dev/null 2>&1; then
+        modprobe i2c-dev 2>/dev/null || true
+    fi
+    if [ -e /dev/i2c-1 ]; then
+        echo "i2c ready"
+    else
+        echo "i2c enabled; needs a reboot"
+    fi
     ;;
 
   reboot)

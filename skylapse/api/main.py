@@ -727,6 +727,83 @@ def put_config(body: dict) -> dict:
     return {"ok": True}
 
 
+# -- dew heater ---------------------------------------------------------------
+
+@app.get("/api/dewheater")
+def dewheater_status() -> dict:
+    """Everything the dew heater card needs to know what to offer.
+
+    Deliberately answers on a camera with no sensor, no I2C and the feature off:
+    each of those is a different next step, and a card that cannot tell them
+    apart can only say "not working".
+    """
+    from ..daemon import dewheater
+
+    cfg = config.load()
+    bus_ready = Path("/dev/i2c-1").exists()
+    sensor = None
+    if bus_ready:
+        probe = dewheater.DewHeater(cfg.dew_heater.gpio_pin,
+                                    cfg.dew_heater.on_margin_c,
+                                    cfg.dew_heater.off_margin_c)
+        sensor = probe.available
+    return {
+        "enabled": cfg.dew_heater.experimental_enabled,
+        "i2c_ready": bus_ready,
+        "sensor_found": sensor,
+        "gpio_pin": cfg.dew_heater.gpio_pin,
+        "on_margin_c": cfg.dew_heater.on_margin_c,
+        "off_margin_c": cfg.dew_heater.off_margin_c,
+        # What the daemon last measured, if it is running the heater at all.
+        "reading": (_read_status("daemon") or {}).get("dew"),
+    }
+
+
+@app.post("/api/dewheater/i2c")
+def dewheater_enable_i2c() -> dict:
+    """Switch the I2C bus on. Pi OS ships it off, and turning it on is a boot
+    config edit — a terminal job on a camera that is meant never to need one."""
+    helper = str(Path(__file__).resolve().parents[2] / "scripts" / "skylapse-admin")
+    result = subprocess.run(["sudo", "-n", helper, "i2c-enable"],
+                            capture_output=True, text=True, timeout=60)
+    if result.returncode != 0:
+        raise HTTPException(500, (result.stderr or result.stdout).strip()[:200]
+                            or "could not enable I2C")
+    ready = Path("/dev/i2c-1").exists()
+    return {"ok": True, "i2c_ready": ready,
+            "note": "ready" if ready else "enabled; reboot to finish"}
+
+
+class DewHeaterSettings(BaseModel):
+    experimental_enabled: bool | None = None
+    on_margin_c: float | None = None
+    off_margin_c: float | None = None
+
+
+@app.put("/api/dewheater")
+def dewheater_configure(body: DewHeaterSettings) -> dict:
+    """Turn it on, or move the hysteresis band.
+
+    The band is two numbers and they are not independent: heating starts when
+    the glass is within on_margin of the dewpoint and stops once it clears
+    off_margin, so off must exceed on or the thing chatters on and off forever.
+    """
+    cfg = config.load()
+    dh = cfg.dew_heater
+    on = body.on_margin_c if body.on_margin_c is not None else dh.on_margin_c
+    off = body.off_margin_c if body.off_margin_c is not None else dh.off_margin_c
+    if off <= on:
+        raise HTTPException(400, "the off margin has to be above the on margin, "
+                                 "or the heater will chatter")
+    dh.on_margin_c, dh.off_margin_c = on, off
+    if body.experimental_enabled is not None:
+        dh.experimental_enabled = body.experimental_enabled
+    config.save(cfg)
+    return {"ok": True, "enabled": dh.experimental_enabled,
+            "on_margin_c": on, "off_margin_c": off,
+            "note": "the daemon picks this up on its next camera open"}
+
+
 # -- time sync (standalone mode) --------------------------------------------
 
 class TimeSync(BaseModel):

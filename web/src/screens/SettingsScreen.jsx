@@ -152,6 +152,11 @@ export default function SettingsScreen({ showToast, storage }) {
         </Card>
       </Section>
 
+      <Section title="Dew heater"
+        subtitle="Optional hardware that keeps the glass above the dewpoint">
+        <DewHeaterCard showToast={showToast} />
+      </Section>
+
       <Section title="Alerts"
         subtitle="What the camera tells your phone about, and when">
         {/* Notifications */}
@@ -435,6 +440,152 @@ function RenderPlan({ cameraId }) {
   )
 }
 
+
+
+/* -- dew heater ------------------------------------------------------------ */
+
+/**
+ * Optional hardware: a temperature and humidity sensor on I2C, and a heater on
+ * a GPIO pin that keeps the glass a couple of degrees above the dewpoint.
+ *
+ * Four states, and they are genuinely different next steps rather than shades
+ * of "not working": the feature is off, the I2C bus is off, the bus is on but
+ * nothing answers on it, or it is running and has numbers. A card that cannot
+ * tell them apart is a card that can only say "no".
+ */
+function DewHeaterCard({ showToast }) {
+  const [state, setState] = useState(null)
+  const [busy, setBusy] = useState('')
+
+  const refresh = useCallback(() => {
+    fetch('/api/dewheater').then((r) => r.json()).then(setState).catch(() => {})
+  }, [])
+  useEffect(() => {
+    refresh()
+    const id = setInterval(refresh, 15000)
+    return () => clearInterval(id)
+  }, [refresh])
+
+  const send = async (path, body, working, done) => {
+    setBusy(working)
+    const r = await fetch(path, {
+      method: body ? 'PUT' : 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: body ? JSON.stringify(body) : undefined,
+    }).catch(() => null)
+    setBusy('')
+    if (!r?.ok) {
+      const detail = await r?.json().catch(() => null)
+      return showToast?.(detail?.detail || 'That did not work')
+    }
+    showToast?.(done || (await r.json()).note || 'Saved')
+    refresh()
+  }
+
+  if (!state) return null
+  const reading = state.reading
+
+  return (
+    <Card title="Dew heater"
+      right={state.enabled
+        ? <span className="text-sm text-emerald-400">On</span>
+        : <span className="text-sm text-zinc-500">Off</span>}>
+      <p className="mt-1 text-sm text-zinc-400">
+        Dew on the glass ends a night as surely as cloud does, and it arrives
+        quietly — the star count falls and the sky looks hazy. A few watts of
+        heat held just above the dewpoint prevents it.
+      </p>
+
+      {!state.i2c_ready ? (
+        <div className="mt-4 space-y-3">
+          <p className="text-sm text-amber-300">
+            The I²C bus is switched off, so no sensor can be found.
+          </p>
+          <p className="text-xs text-zinc-500">
+            Raspberry Pi OS ships it off. Turning it on is a boot-config change
+            and usually needs a restart — the camera keeps capturing until then.
+          </p>
+          <Button tone="accent" className="w-full" disabled={!!busy}
+            onClick={() => send('/api/dewheater/i2c', null, 'i2c')}>
+            {busy === 'i2c' ? 'Enabling…' : 'Enable I²C'}
+          </Button>
+        </div>
+      ) : state.sensor_found === false ? (
+        <div className="mt-4 space-y-2">
+          <p className="text-sm text-amber-300">
+            I²C is on, but nothing is answering on it.
+          </p>
+          <p className="text-xs text-zinc-500">
+            A BME280 sits on pins 3 (SDA) and 5 (SCL), with 3.3V on pin 1 and
+            ground on pin 9. It answers at address 0x76 or 0x77 — a BMP280
+            looks almost identical and will not do, since it cannot measure
+            humidity and humidity is the whole point.
+          </p>
+        </div>
+      ) : (
+        <div className="mt-4 space-y-4">
+          {reading ? (
+            <div className="rounded-lg bg-zinc-800/60 p-3 text-sm">
+              <div className="flex justify-between">
+                <span className="text-zinc-400">Glass</span>
+                <span className="tabular-nums text-zinc-200">
+                  {reading.temp_c}°C
+                </span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-zinc-400">Dewpoint</span>
+                <span className="tabular-nums text-zinc-200">
+                  {reading.dewpoint_c}°C
+                </span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-zinc-400">Margin</span>
+                <span className="tabular-nums text-zinc-200">
+                  {(reading.temp_c - reading.dewpoint_c).toFixed(1)}°C
+                </span>
+              </div>
+              <p className={`mt-2 ${reading.heating ? 'text-amber-300' : 'text-zinc-500'}`}>
+                {reading.heating ? 'Heating' : 'Idle — the glass is clear of the dewpoint'}
+              </p>
+            </div>
+          ) : (
+            <p className="text-xs text-zinc-500">
+              Sensor found. Readings appear once the heater is switched on and
+              the camera has taken its next frame.
+            </p>
+          )}
+
+          <label className="flex items-start justify-between gap-3 text-sm">
+            <span>
+              <span className="text-zinc-300">Run the heater</span>
+              <span className="mt-1 block text-xs text-zinc-500">
+                Switches on within {state.on_margin_c}°C of the dewpoint and off
+                again once the glass clears it by {state.off_margin_c}°C. The
+                two are deliberately different, so it cannot chatter on and off
+                around a single threshold.
+              </span>
+            </span>
+            <Toggle checked={state.enabled} label="Run the heater"
+              onChange={(experimental_enabled) =>
+                send('/api/dewheater', { experimental_enabled },
+                     'toggle', experimental_enabled
+                       ? 'Heater on — takes effect on the next frame'
+                       : 'Heater off')} />
+          </label>
+
+          <NumberField label="Start heating within" suffix="°C of dewpoint"
+            min={0.5} max={10} step={0.5} value={state.on_margin_c}
+            onChange={(on_margin_c) =>
+              send('/api/dewheater', { on_margin_c }, 'margin')} />
+          <NumberField label="Stop once clear by" suffix="°C" min={1} max={15}
+            step={0.5} value={state.off_margin_c}
+            onChange={(off_margin_c) =>
+              send('/api/dewheater', { off_margin_c }, 'margin')} />
+        </div>
+      )}
+    </Card>
+  )
+}
 
 /* -- remote access --------------------------------------------------------- */
 
