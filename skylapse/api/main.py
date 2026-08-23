@@ -774,6 +774,28 @@ def dewheater_enable_i2c() -> dict:
             "note": "ready" if ready else "enabled; reboot to finish"}
 
 
+class DewHeaterTest(BaseModel):
+    seconds: float = 5.0
+
+
+@app.post("/api/dewheater/test")
+def dewheater_test(body: DewHeaterTest) -> dict:
+    """Switch the heater on for a few seconds, deliberately.
+
+    Commissioning a heater is the one moment worth being careful about, and the
+    alternative is enabling the whole feature and waiting for the weather to
+    meet the dewpoint before finding out whether anything is wired correctly.
+    Capped hard, and the pin is switched off in a finally block so a dropped
+    connection cannot leave it on.
+    """
+    from ..daemon import dewheater
+
+    result = dewheater.test_pulse(config.load().dew_heater.gpio_pin, body.seconds)
+    if not result.get("ok"):
+        raise HTTPException(500, result.get("error", "could not drive the pin"))
+    return {**result, "note": "pin is off again"}
+
+
 class DewHeaterSettings(BaseModel):
     experimental_enabled: bool | None = None
     on_margin_c: float | None = None

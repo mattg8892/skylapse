@@ -555,6 +555,18 @@ function DewHeaterCard({ showToast }) {
             </p>
           )}
 
+          <Button className="w-full" disabled={!!busy}
+            onClick={() => send('/api/dewheater/test', null, 'test',
+                                'Heater driven for 5 seconds, now off')}>
+            {busy === 'test' ? 'Testing…' : 'Test the heater for 5 seconds'}
+          </Button>
+          <p className="-mt-2 text-xs text-zinc-500">
+            Switches the heater on briefly so you can check the wiring and feel
+            for warmth, without waiting for weather. Capped at fifteen seconds
+            whatever happens, and switched off again even if this page
+            disconnects mid-test.
+          </p>
+
           <label className="flex items-start justify-between gap-3 text-sm">
             <span>
               <span className="text-zinc-300">Run the heater</span>

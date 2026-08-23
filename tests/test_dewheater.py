@@ -83,3 +83,47 @@ def test_off_forces_gpio_low():
         h = DewHeater(18, 2.0, 4.0)
         h.off()
     gpio.assert_called_once_with(False)
+
+
+# -- commissioning -----------------------------------------------------------
+
+def test_a_test_pulse_is_capped(monkeypatch):
+    """A heater left on unattended is the only genuinely dangerous failure this
+    hardware has. Asking for an hour gets you fifteen seconds."""
+    from skylapse.daemon import dewheater
+
+    class FakePin:
+        def __init__(self, *a, **kw): self.state = False
+        def on(self): self.state = True
+        def off(self): self.state = False
+        def close(self): pass
+
+    pins = []
+    monkeypatch.setitem(__import__("sys").modules, "gpiozero",
+                        type("M", (), {"OutputDevice": lambda *a, **kw:
+                                       pins.append(FakePin()) or pins[-1]}))
+    monkeypatch.setattr(dewheater, "log", dewheater.log)
+    import time
+    monkeypatch.setattr(time, "sleep", lambda s: None)
+    result = dewheater.test_pulse(18, 3600)
+    assert result["seconds"] == dewheater.TEST_MAX_SECONDS
+
+
+def test_the_pin_goes_off_even_when_the_test_fails(monkeypatch):
+    """The off is in a finally block on purpose: a crash mid-test must not be
+    the thing that leaves a heater running."""
+    from skylapse.daemon import dewheater
+
+    class FakePin:
+        def __init__(self, *a, **kw): self.state = False
+        def on(self): raise RuntimeError("boom")
+        def off(self): self.state = False
+        def close(self): self.closed = True
+
+    made = []
+    monkeypatch.setitem(__import__("sys").modules, "gpiozero",
+                        type("M", (), {"OutputDevice": lambda *a, **kw:
+                                       made.append(FakePin()) or made[-1]}))
+    result = dewheater.test_pulse(18, 5)
+    assert result["ok"] is False
+    assert made and made[0].state is False, "left the heater on after a failure"

@@ -127,3 +127,46 @@ class DewHeater:
             self._pin.value = on
         except Exception as exc:
             log.debug("GPIO set failed: %s", exc)
+
+
+# -- commissioning ----------------------------------------------------------
+
+# The longest a manual test may run, whatever it is asked for. A heater left on
+# unattended is the one genuinely dangerous failure this hardware has, so the
+# test cannot be the thing that causes it: the pin goes low again even if the
+# caller disappears mid-request.
+TEST_MAX_SECONDS = 15
+
+
+def test_pulse(gpio_pin: int, seconds: float) -> dict:
+    """Drive the heater pin for a few seconds, then hard off.
+
+    First power-on of a heater is the moment to be careful, and "switch it on
+    and see" is not a thing anyone should have to do by editing config and
+    waiting for the dewpoint to be met. This drives the pin directly, briefly,
+    with the off in a finally block so a crash or a dropped connection still
+    ends with the heater off.
+    """
+    import time as _time
+
+    seconds = max(0.5, min(float(seconds), TEST_MAX_SECONDS))
+    try:
+        from gpiozero import OutputDevice
+    except Exception as exc:
+        return {"ok": False, "error": f"no GPIO library available: {exc}"}
+
+    pin = None
+    try:
+        pin = OutputDevice(gpio_pin, active_high=True, initial_value=False)
+        pin.on()
+        _time.sleep(seconds)
+        return {"ok": True, "seconds": seconds, "gpio_pin": gpio_pin}
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)}
+    finally:
+        if pin is not None:
+            try:
+                pin.off()
+                pin.close()
+            except Exception:
+                log.error("Could not switch the heater pin off after a test")
