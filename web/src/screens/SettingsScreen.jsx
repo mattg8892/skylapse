@@ -213,6 +213,19 @@ export default function SettingsScreen({ showToast, storage }) {
           onAutoCheck={(auto_check) =>
             save({ updates: { ...cfg.updates, auto_check } },
                  { ...cfg, updates: { ...cfg.updates, auto_check } })} />
+        {/* Power */}
+        <Card title="Restart">
+          <p className="mt-1 text-sm text-zinc-400">
+            A clean restart, the same as the camera does after a settings change
+            that needs one. Use this rather than pulling the power: a cold pull
+            skips the filesystem sync, and on an SD card that is how a working
+            install becomes a reflash.
+          </p>
+          <div className="mt-4">
+            <RestartButton showToast={showToast} className="w-full" />
+          </div>
+        </Card>
+
         {/* Backup */}
         <Card title="Backup">
           <p className="mt-1 text-sm text-zinc-400">
@@ -453,9 +466,69 @@ function RenderPlan({ cameraId }) {
  * nothing answers on it, or it is running and has numbers. A card that cannot
  * tell them apart is a card that can only say "no".
  */
+/**
+ * Restarting the camera, from the camera.
+ *
+ * The helper has been able to do this since the camera-overlay flow needed it,
+ * but nothing in Settings could reach it. So every "reboot to finish" ended
+ * with someone pulling the plug -- which is a different operation: it skips the
+ * filesystem sync, and doing it seconds after a boot-config write is a good way
+ * to corrupt the card. It is asked for by name so it cannot be hit by accident.
+ */
+function RestartButton({ label = 'Restart the camera', className = '', showToast }) {
+  const [armed, setArmed] = useState(false)
+  const [going, setGoing] = useState(false)
+
+  const go = async () => {
+    setGoing(true)
+    const r = await fetch('/api/system/reboot', { method: 'POST' }).catch(() => null)
+    if (!r?.ok) {
+      setGoing(false)
+      setArmed(false)
+      const detail = await r?.json().catch(() => null)
+      return showToast?.(detail?.detail || 'Could not restart')
+    }
+    // Deliberately stays in this state. The page is about to lose the server,
+    // so there is no success to report -- only an explanation of the silence.
+    showToast?.('Restarting…')
+  }
+
+  if (going) {
+    return (
+      <p className={`text-sm text-amber-300 ${className}`}>
+        Restarting. This page will go quiet for a minute or so, then come back
+        on its own. Nothing needs unplugging.
+      </p>
+    )
+  }
+
+  if (!armed) {
+    return (
+      <Button className={className} disabled={going} onClick={() => setArmed(true)}>
+        {label}
+      </Button>
+    )
+  }
+
+  return (
+    <div className={`space-y-2 ${className}`}>
+      <p className="text-xs text-zinc-400">
+        The camera stops capturing for about a minute. Anything already written
+        is safe.
+      </p>
+      <div className="flex gap-2">
+        <Button tone="accent" onClick={go}>Restart now</Button>
+        <Button onClick={() => setArmed(false)}>Cancel</Button>
+      </div>
+    </div>
+  )
+}
+
+
 function DewHeaterCard({ showToast }) {
   const [state, setState] = useState(null)
   const [busy, setBusy] = useState('')
+  const [needsReboot, setNeedsReboot] = useState(false)
 
   const refresh = useCallback(() => {
     fetch('/api/dewheater').then((r) => r.json()).then(setState).catch(() => {})
@@ -478,8 +551,10 @@ function DewHeaterCard({ showToast }) {
       const detail = await r?.json().catch(() => null)
       return showToast?.(detail?.detail || 'That did not work')
     }
-    showToast?.(done || (await r.json()).note || 'Saved')
+    const data = await r.json().catch(() => ({}))
+    showToast?.(done || data.note || 'Saved')
     refresh()
+    return data
   }
 
   if (!state) return null
@@ -505,10 +580,24 @@ function DewHeaterCard({ showToast }) {
             Raspberry Pi OS ships it off. Turning it on is a boot-config change
             and usually needs a restart — the camera keeps capturing until then.
           </p>
-          <Button tone="accent" className="w-full" disabled={!!busy}
-            onClick={() => send('/api/dewheater/i2c', null, 'i2c')}>
-            {busy === 'i2c' ? 'Enabling…' : 'Enable I²C'}
-          </Button>
+          {needsReboot ? (
+            <div className="space-y-2 rounded-lg bg-zinc-800/60 p-3">
+              <p className="text-sm text-zinc-300">
+                I²C is switched on in the boot config. It only takes effect at
+                boot, so the camera needs a restart to finish.
+              </p>
+              <RestartButton className="w-full" showToast={showToast}
+                label="Restart to finish" />
+            </div>
+          ) : (
+            <Button tone="accent" className="w-full" disabled={!!busy}
+              onClick={async () => {
+                const d = await send('/api/dewheater/i2c', null, 'i2c')
+                if (d?.needs_reboot) setNeedsReboot(true)
+              }}>
+              {busy === 'i2c' ? 'Enabling…' : 'Enable I²C'}
+            </Button>
+          )}
         </div>
       ) : state.sensor_found === false ? (
         <div className="mt-4 space-y-2">

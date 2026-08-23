@@ -759,6 +759,29 @@ def dewheater_status() -> dict:
     }
 
 
+@app.post("/api/system/reboot")
+def system_reboot() -> dict:
+    """Restart the camera, gracefully.
+
+    The helper has had a `reboot` verb since the camera-overlay flow needed
+    one, but nothing else could reach it, so every other "reboot to finish"
+    ended with the user pulling the power. That is not the same operation: a
+    cold pull skips the filesystem sync, and doing it seconds after a boot
+    config write is a good way to corrupt the card. An appliance that asks to
+    be restarted has to be able to restart itself.
+
+    The helper schedules the reboot two seconds out, so this returns before the
+    machine goes down rather than dying mid-response and looking like a crash.
+    """
+    helper = str(Path(__file__).resolve().parents[2] / "scripts" / "skylapse-admin")
+    result = subprocess.run(["sudo", "-n", helper, "reboot"],
+                            capture_output=True, text=True, timeout=30)
+    if result.returncode != 0:
+        raise HTTPException(500, (result.stderr or result.stdout).strip()[:200]
+                            or "could not reboot")
+    return {"ok": True, "note": "rebooting; this page will go quiet for a minute"}
+
+
 @app.post("/api/dewheater/i2c")
 def dewheater_enable_i2c() -> dict:
     """Switch the I2C bus on. Pi OS ships it off, and turning it on is a boot
@@ -770,7 +793,7 @@ def dewheater_enable_i2c() -> dict:
         raise HTTPException(500, (result.stderr or result.stdout).strip()[:200]
                             or "could not enable I2C")
     ready = Path("/dev/i2c-1").exists()
-    return {"ok": True, "i2c_ready": ready,
+    return {"ok": True, "i2c_ready": ready, "needs_reboot": not ready,
             "note": "ready" if ready else "enabled; reboot to finish"}
 
 
