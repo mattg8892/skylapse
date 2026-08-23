@@ -180,9 +180,21 @@ class PiCamDriver(CameraDriver):
         gain = meta.get("AnalogueGain")
         if exposure is None or gain is None:
             return True                  # nothing to check against; take it
-        tolerance = max(2.0, self._exposure_us * SETTLE_TOLERANCE)
-        return (abs(exposure - self._exposure_us) <= tolerance
-                and abs(gain - self._gain_value) <= 0.05)
+        # Both tolerances are relative, and the gain one was not — it was a
+        # flat 0.05, which at gain 17 is a third of a percent. Analogue gain is
+        # quantised in hardware, so a requested 17.0 comes back as whatever the
+        # sensor could actually make: 16.9, 17.2. That never matched, so the
+        # loop discarded frames until it gave up, and every gain change through
+        # a night cost the full timeout — about 90 seconds, spent waiting for
+        # an exactness the sensor is incapable of.
+        #
+        # The signature is unmistakable once you know it: a gap with no control
+        # change across it, because after giving up the frame taken still
+        # carries the old settings.
+        exposure_tolerance = max(2.0, self._exposure_us * SETTLE_TOLERANCE)
+        gain_tolerance = max(0.05, self._gain_value * SETTLE_TOLERANCE)
+        return (abs(exposure - self._exposure_us) <= exposure_tolerance
+                and abs(gain - self._gain_value) <= gain_tolerance)
 
     def _settled_request(self):
         """A request whose metadata reflects the current controls.
