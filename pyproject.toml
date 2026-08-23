@@ -1,6 +1,6 @@
 [project]
 name = "skylapse"
-version = "0.5.5"
+version = "0.5.6"
 description = "Timelapse software for capturing the entire night sky, every night — Raspberry Pi cameras first, ZWO best-effort, JPEG+DNG, zero-code setup"
 readme = "README.md"
 license = { text = "MIT" }

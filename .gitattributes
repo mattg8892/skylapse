@@ -1,9 +1,20 @@
-# Shell scripts must be LF in the index. A CRLF shebang is "bad interpreter" on
-# Linux, and every one of these runs on a Pi. This is not hypothetical: an
-# editor pass normalised install.sh to CRLF, which would have broken the first
-# fresh clone and the SD image build with it.
-*.sh text eol=lf
+# Everything text is LF in the index. A CRLF shebang is "bad interpreter" on
+# Linux, and every line of this repo runs on a Pi.
+#
+# This started as `*.sh text eol=lf`, written after an editor pass normalised
+# install.sh to CRLF. That rule was too narrow: it keys on the extension, and
+# the one script with no extension -- scripts/skylapse-admin, which every
+# privileged operation goes through -- was not matched. It shipped with a
+# `#!/usr/bin/env bash\r` shebang in 0.5.4, so restart-services exited 127, the
+# updater read that as a bad build, and two releases rolled themselves back
+# with no way to see why. Match everything instead of guessing at names.
+* text=auto eol=lf
 
-# Systemd units and the CI workflow are read by Linux tooling too.
-*.service text eol=lf
-*.yml text eol=lf
+# Binaries git should not touch.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.ico binary
+*.gz  binary
+*.xz  binary
+*.dng binary

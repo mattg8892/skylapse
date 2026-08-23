@@ -1350,6 +1350,11 @@ function UpdateCard({ cfg, showToast, onChannel, onAutoCheck }) {
             : progress.state === 'rolled_back' ? 'text-amber-300' : 'text-zinc-300'}>
             {progress.message ?? progress.state}
           </p>
+          {progress.reason && (
+            <p className="mt-2 text-xs leading-relaxed text-zinc-400">
+              <span className="text-zinc-500">Why: </span>{progress.reason}
+            </p>
+          )}
           {progress.prior && (
             <p className="mt-1 text-xs text-zinc-500">
               Previous build {progress.prior} kept for rollback

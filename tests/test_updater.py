@@ -165,7 +165,7 @@ def test_unhealthy_update_rolls_back(tmp_path, monkeypatch):
 
     monkeypatch.setattr(updater, "_run", fake_run)
     monkeypatch.setattr(updater, "_changed_paths", lambda a, b: set())
-    monkeypatch.setattr(updater, "_restart_services", lambda: True)
+    monkeypatch.setattr(updater, "_restart_services", lambda: (True, ""))
     monkeypatch.setattr(updater, "_restarts_took_effect",
                         lambda before, timeout_s=30: True)
     # Never healthy after the update; healthy again after the rollback.
@@ -195,7 +195,7 @@ def test_successful_update_does_not_roll_back(tmp_path, monkeypatch):
 
     monkeypatch.setattr(updater, "_run", fake_run)
     monkeypatch.setattr(updater, "_changed_paths", lambda a, b: set())
-    monkeypatch.setattr(updater, "_restart_services", lambda: True)
+    monkeypatch.setattr(updater, "_restart_services", lambda: (True, ""))
     monkeypatch.setattr(updater, "_restarts_took_effect",
                         lambda before, timeout_s=30: True)
     monkeypatch.setattr(updater, "_wait_healthy", lambda *a, **k: True)
@@ -223,7 +223,7 @@ def test_a_restart_that_never_happened_is_not_healthy(tmp_path, monkeypatch):
 
     monkeypatch.setattr(updater, "_run", fake_run)
     monkeypatch.setattr(updater, "_changed_paths", lambda a, b: set())
-    monkeypatch.setattr(updater, "_restart_services", lambda: True)
+    monkeypatch.setattr(updater, "_restart_services", lambda: (True, ""))
     monkeypatch.setattr(updater, "_restarts_took_effect",
                         lambda before, timeout_s=30: False)
     # Everything else looks fine, because the old process is still serving.
@@ -302,7 +302,8 @@ def test_failed_restart_command_rolls_back(tmp_path, monkeypatch):
 
     monkeypatch.setattr(updater, "_run", fake_run)
     monkeypatch.setattr(updater, "_changed_paths", lambda a, b: set())
-    monkeypatch.setattr(updater, "_restart_services", lambda: False)
+    monkeypatch.setattr(updater, "_restart_services",
+                        lambda: (False, "restart-services exited 127"))
     monkeypatch.setattr(updater, "_wait_healthy", lambda *a, **k: True)
 
     assert updater.apply("v9.9.9", apply_now=True)["ok"] is False
@@ -333,7 +334,7 @@ def test_restart_goes_through_the_helper_too(monkeypatch):
     monkeypatch.setattr(updater, "_run", lambda cmd, timeout=300, cwd=None:
                         seen.append(cmd) or
                         type("R", (), {"returncode": 0, "stderr": "", "stdout": ""})())
-    assert updater._restart_services() is True
+    assert updater._restart_services() == (True, "")
     assert seen[0][:2] == ["sudo", "-n"]
     assert seen[0][2].endswith("skylapse-admin")
     assert seen[0][3] == "restart-services"
@@ -533,3 +534,67 @@ def test_the_button_still_works_with_auto_check_off(tmp_path, monkeypatch):
                         lambda: ({"tag_name": "v9.9.9", "body": "", "name": ""},
                                  "", 0.0))
     assert updater.check(force=True)["latest"] == "9.9.9"
+
+
+# -- why a rollback happened -------------------------------------------------
+
+def test_a_rollback_records_which_gate_failed(monkeypatch, tmp_path):
+    """0.5.4 and 0.5.5 both rolled back and `/api/update/status` said only
+    "Rolled back to the previous version". On a rig with no SSH that is a dead
+    end: the journal is unreachable, and the rollback has already restored the
+    working copy, so the broken build cannot even be inspected afterwards.
+
+    The three health gates fail for very different reasons and the fix differs
+    each time, so the status has to say which one it was.
+    """
+    from skylapse import config
+    monkeypatch.setattr(config, "RUN_DIR", tmp_path)
+    monkeypatch.setattr(updater, "_run", lambda cmd, timeout=300, cwd=None:
+                        type("R", (), {"returncode": 0, "stderr": "",
+                                       "stdout": "priorsha"})())
+    monkeypatch.setattr(updater, "_changed_paths", lambda a, b: set())
+    monkeypatch.setattr(updater, "_restart_services",
+                        lambda: (False, "restart-services exited 127: bad interpreter"))
+    monkeypatch.setattr(updater, "_wait_healthy", lambda *a, **k: True)
+
+    result = updater.apply("v9.9.9", apply_now=True)
+    assert result["ok"] is False
+    assert "127" in result["reason"]
+    assert "127" in updater.status()["reason"], \
+        "the reason must survive into the status file the web UI reads"
+
+
+def test_each_gate_gives_a_distinguishable_reason(monkeypatch, tmp_path):
+    """Restart-failed, restarted-but-stale, and started-but-never-healthy are
+    three different bugs. Telling them apart is the whole point."""
+    from skylapse import config
+    monkeypatch.setattr(config, "RUN_DIR", tmp_path)
+    monkeypatch.setattr(updater, "_run", lambda cmd, timeout=300, cwd=None:
+                        type("R", (), {"returncode": 0, "stderr": "",
+                                       "stdout": "priorsha"})())
+    monkeypatch.setattr(updater, "_changed_paths", lambda a, b: set())
+
+    monkeypatch.setattr(updater, "_restart_services", lambda: (True, ""))
+    monkeypatch.setattr(updater, "_restarts_took_effect", lambda *a, **k: False)
+    monkeypatch.setattr(updater, "_wait_healthy", lambda *a, **k: True)
+    stale = updater.apply("v9.9.9", apply_now=True)["reason"]
+
+    monkeypatch.setattr(updater, "_restarts_took_effect", lambda *a, **k: True)
+    healthy = iter([False, True])          # unhealthy after update, fine after rollback
+    monkeypatch.setattr(updater, "_wait_healthy", lambda *a, **k: next(healthy))
+    unhealthy = updater.apply("v9.9.9", apply_now=True)["reason"]
+
+    assert "old code was still running" in stale
+    assert "healthy frame" in unhealthy
+    assert stale != unhealthy
+
+
+def test_exit_127_names_the_line_ending_as_the_likely_cause(monkeypatch):
+    """The helper failing to execute at all has had exactly one cause here.
+    Saying so turns a half-day of bisecting into a one-line fix."""
+    monkeypatch.setattr(updater, "_run", lambda cmd, timeout=300, cwd=None:
+                        type("R", (), {"returncode": 127, "stdout": "",
+                                       "stderr": "bad interpreter"})())
+    ok, detail = updater._restart_services()
+    assert ok is False
+    assert "CRLF" in detail and "skylapse-admin" in detail

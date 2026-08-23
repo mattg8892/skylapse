@@ -304,19 +304,32 @@ def service_start_id(unit: str) -> str:
     return " ".join(sorted(line.strip() for line in out.splitlines() if line.strip()))
 
 
-def _restart_services() -> bool:
+def _restart_services() -> tuple[bool, str]:
     """Through the helper, for the same reason as the launch.
 
     The old sudoers rule named three units; this restarts two, so it matched
     nothing and failed with a password prompt. The updater then did exactly what
     it should with a failed restart — rolled the update back — which made a
     sudoers typo look like a bad build.
+
+    Returns (ok, detail) so a failure can be shown on the update screen. It used
+    to return a bare bool, and the reason went only to the journal -- which the
+    rig has no way to read, having no SSH.
     """
     result = _run(["sudo", "-n", helper(), "restart-services"], timeout=120)
-    if result.returncode != 0:
-        log.error("Service restart failed (%s): %s",
-                  result.returncode, (result.stderr or "").strip())
-    return result.returncode == 0
+    if result.returncode == 0:
+        return True, ""
+    detail = (result.stderr or "").strip() or (result.stdout or "").strip()
+    if result.returncode == 127 or "bad interpreter" in detail:
+        # Exit 127 from the helper means the shebang did not resolve, which on
+        # this repo has meant exactly one thing: the script was committed with
+        # CRLF, so Linux is hunting for an interpreter whose name ends in a
+        # carriage return. Name that here: the rollback restores the good copy
+        # and erases the evidence before anyone gets a chance to look.
+        detail = (f"{detail} -- the helper did not execute (exit 127). "
+                  "Usually a CRLF line ending in scripts/skylapse-admin.")
+    log.error("Service restart failed (%s): %s", result.returncode, detail)
+    return False, f"restart-services exited {result.returncode}: {detail}"
 
 
 def _restarts_took_effect(before: dict[str, str], timeout_s: int = 30) -> bool:
@@ -444,12 +457,22 @@ def apply(target_ref: str, apply_now: bool = False) -> dict:
                 message="Restarting services")
     before = {u: service_start_id(u) for u in SERVICES}
     restart_at = time.time()
-    restarted = _restart_services()
-
     # All three must hold. Dropping any one lets a broken build pass: a failed
     # restart leaves the old process serving old code, and a stale status file
     # makes a crash-looping daemon read as healthy.
-    if restarted and _restarts_took_effect(before) and _wait_healthy(restart_at):
+    restarted, restart_detail = _restart_services()
+    if not restarted:
+        reason = restart_detail
+    elif not _restarts_took_effect(before):
+        reason = ("The services did not come back as new processes, so the old "
+                  "code was still running.")
+    elif not _wait_healthy(restart_at):
+        reason = (f"The daemon did not report a healthy frame within "
+                  f"{HEALTH_TIMEOUT_S}s of restarting.")
+    else:
+        reason = ""
+
+    if not reason:
         new_head = _run(["git", "rev-parse", "HEAD"]).stdout.strip()
         _set_status(state="done", target=target_ref, prior=prior[:7],
                     head=new_head[:7], message="Update complete")
@@ -459,19 +482,21 @@ def apply(target_ref: str, apply_now: bool = False) -> dict:
     # Unhealthy: put it back exactly as it was, including the install and build
     # steps, then restart again. Rolling back the code but not the deps would
     # leave a mismatch that is harder to diagnose than the original failure.
-    log.error("Daemon unhealthy after update; rolling back to %s", prior[:7])
+    log.error("Update to %s failed (%s); rolling back to %s",
+              target_ref, reason, prior[:7])
     _set_status(state="rolling_back", target=target_ref, prior=prior[:7],
-                message="Update unhealthy — rolling back")
+                reason=reason, message="Update unhealthy — rolling back")
     _run(["git", "checkout", "--force", prior], timeout=300)
     _build(changed)
     rollback_at = time.time()
-    _restart_services()
+    _restart_services()   # detail ignored: _wait_healthy below is the verdict
     recovered = _wait_healthy(rollback_at)
     _set_status(state="rolled_back" if recovered else "error",
-                target=target_ref, prior=prior[:7],
+                target=target_ref, prior=prior[:7], reason=reason,
                 message="Rolled back to the previous version" if recovered
                         else "Rollback restarted, but the daemon is still unhealthy")
-    return {"ok": False, "rolled_back": True, "recovered": recovered}
+    return {"ok": False, "rolled_back": True, "recovered": recovered,
+            "reason": reason}
 
 
 def main(argv: list[str] | None = None) -> int:
