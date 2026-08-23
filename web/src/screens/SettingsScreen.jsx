@@ -652,15 +652,13 @@ function DewHeaterCard({ showToast }) {
           )}
 
           <div className="space-y-2">
-            <div className="flex items-center gap-2">
-              <span className="text-sm text-zinc-300">Test the heater for</span>
-              <Select value={testSeconds}
-                onChange={(e) => setTestSeconds(Number(e.target.value))}>
-                <option value={15}>15 seconds</option>
-                <option value={60}>1 minute</option>
-                <option value={120}>2 minutes</option>
-              </Select>
-            </div>
+            <Select label="Test the heater for" value={testSeconds}
+              onChange={(v) => setTestSeconds(Number(v))}
+              options={[
+                { value: 15, label: '15 seconds' },
+                { value: 60, label: '1 minute' },
+                { value: 120, label: '2 minutes' },
+              ]} />
             <Button className="w-full" disabled={!!busy}
               onClick={async () => {
                 setPulse(null)
