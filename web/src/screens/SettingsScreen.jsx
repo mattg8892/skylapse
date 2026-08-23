@@ -4,6 +4,7 @@ import {
   Toggle,
 } from '../components/ui.jsx'
 import { CameraPanel, useCameras } from '../components/camera.jsx'
+import { errorText } from '../lib/errors'
 
 // Capture / timelapse / overlay are per-camera (config.cameras is a registry
 // keyed by hardware id). Notifications and remote access are global.
@@ -486,7 +487,7 @@ function RestartButton({ label = 'Restart the camera', className = '', showToast
       setGoing(false)
       setArmed(false)
       const detail = await r?.json().catch(() => null)
-      return showToast?.(detail?.detail || 'Could not restart')
+      return showToast?.(errorText(detail, 'Could not restart'))
     }
     // Deliberately stays in this state. The page is about to lose the server,
     // so there is no success to report -- only an explanation of the silence.
@@ -549,7 +550,7 @@ function DewHeaterCard({ showToast }) {
     setBusy('')
     if (!r?.ok) {
       const detail = await r?.json().catch(() => null)
-      return showToast?.(detail?.detail || 'That did not work')
+      return showToast?.(errorText(detail))
     }
     const data = await r.json().catch(() => ({}))
     showToast?.(done || data.note || 'Saved')
@@ -1084,7 +1085,7 @@ function SecurityCard({ showToast }) {
     setBusy(false)
     if (!r?.ok) {
       const detail = await r?.json().catch(() => null)
-      return showToast?.(detail?.detail || 'Could not change the password')
+      return showToast?.(errorText(detail, 'Could not change the password'))
     }
     setCurrent(''); setNext('')
     refresh()
@@ -1397,7 +1398,7 @@ function UpdateCard({ cfg, showToast, onChannel, onAutoCheck }) {
         body: JSON.stringify({ target_ref: info.target_ref, apply_now: now }),
       })
       const body = await r.json()
-      if (!r.ok) showToast(body.detail ?? 'Could not start the update')
+      if (!r.ok) showToast(errorText(body, 'Could not start the update'))
       else showToast(now ? 'Updating now — services will restart'
                          : 'Update queued for the next daytime window')
     } catch { showToast('Could not start the update') }

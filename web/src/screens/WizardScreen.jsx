@@ -16,6 +16,7 @@ import {
   canContinue, canGoBack, formatCoords, nextStep, prevStep, resolveLocation,
   startsWhen, STEPS, stepIndex,
 } from '../lib/wizard.js'
+import { errorText } from '../lib/errors'
 
 const SCHEDULE_OPTIONS = [
   { value: 'always', label: '24/7 — day and night' },
@@ -81,7 +82,7 @@ export default function WizardScreen({ preview = false, onDone }) {
     setBusy(false)
     if (!r?.ok) {
       const detail = await r?.json().catch(() => null)
-      return setError(detail?.detail || 'Could not save your settings.')
+      return setError(errorText(detail, 'Could not save your settings.'))
     }
     const { summary } = await r.json()
     setDraft((current) => ({ ...current, summary }))

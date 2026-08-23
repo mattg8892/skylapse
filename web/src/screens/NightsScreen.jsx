@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Button, Card, ConfirmDialog, Segmented, Select,
 } from '../components/ui.jsx'
+import { errorText } from '../lib/errors'
 
 const QUALITY_OPTIONS = [
   { value: 'standard', label: 'Standard' },
@@ -165,7 +166,7 @@ function ExportCard({ cameraId, nights, showToast }) {
         showToast(d.required_bytes
           ? `Not enough space: needs ${gb(d.required_bytes)} GB, `
             + `${gb(d.free_bytes)} GB free`
-          : d.error ?? 'Export could not start')
+          : errorText(body, 'Export could not start'))
       } else {
         showToast(`Exporting ${body.files_total} files (${gb(body.bytes_total)} GB)`)
       }
@@ -737,7 +738,7 @@ export function TimelapsePanel({ cameraId, night, present, rendering,
         setVersion((v) => v + 1)
         onRendered?.()
       } else {
-        showToast(body.detail ?? 'Render failed')
+        showToast(errorText(body, 'Render failed'))
       }
     } catch {
       showToast('Render failed')

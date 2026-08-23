@@ -802,7 +802,7 @@ class DewHeaterTest(BaseModel):
 
 
 @app.post("/api/dewheater/test")
-def dewheater_test(body: DewHeaterTest) -> dict:
+def dewheater_test(body: DewHeaterTest | None = None) -> dict:
     """Switch the heater on for a few seconds, deliberately.
 
     Commissioning a heater is the one moment worth being careful about, and the
@@ -813,7 +813,11 @@ def dewheater_test(body: DewHeaterTest) -> dict:
     """
     from ..daemon import dewheater
 
-    result = dewheater.test_pulse(config.load().dew_heater.gpio_pin, body.seconds)
+    # Optional body: a plain POST means the default pulse. It was required,
+    # and the button sends none -- so the one control for commissioning a
+    # heater answered 422, and the settings page went black rendering it.
+    seconds = body.seconds if body else DewHeaterTest().seconds
+    result = dewheater.test_pulse(config.load().dew_heater.gpio_pin, seconds)
     if not result.get("ok"):
         raise HTTPException(500, result.get("error", "could not drive the pin"))
     return {**result, "note": "pin is off again"}

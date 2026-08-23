@@ -15,6 +15,7 @@
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Button, Select } from './ui.jsx'
+import { errorText } from '../lib/errors'
 
 /** Poll /api/setup/camera, and expose a refresh for after anything changes. */
 export function useCameras() {
@@ -254,8 +255,8 @@ export function ZwoSupport({ onChanged }) {
       onChanged?.()
     } else {
       const detail = await r?.json().catch(() => null)
-      setError(detail?.detail || 'Couldn’t install it. Check the camera’s '
-        + 'internet connection and try again.')
+      setError(errorText(detail, 'Couldn’t install it. Check the camera’s '
+        + 'internet connection and try again.'))
       setState('')
     }
   }
