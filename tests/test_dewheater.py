@@ -291,3 +291,26 @@ def test_diagnostics_reports_each_library_separately(monkeypatch):
     for lib in ("smbus2", "bme280", "gpiozero"):
         assert lib in info and isinstance(info[lib], bool)
     assert info["sensor_addr"] == "0x77"
+
+
+def test_an_unresolved_pin_factory_is_null_not_the_string_NoneType(monkeypatch):
+    """gpiozero resolves its backend on the first Device, so asking before then
+    is not an error. It reported "NoneType", which reads like a broken install
+    and cost a round of chasing the wrong thing."""
+    from skylapse.daemon import dewheater
+    monkeypatch.setitem(__import__("sys").modules, "gpiozero",
+                        type("M", (), {"Device": type("D", (), {"pin_factory": None})}))
+    assert dewheater.pin_factory_name() is None
+
+
+def test_a_resolved_pin_factory_is_named(monkeypatch):
+    """Once a pin has been used the answer is real, and it is the answer that
+    matters: LGPIOFactory is a Pi 5 driving actual hardware, MockFactory is a
+    test that proves nothing."""
+    from skylapse.daemon import dewheater
+
+    class LGPIOFactory: pass
+    monkeypatch.setitem(__import__("sys").modules, "gpiozero",
+                        type("M", (), {"Device": type("D", (),
+                             {"pin_factory": LGPIOFactory()})}))
+    assert dewheater.pin_factory_name() == "LGPIOFactory"

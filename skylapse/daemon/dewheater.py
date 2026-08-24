@@ -206,12 +206,16 @@ def pin_factory_name() -> str | None:
     """
     try:
         from gpiozero import Device
-        if Device.pin_factory is None:
-            Device._default_pin_factory()
-        return type(Device.pin_factory).__name__
     except Exception as exc:
-        log.debug("Could not determine the gpiozero pin factory: %s", exc)
+        log.debug("gpiozero unavailable: %s", exc)
         return None
+    factory = Device.pin_factory
+    if factory is None:
+        # gpiozero resolves its backend lazily, on the first Device. Asking
+        # before then used to report "NoneType", which reads like a broken
+        # install and is only "nobody has used a pin yet".
+        return None
+    return type(factory).__name__
 
 
 # -- commissioning ----------------------------------------------------------
