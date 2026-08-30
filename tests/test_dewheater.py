@@ -314,3 +314,69 @@ def test_a_resolved_pin_factory_is_named(monkeypatch):
                         type("M", (), {"Device": type("D", (),
                              {"pin_factory": LGPIOFactory()})}))
     assert dewheater.pin_factory_name() == "LGPIOFactory"
+
+
+# -- margins for a sensor that cannot see the glass ---------------------------
+
+def test_the_defaults_assume_an_outside_air_sensor():
+    """A sealed dome cannot hold the sensor, and a sensor measuring humidity
+    cannot be inside anyway -- so the reading is always air, never glass.
+
+    On a clear night the dome radiates to a sky effectively below -40C and sits
+    3-5C under the surrounding air, which is why optics dew up on nights the
+    air never reaches the dewpoint. A rule written against air temperature has
+    to start early to be on time.
+    """
+    from skylapse import config
+    dh = config.Config().dew_heater
+    assert dh.on_margin_c == 5.0
+    assert dh.off_margin_c == 8.0
+    assert dh.off_margin_c > dh.on_margin_c, "the hysteresis band must be positive"
+
+
+def test_the_old_margins_are_migrated_on_load(tmp_path, monkeypatch):
+    """Changing a default does nothing for a camera that already has the old
+    value on disk -- and every camera does."""
+    from skylapse import config
+    monkeypatch.setattr(config, "CONFIG_PATH", tmp_path / "config.yaml")
+    cfg = config.Config()
+    cfg.dew_heater.on_margin_c = 2.0
+    cfg.dew_heater.off_margin_c = 4.0
+    config.save(cfg)
+
+    loaded = config.load()
+    assert loaded.dew_heater.on_margin_c == 5.0
+    assert loaded.dew_heater.off_margin_c == 8.0
+
+
+def test_a_deliberately_chosen_margin_is_left_alone(tmp_path, monkeypatch):
+    """Only the exact legacy pair is touched. Someone who has tuned these
+    against their own nights must not have it undone by an update."""
+    from skylapse import config
+    monkeypatch.setattr(config, "CONFIG_PATH", tmp_path / "config.yaml")
+    cfg = config.Config()
+    cfg.dew_heater.on_margin_c = 3.0
+    cfg.dew_heater.off_margin_c = 6.0
+    config.save(cfg)
+
+    loaded = config.load()
+    assert loaded.dew_heater.on_margin_c == 3.0
+    assert loaded.dew_heater.off_margin_c == 6.0
+
+
+def test_the_wider_margin_actually_fires_earlier():
+    """The point of the change, stated as behaviour rather than as constants.
+
+    10C air at 75% RH has a dewpoint near 5.8C, so the air is 4.2C clear of it
+    and looks fine. But a dome radiating to the sky runs 3-5C under ambient,
+    which puts the glass at or below that dewpoint right now. The old rule
+    waits; the new one is already heating.
+    """
+    from skylapse.daemon.dewheater import HeaterController, dewpoint_c
+    air, rh = 10.0, 75.0
+    assert 4.0 < (air - dewpoint_c(air, rh)) < 4.5, "precondition: margin ~4.2C"
+
+    old = HeaterController(2.0, 4.0)
+    new = HeaterController(5.0, 8.0)
+    assert old.update(air, rh) is False, "precondition: the old rule waits"
+    assert new.update(air, rh) is True, "the new rule heats while the air looks dry"

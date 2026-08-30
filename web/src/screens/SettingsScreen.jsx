@@ -723,9 +723,17 @@ function DewHeaterCard({ showToast }) {
               <span className="text-zinc-300">Run the heater</span>
               <span className="mt-1 block text-xs text-zinc-500">
                 Switches on within {state.on_margin_c}°C of the dewpoint and off
-                again once the glass clears it by {state.off_margin_c}°C. The
-                two are deliberately different, so it cannot chatter on and off
+                again once the air clears it by {state.off_margin_c}°C. The two
+                are deliberately different, so it cannot chatter on and off
                 around a single threshold.
+              </span>
+              <span className="mt-2 block text-xs text-zinc-600">
+                Those margins look generous on purpose. The sensor reads the
+                outside air, but dew forms on the glass — and on a clear night
+                the dome radiates to the sky and sits several degrees colder
+                than the air around it. That is why optics dew up on nights the
+                air never reaches the dewpoint. Starting while the air still
+                looks dry is what makes it arrive on time.
               </span>
             </span>
             <Toggle checked={state.enabled} label="Run the heater"

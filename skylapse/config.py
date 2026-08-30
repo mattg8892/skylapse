@@ -79,13 +79,35 @@ class NetworkConfig(BaseModel):
     hotspot_until: float = 0.0
 
 
+# The margins a sealed dome needs, which are not the margins the glass needs.
+#
+# The BME280 measures outside *air*. Dew forms on *glass*, and on a clear night
+# the dome radiates to a sky that is effectively colder than -40C, so it sits
+# several degrees below the surrounding air -- typically 3-5C. That is the
+# whole reason optics dew up on nights when the air temperature never reaches
+# the dewpoint at all.
+#
+# So a rule written against air temperature has to start early to be on time.
+# The original 2C/4C assumed a sensor that could read the glass; on a sealed
+# dome no sensor can, because it has to be outside to measure humidity. Those
+# defaults would have switched on only once the air was nearly saturated, by
+# which point the dome had been below the dewpoint for a while and was wet.
+DEFAULT_ON_MARGIN_C = 5.0
+DEFAULT_OFF_MARGIN_C = 8.0
+
+# What the above replaced. Kept so load() can tell an untouched old config from
+# a deliberately chosen one.
+_LEGACY_MARGINS = (2.0, 4.0)
+
+
 class DewHeaterConfig(BaseModel):
-    """EXPERIMENTAL — unverified on hardware. Entirely inert unless
-    experimental_enabled is explicitly set true: no I2C probe, no GPIO."""
+    """Off unless experimental_enabled is explicitly set true: no I2C probe,
+    no GPIO. Verified on hardware as of 0.5.13 -- six 1.2 ohm resistors in
+    series inside a sealed dome, switched low-side by an LR7843."""
     experimental_enabled: bool = False
     gpio_pin: int = 18                   # BCM numbering; PWM-capable pin
-    on_margin_c: float = 2.0             # heat when within this of dewpoint
-    off_margin_c: float = 4.0            # stop once clear by this much
+    on_margin_c: float = DEFAULT_ON_MARGIN_C    # heat when within this of dewpoint
+    off_margin_c: float = DEFAULT_OFF_MARGIN_C  # stop once clear by this much
 
 
 class NotifyConfig(BaseModel):
@@ -183,8 +205,25 @@ class Config(BaseModel):
 def load() -> Config:
     if CONFIG_PATH.exists():
         with open(CONFIG_PATH) as fh:
-            return Config.model_validate(yaml.safe_load(fh) or {})
+            return _migrate(Config.model_validate(yaml.safe_load(fh) or {}))
     return Config()
+
+
+def _migrate(cfg: Config) -> Config:
+    """In-memory fixes for settings that were saved under a wrong assumption.
+
+    Only for cases where leaving the old value in place means the feature does
+    not work -- not for taste. Changing a default does nothing for a camera
+    that already has the old value written to disk, and every camera does.
+    """
+    dh = cfg.dew_heater
+    if (dh.on_margin_c, dh.off_margin_c) == _LEGACY_MARGINS:
+        # Safe to assume untouched: these margins were written for a sensor
+        # that could read the glass, and until 0.5.13 the dew heater had never
+        # driven real hardware, so nobody can have tuned them against a night.
+        dh.on_margin_c = DEFAULT_ON_MARGIN_C
+        dh.off_margin_c = DEFAULT_OFF_MARGIN_C
+    return cfg
 
 
 def write_run_file(name: str, text: str) -> None:
