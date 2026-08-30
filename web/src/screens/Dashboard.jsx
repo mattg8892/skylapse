@@ -84,6 +84,7 @@ export default function Dashboard({ status }) {
           <LatestFrame daemon={d} status={status} showToast={showToast}
             onOpenFocus={() => setScreen('focus')} />
           <SafetyBanner daemon={d} showToast={showToast} />
+          <DewHeaterBanner daemon={d} />
           <Card title="Focus assist">
             <p className="mt-1 text-sm text-zinc-400">
               A live view with zoom, exposure and gain controls, and a sharpness
@@ -354,6 +355,59 @@ function SafetyBanner({ daemon: d, showToast }) {
         </div>
         <Button tone="warn" onClick={resume} className="shrink-0">Resume</Button>
       </div>
+    </Card>
+  )
+}
+
+
+/* -- dew heater ------------------------------------------------------------ */
+
+/**
+ * Whether the heater is on right now, and how close the glass is to dewing.
+ *
+ * Worth its own banner rather than a line in Settings: the heater is the one
+ * thing on this camera that draws real power and produces heat unattended, and
+ * on a damp night it can legitimately run from dusk to dawn -- because the
+ * sensor sits outside and cannot see the heater's own effect, so the heater
+ * never satisfies its own condition. It stops when the weather changes, not
+ * when the glass is warm. Someone glancing at the dashboard should be able to
+ * tell that apart from something being stuck on.
+ */
+function DewHeaterBanner({ daemon: d }) {
+  const dew = d.dew
+  if (!dew) return null                    // feature off, or no reading yet
+
+  const margin = dew.temp_c - dew.dewpoint_c
+  return (
+    <Card title="Dew heater"
+      right={dew.heating
+        ? <span className="rounded-full bg-amber-950 px-3 py-1 text-sm text-amber-300">
+            Heating
+          </span>
+        : <span className="text-sm text-zinc-500">Idle</span>}>
+      <dl className="mt-3 grid grid-cols-3 gap-3 text-sm">
+        <div>
+          <dt className="text-zinc-500">Air</dt>
+          <dd className="tabular-nums text-zinc-200">{dew.temp_c}°C</dd>
+        </div>
+        <div>
+          <dt className="text-zinc-500">Dewpoint</dt>
+          <dd className="tabular-nums text-zinc-200">{dew.dewpoint_c}°C</dd>
+        </div>
+        <div>
+          <dt className="text-zinc-500">Margin</dt>
+          <dd className={`tabular-nums ${margin <= 2 ? 'text-amber-300' : 'text-zinc-200'}`}>
+            {margin.toFixed(1)}°C
+          </dd>
+        </div>
+      </dl>
+      <p className="mt-3 text-xs text-zinc-500">
+        {dew.heating
+          ? 'Running until the air pulls clear of the dewpoint. A whole damp '
+            + 'night of this is normal — the sensor is outside, so heating the '
+            + 'glass does not change what it reads.'
+          : 'The air is clear enough of the dewpoint that the glass should stay dry.'}
+      </p>
     </Card>
   )
 }
