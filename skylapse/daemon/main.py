@@ -49,6 +49,20 @@ AE_PINNED_FRAMES = 3
 AUTO_WB_EVERY_FRAMES = 20
 AUTO_WB_BLEND = 0.2
 AUTO_WB_SETTLED_BAND = 0.15
+# Acquiring a white balance and tracking one are different jobs, and the slow
+# blend above is only right for the second.
+#
+# A Bayer sensor has twice as many green photosites as red or blue, so raw
+# frames at 1.0/1.0 are not neutral-with-a-tint -- they are strongly green. From
+# that start, a fifth of the way every twentieth frame needs 200-300 frames to
+# converge, which at 40s night exposures is most of a night. Measured on the
+# rig: a fresh install ran green until it was corrected by hand.
+#
+# So the first measurement on an untouched camera is taken whole. The gates that
+# make the slow blend safe still apply -- exposure must have settled, and the
+# estimate is still clamped -- and every later frame goes back to blending, so a
+# single odd measurement is corrected rather than kept.
+UNSET_WB = (1.0, 1.0)
 # The shortest focus exposure worth asking for. Sensors floor this
 # themselves; going lower just wastes a round trip.
 FOCUS_MIN_EXPOSURE_US = 50
@@ -763,8 +777,12 @@ class CaptureDaemon:
             settled = abs(self.last_brightness - profile.target_brightness)                 <= profile.target_brightness * AUTO_WB_SETTLED_BAND
             if not settled or self.ae_pinned >= AE_PINNED_FRAMES:
                 return                       # still hunting, or out of road
+        # An untouched camera has no white balance to drift from, so it does not
+        # wait its twenty frames and does not creep: it takes the first good
+        # measurement outright.
+        cold_start = (cam.wb_r, cam.wb_b) == UNSET_WB
         self.frames_since_wb += 1
-        if self.frames_since_wb < AUTO_WB_EVERY_FRAMES:
+        if not cold_start and self.frames_since_wb < AUTO_WB_EVERY_FRAMES:
             return
         self.frames_since_wb = 0
 
@@ -772,7 +790,7 @@ class CaptureDaemon:
             measured_r, measured_b = process.gray_world(means)
         except (ValueError, ZeroDivisionError):
             return
-        blend = AUTO_WB_BLEND
+        blend = 1.0 if cold_start else AUTO_WB_BLEND
         new_r = (1 - blend) * cam.wb_r + blend * max(0.5, min(3.0, measured_r))
         new_b = (1 - blend) * cam.wb_b + blend * max(0.5, min(3.0, measured_b))
         if abs(new_r - cam.wb_r) < 0.01 and abs(new_b - cam.wb_b) < 0.01:

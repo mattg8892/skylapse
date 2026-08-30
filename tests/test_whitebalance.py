@@ -301,3 +301,103 @@ def test_the_blend_cannot_be_swung_by_one_frame():
     for _ in range(30):
         settled = (1 - AUTO_WB_BLEND) * settled + AUTO_WB_BLEND * wild
     assert settled > 2.9, "but a sustained change must still arrive"
+
+
+# -- acquiring a white balance, as opposed to tracking one -------------------
+
+def _daemon_for_wb(monkeypatch, tmp_path, wb):
+    """A capture object with just enough on it to run _maybe_auto_wb."""
+    from skylapse import config
+    from skylapse.daemon import main as dmain
+
+    monkeypatch.setattr(config, "CONFIG_PATH", tmp_path / "config.yaml")
+    monkeypatch.setattr(config, "save", lambda cfg: None)
+    cfg = config.Config()
+    cam = cfg.camera("picam-imx477")
+    cam.wb_r, cam.wb_b = wb
+    cam.wb_auto = True
+
+    obj = dmain.CaptureDaemon.__new__(dmain.CaptureDaemon)
+    obj.cfg = cfg
+    obj.frames_since_wb = 0
+    obj.ae_pinned = 0
+    profile = dmain.profile_for(cfg, cam)
+    obj.last_brightness = profile.target_brightness      # settled
+    return obj, cam
+
+
+def test_a_fresh_camera_takes_the_first_measurement_whole(monkeypatch, tmp_path):
+    """The bug this fixes: a Bayer sensor at 1.0/1.0 is not slightly tinted, it
+    is strongly green, and creeping a fifth of the way every twentieth frame
+    needs 200-300 frames to converge. At 40s night exposures that is most of a
+    night, and a whole session came back green because of it.
+    """
+    from skylapse.daemon import main as dmain
+    obj, cam = _daemon_for_wb(monkeypatch, tmp_path, (1.0, 1.0))
+    monkeypatch.setattr(dmain.process, "gray_world", lambda means: (2.0, 1.5))
+
+    obj._maybe_auto_wb(cam, object())        # the very first frame
+    assert cam.wb_r == 2.0 and cam.wb_b == 1.5, \
+        "an untouched camera must not creep toward a white balance it has none of"
+
+
+def test_an_established_white_balance_still_creeps(monkeypatch, tmp_path):
+    """The slow blend is right for its actual job -- tracking drift over hours
+    without letting one odd frame recolour a night."""
+    from skylapse.daemon import main as dmain
+    obj, cam = _daemon_for_wb(monkeypatch, tmp_path, (1.9, 1.4))
+    monkeypatch.setattr(dmain.process, "gray_world", lambda means: (3.0, 3.0))
+
+    for _ in range(dmain.AUTO_WB_EVERY_FRAMES):
+        obj._maybe_auto_wb(cam, object())
+    assert cam.wb_r < 2.2, f"one measurement moved it to {cam.wb_r}"
+    assert cam.wb_r > 1.9, "it should still have moved toward the measurement"
+
+
+def test_the_cold_start_does_not_wait_for_its_twenty_frames(monkeypatch, tmp_path):
+    """Acquisition happens on the first settled frame. Waiting twenty is what
+    turned a green cast into a green night."""
+    from skylapse.daemon import main as dmain
+    obj, cam = _daemon_for_wb(monkeypatch, tmp_path, (1.0, 1.0))
+    monkeypatch.setattr(dmain.process, "gray_world", lambda means: (2.0, 1.5))
+    obj._maybe_auto_wb(cam, object())
+    assert cam.wb_r != 1.0
+
+
+def test_a_cold_start_still_waits_for_exposure_to_settle(monkeypatch, tmp_path):
+    """Taking a measurement whole makes the settling gate matter more, not
+    less: a frame caught mid-hunt is not a colour measurement, and this one is
+    kept outright rather than diluted."""
+    from skylapse.daemon import main as dmain
+    obj, cam = _daemon_for_wb(monkeypatch, tmp_path, (1.0, 1.0))
+    profile = dmain.profile_for(obj.cfg, cam)
+    obj.last_brightness = profile.target_brightness * 3      # still hunting
+    monkeypatch.setattr(dmain.process, "gray_world", lambda means: (2.0, 1.5))
+
+    obj._maybe_auto_wb(cam, object())
+    assert (cam.wb_r, cam.wb_b) == (1.0, 1.0), "acquired from an unsettled frame"
+
+
+def test_a_wild_cold_start_measurement_is_still_clamped(monkeypatch, tmp_path):
+    """Whole does not mean unbounded. gray_world can return nonsense on a scene
+    that is genuinely one colour."""
+    from skylapse.daemon import main as dmain
+    obj, cam = _daemon_for_wb(monkeypatch, tmp_path, (1.0, 1.0))
+    monkeypatch.setattr(dmain.process, "gray_world", lambda means: (99.0, 0.001))
+    obj._maybe_auto_wb(cam, object())
+    assert 0.5 <= cam.wb_r <= 3.0 and 0.5 <= cam.wb_b <= 3.0
+
+
+def test_the_second_frame_after_a_cold_start_no_longer_snaps(monkeypatch, tmp_path):
+    """Once acquired it is an established white balance like any other, so a
+    later bad measurement is diluted rather than adopted."""
+    from skylapse.daemon import main as dmain
+    obj, cam = _daemon_for_wb(monkeypatch, tmp_path, (1.0, 1.0))
+    monkeypatch.setattr(dmain.process, "gray_world", lambda means: (2.0, 1.5))
+    obj._maybe_auto_wb(cam, object())
+    acquired = cam.wb_r
+
+    monkeypatch.setattr(dmain.process, "gray_world", lambda means: (3.0, 3.0))
+    for _ in range(dmain.AUTO_WB_EVERY_FRAMES):
+        obj._maybe_auto_wb(cam, object())
+    assert cam.wb_r < acquired + 0.3, "snapped a second time"
