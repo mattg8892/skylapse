@@ -23,6 +23,7 @@ from .focus import (DEFAULT_EXPOSURE_MS as FOCUS_DEFAULT_EXPOSURE_MS,
                     DEFAULT_GAIN as FOCUS_DEFAULT_GAIN,
                     TIMEOUT_S as FOCUS_TIMEOUT, FocusSession, sharpness)
 from . import aurora
+from . import sdnotify
 from .dewheater import DewHeater
 from .pipeline.analyze import star_count
 from .. import notify
@@ -275,6 +276,11 @@ class CaptureDaemon:
 
     def _loop(self) -> None:
         while self.running:
+            # Report in before any of the work, so the ping means "the loop is
+            # turning" rather than "the loop finished a frame". A camera that
+            # is failing to expose is still a daemon worth leaving alone; one
+            # that has stopped going round at all is not.
+            sdnotify.ping()
             self.cfg = config.load()          # cheap; picks up UI changes
             cam = self.cfg.camera(self.camera_id)
             profile = profile_for(self.cfg, cam)

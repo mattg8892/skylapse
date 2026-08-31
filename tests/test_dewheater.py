@@ -72,7 +72,10 @@ def test_tick_drives_gpio_from_controller():
          mock.patch.object(DewHeater, "_set_gpio") as gpio:
         h = DewHeater(18, 2.0, 4.0)
         status = h.tick()
-    gpio.assert_called_once_with(True)
+    # Construction drives the pin low first -- a known state before any
+    # reading, so a restart clears a heater latched on by a crash.
+    assert gpio.call_args_list[0] == mock.call(False)
+    assert gpio.call_args_list[-1] == mock.call(True)
     assert status["heating"] is True
     assert status["dewpoint_c"] == round(dewpoint_c(10.0, 98.0), 1)
 
@@ -82,7 +85,8 @@ def test_off_forces_gpio_low():
          mock.patch.object(DewHeater, "_set_gpio") as gpio:
         h = DewHeater(18, 2.0, 4.0)
         h.off()
-    gpio.assert_called_once_with(False)
+    # Low on construction and low again on off(); both are the safe state.
+    assert gpio.call_args_list == [mock.call(False), mock.call(False)]
 
 
 # -- commissioning -----------------------------------------------------------

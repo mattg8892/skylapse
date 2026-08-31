@@ -385,6 +385,24 @@ case "${1:-}" in
 dtparam=i2c_arm=on
 " >> "$CONFIG"
     fi
+    # Hold the heater pin low from the first instant of boot.
+    #
+    # A GPIO is an input until Linux configures it, so between power-on and the
+    # daemon starting the MOSFET's gate floats and can drift far enough to
+    # switch. That is not theoretical: a camera whose SD card had died sat with
+    # the heater's LED lit and nothing running to have lit it -- no OS, no
+    # daemon, just a floating gate. Software cannot fix that, because the fault
+    # happens before any software runs. The firmware can: `op,dl` means drive
+    # it low, applied before the kernel loads.
+    #
+    # Written here rather than in its own action because this is the dew
+    # heater's setup step, it edits the same file, and it needs the same
+    # reboot. Two reboots to configure one feature is one too many.
+    if ! grep -q "^gpio=${SKYLAPSE_HEATER_PIN:-18}=op,dl" "$CONFIG"; then
+        printf "
+gpio=%s=op,dl
+" "${SKYLAPSE_HEATER_PIN:-18}" >> "$CONFIG"
+    fi
     # Loadable now as well as at boot, so a sensor already wired up answers
     # without waiting for the reboot.
     if command -v modprobe >/dev/null 2>&1; then

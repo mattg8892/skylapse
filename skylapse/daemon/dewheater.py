@@ -60,6 +60,19 @@ class DewHeater:
     def __init__(self, gpio_pin: int, on_margin_c: float, off_margin_c: float) -> None:
         self.controller = HeaterController(on_margin_c, off_margin_c)
         self.gpio_pin = gpio_pin
+        # Known state before anything else, and before the first reading.
+        #
+        # A GPIO holds whatever it was last driven to. If the daemon is killed
+        # hard or the kernel locks up, nothing runs the exit path, so a heater
+        # that was on stays on -- with no software left to turn it off. That
+        # happened: the camera went off the network with the heater's LED still
+        # lit, and it stayed lit until the power was pulled by hand.
+        #
+        # Every other safeguard here -- the capped test pulse, the finally
+        # block, off() on exit -- assumes the daemon is alive to enforce it.
+        # This one does not: whatever state the pin was left in, the next start
+        # clears it.
+        self._set_gpio(False)
         self.available = self._probe_sensor()
         self.last: dict | None = None
         if not self.available:

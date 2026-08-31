@@ -25,6 +25,27 @@ RuntimeDirectoryPreserve=yes
 # Capture must outlive a wedged frame: the ZWO driver bounds its own exposure
 # wait and raises, but if the process dies outright systemd brings it straight
 # back. Goal 4 — capture never stops.
+#
+# Restart=always covers a process that dies. It does not cover one that is
+# still alive and no longer going round — which is what happened: the camera
+# left the network with the dew heater's LED still lit, and stayed that way
+# until the power was pulled by hand. systemd saw a healthy service throughout,
+# and the daemon's own stall check never ran, because running was the thing
+# that had stopped.
+#
+# So the loop reports in each iteration and systemd restarts it if the reports
+# stop. On restart the heater pin is driven low again, so a heater cannot
+# outlive the loop meant to be controlling it.
+#
+# 600s because a single night frame legitimately takes minutes: a 40s exposure
+# on top of a control settle that is allowed 90s, and the loop pings once per
+# iteration rather than mid-frame. The margin is deliberate — a watchdog that
+# fires on a slow frame would restart the camera all night.
+#
+# NotifyAccess is required even at Type=simple, or systemd discards the
+# datagrams and the watchdog fires on a perfectly healthy daemon.
+WatchdogSec=600
+NotifyAccess=main
 StandardOutput=journal
 StandardError=journal
 
