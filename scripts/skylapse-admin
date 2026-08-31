@@ -95,7 +95,8 @@ usage() {
     echo "                       |update <ref> [--now]|restart-services" >&2
     echo "                       |tailscale-install|tailscale-up" >&2
     echo "                       |tailscale-serve|tailscale-down|tailscale-status" >&2
-    echo "                       |reinstall-units|i2c-enable}" >&2
+    echo "                       |reinstall-units|i2c-enable" >&2
+    echo "                       |logs-persist|logs [unit] [lines]}" >&2
     exit 2
 }
 
@@ -420,6 +421,56 @@ gpio=%s=op,dl
     # before the machine goes down under it.
     systemd-run --collect --quiet --on-active=2s /sbin/reboot
     echo "rebooting"
+    ;;
+
+  logs-persist)
+    # Make the journal survive a reboot.
+    #
+    # Raspberry Pi OS ships journald at Storage=auto, which means persistent
+    # only if /var/log/journal exists -- and it does not. So every log lives in
+    # /run and is wiped by the restart. Every post-mortem on this project has
+    # hit that: the camera stops, it gets power-cycled to recover it, and the
+    # only record of why is destroyed by the act of recovering it.
+    #
+    # Capped hard, because this is an SD card and the whole point of the cap is
+    # that logging must never be the thing that wears it out. 200M across all
+    # units is weeks of history at this volume.
+    mkdir -p /etc/systemd/journald.conf.d
+    cat > /etc/systemd/journald.conf.d/skylapse.conf <<'CONF'
+# Written by skylapse-admin. A camera with no terminal cannot be debugged from
+# a journal that a reboot erases.
+[Journal]
+Storage=persistent
+SystemMaxUse=200M
+SystemMaxFileSize=20M
+SystemMaxFiles=10
+CONF
+    mkdir -p /var/log/journal
+    systemd-tmpfiles --create --prefix /var/log/journal 2>/dev/null || true
+    systemctl restart systemd-journald 2>/dev/null || true
+    journalctl --flush 2>/dev/null || true
+    echo "journal is persistent"
+    ;;
+
+  logs)
+    # Read them back without a terminal. The API has no privilege to read other
+    # units' logs, and adding the service user to systemd-journal would grant
+    # it permanently; going through here keeps it to one audited path.
+    unit="${2:-skylapse-daemon}"
+    case "$unit" in
+        skylapse-daemon|skylapse-api|skylapse-netwatch|all) ;;
+        *) echo "unknown unit: $unit" >&2; exit 3 ;;
+    esac
+    lines="${3:-500}"
+    case "$lines" in
+        ''|*[!0-9]*) echo "lines must be a number" >&2; exit 3 ;;
+    esac
+    [ "$lines" -gt 5000 ] && lines=5000
+    if [ "$unit" = "all" ]; then
+        journalctl -n "$lines" --no-pager             -u skylapse-daemon -u skylapse-api -u skylapse-netwatch
+    else
+        journalctl -n "$lines" --no-pager -u "$unit"
+    fi
     ;;
 
   *) usage ;;

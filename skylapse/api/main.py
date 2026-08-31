@@ -769,6 +769,52 @@ def dewheater_diagnostics() -> dict:
     return dewheater.diagnostics()
 
 
+LOG_UNITS = {"skylapse-daemon", "skylapse-api", "skylapse-netwatch", "all"}
+
+
+def _read_logs(unit: str, lines: int) -> str:
+    """Recent journal for one of our units, via the privileged helper.
+
+    The API runs unprivileged and cannot read another unit's journal. Adding
+    the service user to systemd-journal would grant that permanently and for
+    every unit on the box; going through the helper keeps it to one audited
+    path with a closed list of unit names.
+    """
+    if unit not in LOG_UNITS:
+        raise HTTPException(400, f"unknown unit {unit!r}")
+    helper = str(Path(__file__).resolve().parents[2] / "scripts" / "skylapse-admin")
+    result = subprocess.run(["sudo", "-n", helper, "logs", unit, str(lines)],
+                            capture_output=True, text=True, timeout=60)
+    if result.returncode != 0:
+        raise HTTPException(500, (result.stderr or "").strip()[:200]
+                            or "could not read the logs")
+    return result.stdout
+
+
+@app.get("/api/logs")
+def logs(unit: str = "all", lines: int = 500) -> dict:
+    """What the camera has been saying.
+
+    There is no SSH on this rig, so before this the only way to see a log was
+    to already have one. Every post-mortem here has run into the same wall --
+    and worse, journald shipped volatile, so the reboot that recovered the
+    camera destroyed the record of why it needed recovering.
+    """
+    lines = max(1, min(int(lines), 5000))
+    return {"unit": unit, "lines": lines, "text": _read_logs(unit, lines)}
+
+
+@app.get("/api/logs/download")
+def logs_download(unit: str = "all", lines: int = 5000) -> Response:
+    """The same thing as a file, for attaching to a bug report."""
+    lines = max(1, min(int(lines), 5000))
+    text = _read_logs(unit, lines)
+    return Response(
+        content=text, media_type="text/plain",
+        headers={"Content-Disposition":
+                 f'attachment; filename="skylapse-{unit}.log"'})
+
+
 @app.post("/api/system/reboot")
 def system_reboot() -> dict:
     """Restart the camera, gracefully.

@@ -104,6 +104,18 @@ as_user "$ROOT/venv/bin/pip" install --quiet --upgrade pip
 # A half-installed feature that looks installed is the expensive kind.
 as_user "$ROOT/venv/bin/pip" install --quiet -e "$ROOT[zwo,dewheater]"
 
+echo "==> Persistent logs"
+# Pi OS journald defaults to Storage=auto, which is persistent only if
+# /var/log/journal exists -- and it does not. So the journal lives in /run and
+# every reboot erases it. On a camera with no terminal that is the difference
+# between diagnosing a failure and guessing at it, and it bit this project
+# repeatedly: the machine stops, it gets power-cycled to recover it, and the
+# act of recovering it destroys the only record of why.
+#
+# Capped inside the helper, because this is an SD card and logging must never
+# be the thing that wears it out.
+"$ROOT/scripts/skylapse-admin" logs-persist ||     echo "    (could not make the journal persistent; logs will not survive a reboot)"
+
 echo "==> ZWO SDK (optional)"
 # Not installed here, and not installed by default anywhere: Skylapse targets Pi
 # camera modules, and ZWO is a best-effort second. The library also cannot be

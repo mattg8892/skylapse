@@ -214,6 +214,9 @@ export default function SettingsScreen({ showToast, storage }) {
           onAutoCheck={(auto_check) =>
             save({ updates: { ...cfg.updates, auto_check } },
                  { ...cfg, updates: { ...cfg.updates, auto_check } })} />
+        {/* Diagnostics */}
+        <LogsCard showToast={showToast} />
+
         {/* Power */}
         <Card title="Restart">
           <p className="mt-1 text-sm text-zinc-400">
@@ -467,6 +470,73 @@ function RenderPlan({ cameraId }) {
  * nothing answers on it, or it is running and has numbers. A card that cannot
  * tell them apart is a card that can only say "no".
  */
+/**
+ * The camera's own logs, from the camera.
+ *
+ * There is no SSH on this rig, so until now the only way to see a log was to
+ * already have one. Worse: Raspberry Pi OS ships journald volatile, so the
+ * reboot that recovered a stuck camera destroyed the record of why it was
+ * stuck. Every post-mortem here has ended in guesswork for that reason.
+ *
+ * Deliberately not live-tailing. This is for reading after something went
+ * wrong, and a pane that scrolls on its own is harder to read than one that
+ * holds still.
+ */
+function LogsCard({ showToast }) {
+  const [unit, setUnit] = useState('all')
+  const [text, setText] = useState('')
+  const [busy, setBusy] = useState(false)
+
+  const load = async () => {
+    setBusy(true)
+    const r = await fetch(`/api/logs?unit=${unit}&lines=500`).catch(() => null)
+    setBusy(false)
+    if (!r?.ok) {
+      const body = await r?.json().catch(() => null)
+      return showToast?.(errorText(body, 'Could not read the logs'))
+    }
+    setText((await r.json()).text || '(nothing logged yet)')
+  }
+
+  return (
+    <Card title="Logs">
+      <p className="mt-1 text-sm text-zinc-400">
+        What the camera has been saying. Kept across reboots, so a fault that
+        needed a power cycle to clear can still be read afterwards — capped at
+        200MB so logging never fills the card.
+      </p>
+
+      <div className="mt-4 space-y-3">
+        <Select label="Which service" value={unit} onChange={setUnit}
+          options={[
+            { value: 'all', label: 'Everything' },
+            { value: 'skylapse-daemon', label: 'Capture' },
+            { value: 'skylapse-api', label: 'Web interface' },
+            { value: 'skylapse-netwatch', label: 'Network' },
+          ]} />
+        <div className="flex gap-2">
+          <Button onClick={load} disabled={busy} className="flex-1">
+            {busy ? 'Reading…' : 'Show recent log'}
+          </Button>
+          <a href={`/api/logs/download?unit=${unit}&lines=5000`}
+            className="flex-1 rounded-lg border border-zinc-700 py-2.5 text-center
+                       text-sm hover:bg-zinc-800">
+            Download
+          </a>
+        </div>
+      </div>
+
+      {text && (
+        <pre className="mt-3 max-h-80 overflow-auto rounded-lg bg-zinc-950 p-3
+                        text-xs leading-relaxed text-zinc-400">
+          {text}
+        </pre>
+      )}
+    </Card>
+  )
+}
+
+
 /**
  * Restarting the camera, from the camera.
  *
