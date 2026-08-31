@@ -142,7 +142,7 @@ function AddCamera({ found, onChanged }) {
 
   return (
     <div className="space-y-4">
-      <DeclareSensor />
+      <DeclareSensor onChanged={onChanged} />
       <ZwoSupport onChanged={onChanged} />
     </div>
   )
@@ -157,7 +157,7 @@ function AddCamera({ found, onChanged }) {
  * /boot/firmware/config.txt over SSH: the exact thing an appliance image exists
  * to avoid. Measured on this project's own hardware, which is how it was found.
  */
-export function DeclareSensor() {
+export function DeclareSensor({ onChanged }) {
   const [sensors, setSensors] = useState([])
   const [sensor, setSensor] = useState('imx477')
   const [state, setState] = useState('')
@@ -177,7 +177,14 @@ export function DeclareSensor() {
     setState(r?.ok ? 'rebooting' : 'failed')
   }
 
-  if (state === 'rebooting') return <WaitingForReboot sensor={sensor} />
+  // onChanged is what makes the test-shot button appear. Without it this
+  // screen announced "Camera found — take a test shot" while the button to do
+  // that sat behind a stale camera list, so it only turned up if you reloaded
+  // the page by hand. Reported from a real setup, and the instruction was
+  // right there on screen telling you to do something you could not do.
+  if (state === 'rebooting') {
+    return <WaitingForReboot sensor={sensor} onFound={onChanged} />
+  }
 
   return (
     <div className="space-y-3 rounded-xl border border-zinc-800 bg-zinc-900 p-4">
@@ -347,7 +354,7 @@ export function ZwoSupport({ onChanged }) {
  * moment the camera answers again. The one instruction that matters is "do not
  * reload" — a reload during the outage is what produces the blank cached page.
  */
-export function WaitingForReboot({ sensor }) {
+export function WaitingForReboot({ sensor, onFound }) {
   const [seconds, setSeconds] = useState(0)
   const [found, setFound] = useState(null)
 
@@ -362,12 +369,15 @@ export function WaitingForReboot({ sensor }) {
       const info = await r.json().catch(() => null)
       if (info?.detected || info?.cameras?.length) {
         setFound(info.cameras?.[0]?.label || info.detected)
+        // Tell whoever owns the camera list, or the button this screen is
+        // about to tell them to press will not be on the page.
+        onFound?.()
         clearInterval(poll)
         clearInterval(tick)
       }
     }, 3000)
     return () => { clearInterval(poll); clearInterval(tick) }
-  }, [])
+  }, [onFound])
 
   if (found) {
     return (
@@ -375,6 +385,7 @@ export function WaitingForReboot({ sensor }) {
         <p className="text-emerald-300">Camera found: {found}</p>
         <p className="mt-2 text-sm text-zinc-400">
           Take a test shot to make sure it is really working, not just detected.
+          The button is just below.
         </p>
       </div>
     )

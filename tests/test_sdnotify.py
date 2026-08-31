@@ -223,3 +223,24 @@ def test_the_boot_config_edit_is_idempotent():
         text = cfg.read_text()
         assert text.count("gpio=18=op,dl") == 1, text
         assert text.count("dtparam=i2c_arm=on") == 1, text
+
+
+# -- the I2C setup that needed clicking twice --------------------------------
+
+def test_i2c_dev_is_loaded_at_every_boot_not_just_once():
+    """Reported from a fresh setup: enable I2C, reboot, and the card still asks
+    you to enable I2C. Clicking a second time worked instantly.
+
+    Two separate things, and only one was being done persistently. `dtparam`
+    enables the I2C controller at boot; /dev/i2c-1 is created by the i2c-dev
+    module, which Pi OS does not load by default and which `modprobe` loads for
+    the current session only. So the reboot brought the controller up without
+    the module, /dev/i2c-1 was still missing, and the second click's modprobe
+    is what actually finished the job.
+    """
+    admin = (REPO / "scripts" / "skylapse-admin").read_text(encoding="utf-8")
+    block = admin.split("i2c-enable)", 1)[1][:2500]
+    assert "modules-load.d" in block, \
+        "i2c-dev must be set to load at boot, not only modprobe'd once"
+    assert "modprobe" in block, \
+        "and loaded now too, so a wired sensor answers without a reboot"

@@ -41,23 +41,64 @@ export default function JoinNetwork({ warnAboutDisconnect = false, onJoined }) {
                       + 'later in Settings.')
     }
     onJoined?.(ssid)
-    // Deliberately stays in 'joining'. The camera is about to change networks;
-    // if this page is being served over the one that is going away, the honest
-    // final state is "we asked, now go and look", not a success tick this page
-    // will never live long enough to earn.
+    // Then watch for it to actually land. This used to stay in 'joining' for
+    // ever on the reasoning that the page might be served over the network
+    // that is going away -- true, but only sometimes, and the cost when it is
+    // false is a screen that sits on a spinner after the job is done and never
+    // says to carry on. Reported from a real setup: "it never tells you to
+    // continue even though it's already connected."
+    //
+    // Polling covers both. If the page survives, it says so plainly. If it
+    // does not, the poll simply never answers and the wording below still
+    // applies.
+  }
+
+  // Poll only while joining, and stop as soon as the camera reports the SSID
+  // we asked for.
+  useEffect(() => {
+    if (state !== 'joining') return undefined
+    const poll = setInterval(async () => {
+      const r = await fetch('/api/network', { cache: 'no-store' }).catch(() => null)
+      if (!r?.ok) return                       // page may be losing the network
+      const net = await r.json().catch(() => null)
+      if (net?.ssid && net.ssid === ssid) setState('joined')
+    }, 3000)
+    return () => clearInterval(poll)
+  }, [state, ssid])
+
+  if (state === 'joined') {
+    return (
+      <div className="rounded-xl border border-emerald-800 bg-emerald-950 p-4 text-sm">
+        <p className="text-emerald-300">Connected to {ssid}.</p>
+        <p className="mt-2 text-zinc-300">
+          That is this step done — press <b>Continue</b> below.
+        </p>
+        <p className="mt-2 text-xs text-zinc-500">
+          The camera keeps these details and rejoins this network by itself
+          after a power cut. If your network ever disappears it falls back to
+          serving its own, so you can always reach it.
+        </p>
+      </div>
+    )
   }
 
   if (state === 'joining') {
     return (
       <div className="rounded-xl border border-zinc-800 bg-zinc-900 p-4 text-sm">
-        <p className="text-sky-300">Connecting to {ssid}…</p>
+        <div className="flex items-center gap-3">
+          <span className="h-4 w-4 shrink-0 animate-spin rounded-full
+                           border-2 border-sky-500 border-t-transparent" />
+          <p className="text-sky-300">Connecting to {ssid}…</p>
+        </div>
         <p className="mt-2 text-zinc-400">
-          This takes up to 90 seconds.{' '}
+          This takes up to 90 seconds. This screen tells you when it has worked
+          — you do not need to do anything until then.{' '}
           {warnAboutDisconnect
-            ? 'If this page stops responding, that is the camera moving to your '
-              + 'network — find it at its new address. If it does not work, the '
-              + 'camera comes back on its own network and you can try again.'
-            : 'The page will catch up on its own.'}
+            ? 'If this page stops responding instead, that is the camera moving '
+              + 'to your network — find it at its new address. If it does not '
+              + 'work, the camera comes back on its own network and you can try '
+              + 'again.'
+            : ''}
         </p>
       </div>
     )

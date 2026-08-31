@@ -404,8 +404,20 @@ dtparam=i2c_arm=on
 gpio=%s=op,dl
 " "${SKYLAPSE_HEATER_PIN:-18}" >> "$CONFIG"
     fi
-    # Loadable now as well as at boot, so a sensor already wired up answers
-    # without waiting for the reboot.
+    # Two separate things, and doing only one of them is why this needed
+    # clicking twice.
+    #
+    # dtparam above enables the I2C *controller*, at boot. /dev/i2c-1 is
+    # created by the i2c-dev *module*, which Pi OS does not load by default --
+    # and modprobe loads it for this session only. So the first click wrote the
+    # boot config and said "needs a reboot", the reboot brought the controller
+    # up without the module, /dev/i2c-1 was still missing, and the card asked
+    # to enable I2C all over again. The second click's modprobe is what
+    # actually did it, which is why it then worked instantly.
+    mkdir -p /etc/modules-load.d
+    echo "i2c-dev" > /etc/modules-load.d/skylapse-i2c.conf
+    # And now, so a sensor already wired up answers without waiting for a
+    # reboot at all.
     if command -v modprobe >/dev/null 2>&1; then
         modprobe i2c-dev 2>/dev/null || true
     fi

@@ -549,6 +549,7 @@ function LogsCard({ showToast }) {
 function RestartButton({ label = 'Restart the camera', className = '', showToast }) {
   const [armed, setArmed] = useState(false)
   const [going, setGoing] = useState(false)
+  const [stuck, setStuck] = useState(false)
 
   const go = async () => {
     setGoing(true)
@@ -559,17 +560,53 @@ function RestartButton({ label = 'Restart the camera', className = '', showToast
       const detail = await r?.json().catch(() => null)
       return showToast?.(errorText(detail, 'Could not restart'))
     }
-    // Deliberately stays in this state. The page is about to lose the server,
-    // so there is no success to report -- only an explanation of the silence.
     showToast?.('Restarting…')
+    // And then actually bring it back.
+    //
+    // This used to say "comes back on its own" and then do nothing to make
+    // that true, so the page sat on the message until someone reloaded by
+    // hand. Reported as happening right across the build, which it was: the
+    // same shape as the Wi-Fi step that never said it had connected and the
+    // camera step whose button never appeared. Telling someone to wait for
+    // something that is not coming is worse than telling them to reload.
+    const started = Date.now()
+    const poll = setInterval(async () => {
+      const r = await fetch('/api/status', { cache: 'no-store' }).catch(() => null)
+      if (r?.ok) {
+        clearInterval(poll)
+        window.location.reload()
+      } else if (Date.now() - started > 240_000) {
+        clearInterval(poll)          // four minutes is not "restarting" any more
+        setStuck(true)
+      }
+    }, 3000)
   }
 
   if (going) {
     return (
-      <p className={`text-sm text-amber-300 ${className}`}>
-        Restarting. This page will go quiet for a minute or so, then come back
-        on its own. Nothing needs unplugging.
-      </p>
+      <div className={`text-sm ${className}`}>
+        {stuck ? (
+          <>
+            <p className="text-rose-400">
+              The camera has not come back after four minutes.
+            </p>
+            <p className="mt-1 text-xs text-zinc-400">
+              It may have moved to a different address on your network, or it
+              may not be booting. Check the Pi&rsquo;s LEDs: a flickering green
+              one means it is still working on it.
+            </p>
+          </>
+        ) : (
+          <div className="flex items-center gap-3">
+            <span className="h-4 w-4 shrink-0 animate-spin rounded-full
+                             border-2 border-amber-500 border-t-transparent" />
+            <p className="text-amber-300">
+              Restarting. This page reloads itself when the camera answers
+              again — usually under a minute. Nothing needs unplugging.
+            </p>
+          </div>
+        )}
+      </div>
     )
   }
 
@@ -758,17 +795,28 @@ function DewHeaterCard({ showToast }) {
                 </>
               ) : (
                 <>
-                  <p className={pulse.rise_c >= 0.3 ? 'text-emerald-400' : 'text-amber-300'}>
+                  {/* A rise proves the heater works. No rise proves nothing at
+                      all, and must not be dressed up as a warning.
+
+                      On a sealed dome the sensor is necessarily outside it and
+                      the heater is inside, so it cannot see the heat by
+                      construction. This read as an amber "only 0.05°C of
+                      change" on a heater that was working perfectly — an alert
+                      guaranteed to fire on a correct build is how people learn
+                      to ignore alerts. */}
+                  <p className={pulse.rise_c >= 0.3 ? 'text-emerald-400' : 'text-zinc-300'}>
                     {pulse.rise_c >= 0.3
                       ? `Warmed by ${pulse.rise_c}°C — the heater is working.`
-                      : `Only ${pulse.rise_c}°C of change.`}
+                      : 'Heater driven, no temperature change measured.'}
                   </p>
                   <p className="mt-1 text-xs text-zinc-500">
                     {pulse.temp_before_c}°C before, {pulse.temp_after_c}°C after,
                     over {pulse.seconds}s.
-                    {pulse.rise_c < 0.3 && ' That may mean nothing is switching —'
-                      + ' or just that the sensor sits too far from the heat to'
-                      + ' see it. Feel the resistors before assuming a fault.'}
+                    {pulse.rise_c < 0.3 && ' That is expected if the sensor is'
+                      + ' outside a sealed dome and the heater is inside it —'
+                      + ' it cannot see that heat. Check the LED on the MOSFET'
+                      + ' instead, or feel the resistors. Neither a reading nor'
+                      + ' the lack of one is a fault on its own.'}
                   </p>
                 </>
               )}
