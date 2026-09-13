@@ -532,3 +532,41 @@ def test_close_releases_the_gpio_object(monkeypatch):
     heater.close()
     assert closed, "close() did not release the pin"
     assert not hasattr(heater, "_pin")
+
+
+def test_reading_the_status_does_not_touch_the_gpio(monkeypatch, tmp_path):
+    """The bug behind "GPIO busy" on a line the kernel said was free.
+
+    GET /api/dewheater built a DewHeater just to read its `available` flag.
+    Since 0.5.16 that constructor drives the pin low -- correct in the daemon,
+    where it clears a heater latched on by a crash, and a leak here: the object
+    is discarded, the pin is never released, and the dashboard polls this
+    endpoint every fifteen seconds. The API quietly held the heater pin, so the
+    test pulse failed against a line nothing was using. Restarting the services
+    cleared it until the next poll.
+
+    Asking whether the sensor is present needs no GPIO at all.
+    """
+    from fastapi.testclient import TestClient
+    from skylapse.api import main as api
+    from skylapse.daemon import dewheater
+
+    monkeypatch.setattr(config, "CONFIG_PATH", tmp_path / "config.yaml")
+    monkeypatch.setattr(config, "RUN_DIR", tmp_path / "run")
+    config.save(config.Config())
+
+    opened = []
+    monkeypatch.setitem(__import__("sys").modules, "gpiozero",
+                        type("M", (), {"OutputDevice":
+                                       lambda *a, **kw: opened.append(a) or object()}))
+    # Only the I2C device node, not every path -- a blanket exists() makes the
+    # status file look present too and the endpoint dies reading it.
+    real_exists = api.Path.exists
+    monkeypatch.setattr(api.Path, "exists",
+                        lambda self: True if "i2c-1" in self.as_posix()
+                        else real_exists(self))
+    monkeypatch.setattr(dewheater, "find_sensor", lambda: 0x76)
+
+    body = TestClient(api.app).get("/api/dewheater").json()
+    assert body["sensor_found"] is True
+    assert not opened, "the status endpoint opened the heater pin"

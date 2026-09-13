@@ -738,16 +738,24 @@ def dewheater_status() -> dict:
     each of those is a different next step, and a card that cannot tell them
     apart can only say "not working".
     """
-    from ..daemon import dewheater
-
     cfg = config.load()
     bus_ready = Path("/dev/i2c-1").exists()
     sensor = None
     if bus_ready:
-        probe = dewheater.DewHeater(cfg.dew_heater.gpio_pin,
-                                    cfg.dew_heater.on_margin_c,
-                                    cfg.dew_heater.off_margin_c)
-        sensor = probe.available
+        # find_sensor() and not DewHeater(). Building the heater just to read
+        # its `available` flag opened GPIO 18 -- since 0.5.16 the constructor
+        # drives the pin low, deliberately, so that a restart clears a latched
+        # heater. In this process that is a leak: the object is discarded, the
+        # pin is never released, and the dashboard polls this endpoint every
+        # fifteen seconds.
+        #
+        # So the API quietly took the heater pin and held it, and the test
+        # pulse -- which by then correctly ran in the daemon -- failed with
+        # "GPIO busy" against a line the kernel reported as unclaimed. Restarting
+        # the services cleared it until the next poll.
+        #
+        # Asking the sensor whether it is there needs no GPIO at all.
+        sensor = dewheater.find_sensor() is not None
     return {
         "enabled": cfg.dew_heater.experimental_enabled,
         "i2c_ready": bus_ready,
