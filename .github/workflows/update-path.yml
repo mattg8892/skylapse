@@ -1,0 +1,50 @@
+name: Update path
+
+# Can a camera survive its own update?
+#
+# 0.5.18 shipped with 668 passing tests and bricked a camera in the field: the
+# update rewrote /etc/sudoers.d/skylapse and afterwards every privileged
+# operation failed with "sudo: a password is required". Services could not
+# restart, the daemon stayed down, and the updater could not roll itself back.
+# The camera had to be reflashed.
+#
+# Nothing caught it because the tests exercised the *generation* of that file
+# and nothing exercised an actual update on an actual install. The contract
+# lives across a shell script, a sudoers template, a systemd unit and the
+# updater's build step -- no unit test can see all four at once, and this is
+# the cheapest thing that can.
+#
+# On every push, because the failure it guards against is unrecoverable
+# remotely: there is no SSH on the image, and the one tool that could repair
+# sudo is the tool that needs it.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  update-path:
+    # A real VM with real systemd, real sudo and real users -- a container
+    # would need so much stubbing that it would stop testing the thing that
+    # broke. Ephemeral, which is what makes a destructive test acceptable.
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install what the helper needs
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq rsync
+
+      - name: A fresh install, then an update, then check sudo still works
+        run: sudo bash scripts/verify-update-path.sh
+
+      - name: Show what was installed
+        if: always()
+        run: |
+          echo "--- /etc/sudoers.d/skylapse ---"
+          sudo cat /etc/sudoers.d/skylapse || true
+          echo "--- ownership ---"
+          stat -c '%U %n' /opt/skylapse || true
