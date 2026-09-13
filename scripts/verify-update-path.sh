@@ -102,12 +102,30 @@ pass "sudoers still grants $USER_NAME"
 
 # The units have to name the same account, or systemd starts the services as
 # somebody who cannot read the config.
-for unit in skylapse-daemon skylapse-api skylapse-netwatch; do
+#
+# netwatch is deliberately not in this list: it manipulates NetworkManager
+# connections and runs as root, which is the reason the three services are
+# separate units in the first place. It gets the weaker check below.
+for unit in skylapse-daemon skylapse-api; do
     [ -f "/etc/systemd/system/$unit.service" ] || fail "$unit.service was not installed"
     got="$(awk -F= '/^User=/ {print $2}' "/etc/systemd/system/$unit.service")"
     [ "$got" = "$USER_NAME" ] || fail "$unit runs as '$got', not '$USER_NAME'"
 done
-pass "all three units run as $USER_NAME"
+pass "the daemon and api run as $USER_NAME"
+
+[ -f /etc/systemd/system/skylapse-netwatch.service ] || fail "netwatch unit missing"
+grep -q "^Group=$USER_NAME" /etc/systemd/system/skylapse-netwatch.service || \
+    fail "netwatch runs as root without Group=$USER_NAME, so it will create
+/run/skylapse owned by root and the other two cannot write their status there"
+pass "netwatch runs as root with Group=$USER_NAME"
+
+# No placeholder may survive substitution anywhere. A stray @SKYLAPSE_USER@ in
+# a unit is a service that will not start, and in the sudoers file it is a rule
+# that authorises nobody.
+for f in /etc/sudoers.d/skylapse /etc/systemd/system/skylapse-*.service; do
+    grep -q '@SKYLAPSE_' "$f" && fail "$f still contains an unsubstituted placeholder"
+done
+pass "no placeholders left unsubstituted"
 
 echo
 echo "PASS: an update leaves sudo, the sudoers entry and the units intact"
