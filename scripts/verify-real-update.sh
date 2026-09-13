@@ -39,7 +39,12 @@ rm -rf "$ROOT_DIR"
 # shallow one would put the install in a state where it could never update --
 # which is itself a thing worth not shipping.
 git clone --quiet "$REPO" "$ROOT_DIR"
-git -C "$ROOT_DIR" fetch --tags --quiet origin || true
+# Tags come from the CI workspace, which needs fetch-depth: 0 and fetch-tags.
+# Then origin is pointed at the public repo, exactly as image/build.sh does --
+# the updater fetches from origin, and a camera whose origin is a local path
+# that does not exist on it could never update.
+git -C "$ROOT_DIR" fetch --tags --quiet "$REPO" "+refs/tags/*:refs/tags/*" || true
+git -C "$ROOT_DIR" remote set-url origin https://github.com/mattg8892/skylapse.git
 git -C "$ROOT_DIR" checkout --quiet --force "$FROM_REF"
 git config --system --add safe.directory "$ROOT_DIR"
 
