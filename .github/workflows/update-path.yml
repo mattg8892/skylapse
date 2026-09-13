@@ -41,6 +41,15 @@ jobs:
       - name: A fresh install, then an update, then check sudo still works
         run: sudo bash scripts/verify-update-path.sh
 
+      # The narrow check above eliminates the privileged step in isolation.
+      # This one is the actual scenario that broke a camera: a real update
+      # between two real releases, driving the updater's own apply().
+      - name: Tools a real update needs
+        run: sudo apt-get install -y -qq python3-venv nodejs npm
+
+      - name: A real update, 0.5.17 -> 0.5.18
+        run: sudo bash scripts/verify-real-update.sh v0.5.17 v0.5.18
+
       - name: Show what was installed
         if: always()
         run: |
