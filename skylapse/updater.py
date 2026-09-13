@@ -394,6 +394,49 @@ def _wait_healthy(since: float, deadline_s: int = HEALTH_TIMEOUT_S,
     return False
 
 
+class BuildFailed(RuntimeError):
+    """A build step failed, so the checked-out code is not what is installed.
+
+    Raised rather than logged because these used to be ignored outright: _run
+    returns the result and nothing looked at returncode, so a failed pip
+    install or npm build carried straight on to restarting the services. The
+    update then reported success while the camera had no web interface -- seen
+    in the field, serving an index.html and zero bytes of application, with the
+    updater perfectly satisfied.
+    """
+
+
+def _tail(result, limit: int = 300) -> str:
+    """The useful end of a failed command's output."""
+    text = (result.stderr or "").strip() or (result.stdout or "").strip()
+    return text[-limit:] if text else "no output"
+
+
+# A bundle smaller than this is not a build, it is a truncated write. The real
+# one is ~270KB; the threshold is deliberately far below that so a genuinely
+# slimmer build never trips it.
+MIN_BUNDLE_BYTES = 10_000
+
+
+def _check_frontend(root: Path) -> None:
+    """The build said it worked. Check that it left something behind.
+
+    npm can exit zero having written nothing when the filesystem underneath it
+    is failing, and the API will then serve an index.html referencing a bundle
+    that is not there -- a black screen, with every service reporting healthy.
+    The camera this was written for was in exactly that state.
+    """
+    assets = root / "web" / "dist" / "assets"
+    bundles = sorted(assets.glob("*.js")) if assets.is_dir() else []
+    if not bundles:
+        raise BuildFailed("the web build produced no bundle, so the camera "
+                          "would serve a blank page")
+    biggest = max(b.stat().st_size for b in bundles)
+    if biggest < MIN_BUNDLE_BYTES:
+        raise BuildFailed(f"the web bundle is only {biggest} bytes, which is a "
+                          f"truncated write rather than a build")
+
+
 def _build(changed: set[str]) -> None:
     """Reinstall and rebuild only what actually changed — a pip install and an
     npm build are minutes on a Pi, and most updates touch neither.
@@ -408,11 +451,18 @@ def _build(changed: set[str]) -> None:
         # said "[zwo]", so an updated camera and a freshly imaged one did not
         # have the same packages -- and the difference was invisible until a
         # feature quietly could not work.
-        _run([str(root / "venv" / "bin" / "pip"), "install", "-e", ".[zwo,dewheater]"],
-             timeout=1800)
+        result = _run([str(root / "venv" / "bin" / "pip"),
+                       "install", "-e", ".[zwo,dewheater]"], timeout=1800)
+        if result.returncode != 0:
+            raise BuildFailed("Installing Python dependencies failed: "
+                              + _tail(result))
     if any(p.startswith("web/") for p in changed):
         _set_status(state="running", message="Building the web interface")
-        _run(["npm", "--prefix", str(root / "web"), "run", "build"], timeout=1800)
+        result = _run(["npm", "--prefix", str(root / "web"), "run", "build"],
+                      timeout=1800)
+        if result.returncode != 0:
+            raise BuildFailed("Building the web interface failed: " + _tail(result))
+        _check_frontend(root)
     if any(p.startswith("systemd/") or p.startswith("scripts/") for p in changed):
         # Nothing used to apply these, so a unit file or a sudoers change simply
         # did not reach any rig that updated rather than reflashed. That is how
@@ -455,7 +505,36 @@ def apply(target_ref: str, apply_now: bool = False) -> dict:
                     message=f"Checkout failed: {checkout.stderr.strip()}")
         return {"ok": False}
 
-    _build(changed)
+    try:
+        _build(changed)
+    except BuildFailed as exc:
+        # Do not restart into a half-built install. Restarting is what makes a
+        # bad build the running code, and the health check judges the daemon --
+        # which can be perfectly healthy on a camera whose web interface is
+        # missing entirely.
+        log.error("Build failed for %s: %s", target_ref, exc)
+        _set_status(state="rolling_back", target=target_ref, prior=prior[:7],
+                    reason=str(exc), message="Build failed — rolling back")
+        _run(["git", "checkout", "--force", prior], timeout=300)
+        try:
+            _build(changed)
+        except BuildFailed as back:
+            # Worth stating plainly: the rollback could not rebuild either, so
+            # the fault is the machine rather than the release.
+            log.error("Rollback build also failed: %s", back)
+            _set_status(state="error", target=target_ref, prior=prior[:7],
+                        reason=f"{exc} — and the rollback could not rebuild "
+                               f"either, which points at the storage rather "
+                               f"than the update",
+                        message="Update failed and could not be undone")
+            return {"ok": False, "rolled_back": True, "recovered": False,
+                    "reason": str(exc)}
+        _restart_services()
+        _set_status(state="rolled_back", target=target_ref, prior=prior[:7],
+                    reason=str(exc),
+                    message="Rolled back to the previous version")
+        return {"ok": False, "rolled_back": True, "recovered": True,
+                "reason": str(exc)}
 
     _set_status(state="running", target=target_ref, prior=prior[:7],
                 message="Restarting services")

@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 import time
 import urllib.error
 
@@ -351,8 +352,15 @@ def test_build_only_runs_what_changed(tmp_path, monkeypatch):
     """pip install and npm build are minutes on a Pi; most updates need neither."""
     monkeypatch.setattr(config, "RUN_DIR", tmp_path)
     ran = []
-    monkeypatch.setattr(updater, "_run",
-                        lambda cmd, timeout=300, cwd=None: ran.append(cmd[0]))
+
+    def ok(cmd, timeout=300, cwd=None):
+        ran.append(cmd[0])
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    monkeypatch.setattr(updater, "_run", ok)
+    # The build steps are checked now, so the frontend check has to be stubbed
+    # too -- there is no real web/dist under a tmp_path.
+    monkeypatch.setattr(updater, "_check_frontend", lambda root: None)
 
     updater._build({"skylapse/daemon/main.py"})
     assert ran == [], "rebuilt for a change that touched neither deps nor web"
@@ -648,3 +656,127 @@ def test_every_declared_extra_is_actually_installed_somewhere():
         assert extra in installer, (
             f"pyproject declares the [{extra}] extra but install.sh never "
             f"installs it, so anything depending on it cannot work")
+
+
+# -- a build that did not build ----------------------------------------------
+#
+# A camera finished an update, reported success, and served an index.html with
+# zero bytes of application behind it. The npm build had produced nothing and
+# nothing looked: _run returned its result and _build ignored returncode, so a
+# failed build carried straight on to restarting the services. The daemon was
+# healthy, so the health check was satisfied, and the update was declared done.
+
+def test_a_failed_web_build_is_not_ignored(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "RUN_DIR", tmp_path)
+    monkeypatch.setattr(updater, "_run", lambda cmd, timeout=300, cwd=None:
+                        subprocess.CompletedProcess(cmd, 1, "", "vite: out of memory"))
+    with pytest.raises(updater.BuildFailed, match="web interface"):
+        updater._build({"web/src/App.jsx"})
+
+
+def test_a_failed_dependency_install_is_not_ignored(tmp_path, monkeypatch):
+    """A camera running new code against old dependencies is a worse state than
+    one that refused the update."""
+    monkeypatch.setattr(config, "RUN_DIR", tmp_path)
+    monkeypatch.setattr(updater, "_run", lambda cmd, timeout=300, cwd=None:
+                        subprocess.CompletedProcess(cmd, 1, "", "No space left on device"))
+    with pytest.raises(updater.BuildFailed, match="Python dependencies"):
+        updater._build({"pyproject.toml"})
+
+
+def test_the_reason_names_what_actually_went_wrong(tmp_path, monkeypatch):
+    """"Build failed" sends you nowhere. The last line of the output usually
+    says whether it was memory, disk, or a real compile error."""
+    monkeypatch.setattr(config, "RUN_DIR", tmp_path)
+    monkeypatch.setattr(updater, "_run", lambda cmd, timeout=300, cwd=None:
+                        subprocess.CompletedProcess(cmd, 1, "", "No space left on device"))
+    with pytest.raises(updater.BuildFailed, match="No space left"):
+        updater._build({"pyproject.toml"})
+
+
+def test_a_build_that_exits_zero_and_wrote_nothing_is_still_a_failure(tmp_path, monkeypatch):
+    """The exact field case. npm can exit zero having written nothing when the
+    filesystem underneath it is failing, and the API then serves an index.html
+    naming a bundle that is not there."""
+    monkeypatch.setattr(config, "RUN_DIR", tmp_path)
+    monkeypatch.setattr(updater, "repo_root", lambda: tmp_path)
+    (tmp_path / "web" / "dist" / "assets").mkdir(parents=True)
+    monkeypatch.setattr(updater, "_run", lambda cmd, timeout=300, cwd=None:
+                        subprocess.CompletedProcess(cmd, 0, "built in 1.2s", ""))
+    with pytest.raises(updater.BuildFailed, match="no bundle"):
+        updater._build({"web/src/App.jsx"})
+
+
+def test_a_truncated_bundle_is_a_failure(tmp_path, monkeypatch):
+    """Zero bytes is the obvious case; a few hundred is the same fault and
+    reads as a successful build to anything that only checks existence."""
+    monkeypatch.setattr(config, "RUN_DIR", tmp_path)
+    monkeypatch.setattr(updater, "repo_root", lambda: tmp_path)
+    assets = tmp_path / "web" / "dist" / "assets"
+    assets.mkdir(parents=True)
+    (assets / "index-abc123.js").write_text("x" * 200)
+    monkeypatch.setattr(updater, "_run", lambda cmd, timeout=300, cwd=None:
+                        subprocess.CompletedProcess(cmd, 0, "", ""))
+    with pytest.raises(updater.BuildFailed, match="truncated"):
+        updater._build({"web/src/App.jsx"})
+
+
+def test_a_real_bundle_passes(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "RUN_DIR", tmp_path)
+    monkeypatch.setattr(updater, "repo_root", lambda: tmp_path)
+    assets = tmp_path / "web" / "dist" / "assets"
+    assets.mkdir(parents=True)
+    (assets / "index-abc123.js").write_text("x" * 270_000)
+    monkeypatch.setattr(updater, "_run", lambda cmd, timeout=300, cwd=None:
+                        subprocess.CompletedProcess(cmd, 0, "", ""))
+    updater._build({"web/src/App.jsx"})          # no exception
+
+
+def test_a_failed_build_rolls_back_without_restarting(tmp_path, monkeypatch):
+    """Restarting is what makes a bad build the running code. The health check
+    judges the daemon, which can be perfectly healthy on a camera whose web
+    interface is gone -- so the restart must not happen at all."""
+    monkeypatch.setattr(config, "RUN_DIR", tmp_path)
+    checkouts, restarted = [], []
+
+    def fake_run(cmd, timeout=300, cwd=None):
+        if cmd[:2] == ["git", "checkout"]:
+            checkouts.append(cmd[-1])
+        return subprocess.CompletedProcess(cmd, 0, "priorsha", "")
+
+    monkeypatch.setattr(updater, "_run", fake_run)
+    monkeypatch.setattr(updater, "_changed_paths", lambda a, b: {"web/src/App.jsx"})
+    monkeypatch.setattr(updater, "_restart_services",
+                        lambda: restarted.append(True) or (True, ""))
+
+    calls = {"n": 0}
+
+    def build(changed):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise updater.BuildFailed("the web build produced no bundle")
+
+    monkeypatch.setattr(updater, "_build", build)
+
+    result = updater.apply("v9.9.9", apply_now=True)
+    assert result["ok"] is False and result["rolled_back"] is True
+    assert checkouts == ["v9.9.9", "priorsha"], "did not return to the old code"
+    assert "no bundle" in updater.status()["reason"]
+    # One restart, on the way back -- not one into the broken build.
+    assert len(restarted) == 1
+
+
+def test_a_rollback_that_cannot_rebuild_says_it_is_the_machine(tmp_path, monkeypatch):
+    """If the old code will not build either, the release is not the problem
+    and telling someone to try a different version wastes their evening."""
+    monkeypatch.setattr(config, "RUN_DIR", tmp_path)
+    monkeypatch.setattr(updater, "_run", lambda cmd, timeout=300, cwd=None:
+                        subprocess.CompletedProcess(cmd, 0, "priorsha", ""))
+    monkeypatch.setattr(updater, "_changed_paths", lambda a, b: {"web/src/App.jsx"})
+    monkeypatch.setattr(updater, "_build", lambda changed: (_ for _ in ()).throw(
+        updater.BuildFailed("No space left on device")))
+
+    result = updater.apply("v9.9.9", apply_now=True)
+    assert result["ok"] is False
+    assert updater.status()["state"] == "error"
+    assert "storage" in updater.status()["reason"]
