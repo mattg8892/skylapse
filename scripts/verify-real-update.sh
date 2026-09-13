@@ -50,6 +50,11 @@ git config --system --add safe.directory "$ROOT_DIR"
 
 install -d -o "$USER_NAME" -g "$USER_NAME" /etc/skylapse /var/lib/skylapse \
         /var/lib/skylapse/images
+# systemd makes this on a camera, via RuntimeDirectory= in the units. Nothing
+# starts those units here, and without it the updater dies on its very first
+# status write -- which it did, and the check then reported PASS, because a run
+# that never happened changes nothing for the later assertions to catch.
+install -d -o "$USER_NAME" -g "$USER_NAME" -m 0755 /run/skylapse
 chown -R "$USER_NAME:$USER_NAME" "$ROOT_DIR"
 
 # The privileged half of install.sh, verbatim.
