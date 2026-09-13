@@ -5,6 +5,7 @@ from unittest import mock
 
 from skylapse import config
 from skylapse.daemon.dewheater import DewHeater, HeaterController, dewpoint_c
+import json
 
 
 # -- dewpoint (checked against published psychrometric values) --------------
@@ -384,3 +385,150 @@ def test_the_wider_margin_actually_fires_earlier():
     new = HeaterController(5.0, 8.0)
     assert old.update(air, rh) is False, "precondition: the old rule waits"
     assert new.update(air, rh) is True, "the new rule heats while the air looks dry"
+
+
+# -- one pin, two processes --------------------------------------------------
+
+def test_the_daemon_releases_the_pin_when_the_feature_is_switched_off(monkeypatch, tmp_path):
+    """Reported from the rig: "when i do try to run the test i get gpio busy".
+
+    A GPIO can be held by one process. Since 0.5.16 the daemon takes this one
+    on construction -- correctly, so a restart clears a latched heater -- and
+    then never let go. Turning the heater off in the UI left the daemon holding
+    it, so the API's test pulse could not open it. The one button for checking
+    your wiring stopped working the moment you switched the heater on.
+    """
+    from skylapse import config
+    from skylapse.daemon import main as dmain
+
+    monkeypatch.setattr(config, "CONFIG_PATH", tmp_path / "config.yaml")
+    closed = []
+
+    class FakeHeater:
+        def close(self): closed.append(True)
+
+    obj = dmain.CaptureDaemon.__new__(dmain.CaptureDaemon)
+    obj.cfg = config.Config()
+    obj.cfg.dew_heater.experimental_enabled = False
+    obj.dewheater = FakeHeater()
+
+    obj._reconcile_dewheater()
+    assert closed, "the pin was never released"
+    assert obj.dewheater is None
+
+
+def test_the_daemon_takes_the_pin_when_the_feature_is_switched_on(monkeypatch, tmp_path):
+    """And the other direction, which also did not work: the heater was decided
+    once at startup, so enabling it in the UI did nothing until a restart."""
+    from skylapse import config
+    from skylapse.daemon import main as dmain
+
+    monkeypatch.setattr(config, "CONFIG_PATH", tmp_path / "config.yaml")
+    built = []
+    monkeypatch.setattr(dmain, "DewHeater",
+                        lambda *a: built.append(a) or object())
+
+    obj = dmain.CaptureDaemon.__new__(dmain.CaptureDaemon)
+    obj.cfg = config.Config()
+    obj.cfg.dew_heater.experimental_enabled = True
+    obj.dewheater = None
+
+    obj._reconcile_dewheater()
+    assert built, "enabling the heater did not build it"
+    assert obj.dewheater is not None
+
+
+def test_reconciling_twice_does_not_churn(monkeypatch, tmp_path):
+    """It runs every loop iteration, so it must be a no-op when nothing has
+    changed -- rebuilding the heater every frame would re-open the pin
+    continuously and log a line each time."""
+    from skylapse import config
+    from skylapse.daemon import main as dmain
+
+    monkeypatch.setattr(config, "CONFIG_PATH", tmp_path / "config.yaml")
+    built = []
+    monkeypatch.setattr(dmain, "DewHeater",
+                        lambda *a: built.append(a) or object())
+
+    obj = dmain.CaptureDaemon.__new__(dmain.CaptureDaemon)
+    obj.cfg = config.Config()
+    obj.cfg.dew_heater.experimental_enabled = True
+    obj.dewheater = None
+
+    for _ in range(5):
+        obj._reconcile_dewheater()
+    assert len(built) == 1, f"rebuilt the heater {len(built)} times"
+
+
+def test_the_test_pulse_runs_in_the_daemon(monkeypatch, tmp_path):
+    """Because that is the process that owns the pin. The API asks."""
+    from skylapse import config
+    from skylapse.daemon import main as dmain
+
+    monkeypatch.setattr(config, "RUN_DIR", tmp_path)
+    monkeypatch.setattr(config, "CONFIG_PATH", tmp_path / "config.yaml")
+    (tmp_path / "dewheater_test").write_text("30")
+
+    ran = []
+    monkeypatch.setattr(dmain.dewheater_mod, "test_pulse",
+                        lambda pin, seconds: ran.append((pin, seconds)) or
+                        {"ok": True, "seconds": seconds})
+
+    obj = dmain.CaptureDaemon.__new__(dmain.CaptureDaemon)
+    obj.cfg = config.Config()
+    obj.dewheater = None
+    obj._poll_dewheater_test()
+
+    assert ran == [(18, 30.0)]
+    assert not (tmp_path / "dewheater_test").exists(), "command file not consumed"
+    result = json.loads((tmp_path / "dewheater_test_result.json").read_text())
+    assert result["ok"] is True and result["seconds"] == 30.0
+
+
+def test_a_running_heater_lets_go_for_the_duration_of_a_test(monkeypatch, tmp_path):
+    """Otherwise the test cannot open the pin even from inside the daemon --
+    which is the same bug one layer down."""
+    from skylapse import config
+    from skylapse.daemon import main as dmain
+
+    monkeypatch.setattr(config, "RUN_DIR", tmp_path)
+    monkeypatch.setattr(config, "CONFIG_PATH", tmp_path / "config.yaml")
+    (tmp_path / "dewheater_test").write_text("5")
+
+    closed = []
+
+    class FakeHeater:
+        def close(self): closed.append(True)
+
+    monkeypatch.setattr(dmain.dewheater_mod, "test_pulse",
+                        lambda pin, seconds: {"ok": True, "seconds": seconds})
+
+    obj = dmain.CaptureDaemon.__new__(dmain.CaptureDaemon)
+    obj.cfg = config.Config()
+    obj.dewheater = FakeHeater()
+    obj._poll_dewheater_test()
+
+    assert closed, "the live heater kept the pin during the test"
+    assert obj.dewheater is None, "left dangling; reconcile rebuilds it next loop"
+
+
+def test_close_releases_the_gpio_object(monkeypatch):
+    """The actual release, as opposed to dropping the reference and hoping the
+    garbage collector gets to it before the next open."""
+    from skylapse.daemon import dewheater
+
+    closed = []
+
+    class FakePin:
+        def __init__(self, *a, **kw): pass
+        value = False
+        def close(self): closed.append(True)
+
+    monkeypatch.setitem(__import__("sys").modules, "gpiozero",
+                        type("M", (), {"OutputDevice": FakePin}))
+    monkeypatch.setattr(dewheater, "find_sensor", lambda: None)
+
+    heater = dewheater.DewHeater(18, 5.0, 8.0)
+    heater.close()
+    assert closed, "close() did not release the pin"
+    assert not hasattr(heater, "_pin")

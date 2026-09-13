@@ -101,6 +101,24 @@ class DewHeater:
         if self.available:
             self._set_gpio(False)
 
+    def close(self) -> None:
+        """Switch off and let go of the pin.
+
+        A GPIO can only be held by one process. The daemon opens this pin on
+        construction and used to keep it for its whole life, so turning the
+        feature off in the UI left the pin still held -- and the API's test
+        pulse, which runs in a different process, failed with "GPIO busy" with
+        no way for anyone to see why.
+        """
+        self.off()
+        pin = getattr(self, "_pin", None)
+        if pin is not None:
+            try:
+                pin.close()
+            except Exception:
+                log.debug("Could not close the heater pin", exc_info=True)
+            del self._pin
+
     # -- hardware touch-points: UNVERIFIED, isolated on purpose --------------
 
     def _probe_sensor(self) -> bool:

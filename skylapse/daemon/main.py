@@ -24,6 +24,7 @@ from .focus import (DEFAULT_EXPOSURE_MS as FOCUS_DEFAULT_EXPOSURE_MS,
                     TIMEOUT_S as FOCUS_TIMEOUT, FocusSession, sharpness)
 from . import aurora
 from . import sdnotify
+from . import dewheater as dewheater_mod
 from .dewheater import DewHeater
 from .pipeline.analyze import star_count
 from .. import notify
@@ -75,7 +76,7 @@ FOCUS_FRAME_GAP_S = 0.35
 MIN_GAIN = 1
 # Command files the UI drops in RUN_DIR. Seeing any of these ends a gap early.
 COMMAND_FILES = ("focus_start", "focus_stop", "keeper_cmd", "resume_cmd",
-                 "focus_cmd.json")
+                 "focus_cmd.json", "dewheater_test")
 
 
 
@@ -282,6 +283,8 @@ class CaptureDaemon:
             # that has stopped going round at all is not.
             sdnotify.ping()
             self.cfg = config.load()          # cheap; picks up UI changes
+            self._reconcile_dewheater()
+            self._poll_dewheater_test()
             cam = self.cfg.camera(self.camera_id)
             profile = profile_for(self.cfg, cam)
             # Watchdog first, so a stall is noticed even on iterations that end
@@ -676,6 +679,54 @@ class CaptureDaemon:
                             # rather than looking like it lost the reading.
                             "rebaselined": time.monotonic() - self.focus_rebaselined_at < 4,
                             **info})
+
+    def _reconcile_dewheater(self) -> None:
+        """Build or release the heater to match the config, every iteration.
+
+        It used to be decided once at startup, so turning the feature on in the
+        UI did nothing until the next restart, and turning it *off* left the
+        daemon holding GPIO 18 for ever. That second half is what made the test
+        pulse fail with "GPIO busy": a pin can be held by one process, the
+        daemon had it, and the test runs in the API.
+        """
+        want = self.cfg.dew_heater.experimental_enabled
+        if want and self.dewheater is None:
+            dh = self.cfg.dew_heater
+            log.info("Dew heater enabled; taking GPIO %d", dh.gpio_pin)
+            self.dewheater = DewHeater(dh.gpio_pin, dh.on_margin_c, dh.off_margin_c)
+        elif not want and self.dewheater is not None:
+            log.info("Dew heater disabled; releasing the pin")
+            self.dewheater.close()
+            self.dewheater = None
+
+    def _poll_dewheater_test(self) -> None:
+        """Run a commissioning pulse here, because this is where the pin lives.
+
+        The API used to drive the pin itself. That worked only while the
+        feature was switched off and nothing else held the pin -- the moment
+        anyone enabled the heater, the one button for testing their wiring
+        started failing with "GPIO busy", which is precisely backwards.
+        """
+        cmd = config.RUN_DIR / "dewheater_test"
+        if not cmd.exists():
+            return
+        try:
+            seconds = float(cmd.read_text().strip() or 0)
+        except (OSError, ValueError):
+            seconds = 0.0
+        cmd.unlink(missing_ok=True)
+
+        held = self.dewheater is not None
+        if held:
+            # Let go for the duration; _reconcile_dewheater rebuilds it on the
+            # next iteration. Cleaner than a second code path that drives the
+            # pin through the live controller and has to put it back.
+            self.dewheater.close()
+            self.dewheater = None
+        result = dewheater_mod.test_pulse(self.cfg.dew_heater.gpio_pin, seconds)
+        log.info("Dew heater test: %s", result)
+        config.write_run_file("dewheater_test_result.json",
+                              json.dumps({**result, "at": time.time()}))
 
     def _poll_keeper_command(self) -> None:
         """UI 'save RAW' button: dump the rolling raw buffer to DNGs."""

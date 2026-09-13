@@ -22,6 +22,7 @@ from .. import (__version__, auth, config, notify, remote, setup, updater,
                 usbexport, zwosdk)
 from ..daemon.pipeline import process
 from ..daemon.scheduler import profile_for
+from ..daemon import dewheater
 from ..daemon.watchdog import stall_threshold_s
 
 app = FastAPI(title="Skylapse", version="0.1.0")
@@ -870,16 +871,36 @@ def dewheater_test(body: DewHeaterTest | None = None) -> dict:
     Capped hard, and the pin is switched off in a finally block so a dropped
     connection cannot leave it on.
     """
-    from ..daemon import dewheater
-
     # Optional body: a plain POST means the default pulse. It was required,
     # and the button sends none -- so the one control for commissioning a
     # heater answered 422, and the settings page went black rendering it.
     seconds = body.seconds if body else DewHeaterTest().seconds
-    result = dewheater.test_pulse(config.load().dew_heater.gpio_pin, seconds)
-    if not result.get("ok"):
-        raise HTTPException(500, result.get("error", "could not drive the pin"))
-    return {**result, "note": "pin is off again"}
+    seconds = max(0.5, min(float(seconds), dewheater.TEST_MAX_SECONDS))
+
+    # Asked of the daemon rather than done here. A GPIO belongs to one process,
+    # and the daemon holds this one whenever the heater is switched on -- so
+    # driving it from the API worked only while the feature was off, and the
+    # moment anyone enabled their heater the one button for testing their
+    # wiring started failing with "GPIO busy". Reported from the rig.
+    result_path = config.RUN_DIR / "dewheater_test_result.json"
+    result_path.unlink(missing_ok=True)
+    config.write_run_file("dewheater_test", str(seconds))
+
+    # The pulse runs for `seconds`, so the answer cannot arrive sooner. Waiting
+    # for it here keeps the button's contract -- it returns when the test is
+    # done, having actually done it.
+    deadline = time.time() + seconds + 30
+    while time.time() < deadline:
+        try:
+            result = json.loads(result_path.read_text())
+        except (OSError, json.JSONDecodeError):
+            time.sleep(0.5)
+            continue
+        if not result.get("ok"):
+            raise HTTPException(500, result.get("error", "could not drive the pin"))
+        return {**result, "note": "pin is off again"}
+
+    raise HTTPException(504, "the capture daemon did not run the test — is it running?")
 
 
 class DewHeaterSettings(BaseModel):

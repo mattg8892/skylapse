@@ -88,16 +88,37 @@ def client(tmp_path, monkeypatch):
     return TestClient(api.app)
 
 
+def _fake_daemon(monkeypatch):
+    """Answer the command file the way the capture daemon does.
+
+    The pulse runs in the daemon now, because that is the process that owns the
+    GPIO -- driving it from the API failed with "GPIO busy" the moment anyone
+    switched their heater on. So the endpoint writes a request and waits, and
+    these tests have to play the other half.
+    """
+    import json as _json
+
+    from skylapse import config
+    real_write = config.write_run_file
+
+    def answer(name, text):
+        real_write(name, text)
+        if name == "dewheater_test":
+            real_write("dewheater_test_result.json",
+                       _json.dumps({"ok": True, "seconds": float(text),
+                                    "gpio_pin": 18,
+                                    "pin_factory": "LGPIOFactory"}))
+
+    monkeypatch.setattr(config, "write_run_file", answer)
+
+
 def test_the_heater_test_accepts_the_request_the_button_sends(client, monkeypatch):
     """The button posts no body. That has to mean "the default pulse", not 422.
 
     This is the actual regression: the endpoint declared a required body, the
     UI sent none, and the resulting validation error is what blanked the page.
     """
-    from skylapse.daemon import dewheater
-    monkeypatch.setattr(dewheater, "test_pulse",
-                        lambda pin, seconds: {"ok": True, "seconds": seconds,
-                                              "gpio_pin": pin})
+    _fake_daemon(monkeypatch)
     r = client.post("/api/dewheater/test")          # no body, exactly as the UI does
     assert r.status_code == 200, \
         f"the commissioning button gets {r.status_code}: {r.text[:200]}"
@@ -105,11 +126,20 @@ def test_the_heater_test_accepts_the_request_the_button_sends(client, monkeypatc
 
 
 def test_an_explicit_duration_is_still_honoured(client, monkeypatch):
-    from skylapse.daemon import dewheater
-    monkeypatch.setattr(dewheater, "test_pulse",
-                        lambda pin, seconds: {"ok": True, "seconds": seconds})
+    _fake_daemon(monkeypatch)
     assert client.post("/api/dewheater/test",
                        json={"seconds": 2}).json()["seconds"] == 2
+
+
+def test_a_daemon_that_never_answers_is_reported_rather_than_hung_on(client, monkeypatch):
+    """With the capture daemon down, nothing will ever run the pulse. Saying so
+    beats a request that hangs until the browser gives up -- and the clock is
+    stubbed here so the test does not wait out the real deadline either."""
+    import itertools
+    monkeypatch.setattr(api.time, "time", itertools.count(0, 1000).__next__)
+    r = client.post("/api/dewheater/test", json={"seconds": 1})
+    assert r.status_code == 504
+    assert "daemon" in r.json()["detail"]
 
 
 NODE = shutil.which("node")
