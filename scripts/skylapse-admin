@@ -96,7 +96,8 @@ usage() {
     echo "                       |tailscale-install|tailscale-up" >&2
     echo "                       |tailscale-serve|tailscale-down|tailscale-status" >&2
     echo "                       |reinstall-units|i2c-enable" >&2
-    echo "                       |logs-persist|logs [unit] [lines]}" >&2
+    echo "                       |logs-persist|logs [unit] [lines]" >&2
+    echo "                       |gpio-info <pin>}" >&2
     exit 2
 }
 
@@ -483,6 +484,39 @@ CONF
     else
         journalctl -n "$lines" --no-pager -u "$unit"
     fi
+    ;;
+
+  gpio-info)
+    # Who owns a GPIO line.
+    #
+    # "GPIO busy" says a line is claimed and nothing says by whom, which is a
+    # dead end on a rig with no terminal: the heater pin came back busy with
+    # the feature switched off and every process of ours provably not holding
+    # it. The kernel knows the answer and there was no way to ask.
+    pin="${2:-18}"
+    case "$pin" in
+        ''|*[!0-9]*) echo "pin must be a number" >&2; exit 3 ;;
+    esac
+    [ "$pin" -le 27 ] || { echo "not a header GPIO: $pin" >&2; exit 3; }
+
+    echo "--- pinctrl ---"
+    if command -v pinctrl >/dev/null 2>&1; then
+        pinctrl get "$pin" 2>&1 || true
+    else
+        echo "(pinctrl not installed)"
+    fi
+
+    echo "--- kernel consumers ---"
+    # The debugfs view names the driver or process holding each line. Only root
+    # can read it, which is the whole reason this lives in the helper.
+    if [ -r /sys/kernel/debug/gpio ]; then
+        grep -E "gpio-${pin}|GPIO${pin}" /sys/kernel/debug/gpio ||             echo "(line $pin is not listed as claimed)"
+    else
+        echo "(/sys/kernel/debug/gpio not readable)"
+    fi
+
+    echo "--- boot config ---"
+    grep -E "^gpio=|^dtoverlay=|^dtparam=audio" "$CONFIG" 2>/dev/null ||         echo "(nothing relevant in $CONFIG)"
     ;;
 
   *) usage ;;

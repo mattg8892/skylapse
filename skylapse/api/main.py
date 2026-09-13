@@ -767,7 +767,21 @@ def dewheater_diagnostics() -> dict:
     switch on -- no LED, nothing on a thermal camera -- because at that point
     the card could say what it had tried and not what was actually there."""
     from ..daemon import dewheater
-    return dewheater.diagnostics()
+    info = dewheater.diagnostics()
+    # Who holds the pin, if anyone. "GPIO busy" names no owner, which on a rig
+    # with no terminal is a dead end -- the heater pin came back busy with the
+    # feature off and every process of ours provably not holding it.
+    pin = config.load().dew_heater.gpio_pin
+    info["gpio_pin"] = pin
+    helper = str(Path(__file__).resolve().parents[2] / "scripts" / "skylapse-admin")
+    try:
+        probe = subprocess.run(
+            ["sudo", "-n", helper, "gpio-info", str(pin)],
+            capture_output=True, text=True, timeout=30)
+        info["pin_owner"] = (probe.stdout or probe.stderr or "").strip()[:1200]
+    except Exception as exc:                 # never fail diagnostics on this
+        info["pin_owner"] = f"could not inspect the pin: {exc}"
+    return info
 
 
 LOG_UNITS = {"skylapse-daemon", "skylapse-api", "skylapse-netwatch", "all"}

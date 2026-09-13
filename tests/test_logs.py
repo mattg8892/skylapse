@@ -114,3 +114,43 @@ def test_the_helper_refuses_units_that_are_not_ours():
     block = admin.split("\n  logs)", 1)[1][:1200]
     assert "unknown unit" in block
     assert "skylapse-daemon" in block
+
+
+# -- naming the owner of a busy pin ------------------------------------------
+
+def test_gpio_info_refuses_a_pin_that_is_not_a_header_gpio():
+    """The value reaches a root command line."""
+    admin = (REPO / "scripts" / "skylapse-admin").read_text(encoding="utf-8")
+    block = admin.split("\n  gpio-info)", 1)[1][:1200]
+    assert "pin must be a number" in block
+    assert "not a header GPIO" in block
+
+
+def test_gpio_info_reports_the_kernel_consumer():
+    """"GPIO busy" names no owner, which on a rig with no terminal is a dead
+    end: the heater pin came back busy with the feature switched off and every
+    process of ours provably not holding it. The kernel knows; nothing could
+    ask it."""
+    admin = (REPO / "scripts" / "skylapse-admin").read_text(encoding="utf-8")
+    block = admin.split("\n  gpio-info)", 1)[1][:1600]
+    assert "/sys/kernel/debug/gpio" in block, "does not ask the kernel who holds it"
+    assert "pinctrl" in block, "does not report the pin's current function"
+
+
+def test_diagnostics_includes_the_pin_owner(client, monkeypatch):
+    monkeypatch.setattr(api.subprocess, "run",
+                        lambda cmd, *a, **kw:
+                        subprocess.CompletedProcess(cmd, 0, "18: op dl", ""))
+    body = client.get("/api/dewheater/diagnostics").json()
+    assert "pin_owner" in body
+    assert body["gpio_pin"] == 18
+
+
+def test_diagnostics_survives_a_failed_pin_probe(client, monkeypatch):
+    """Diagnostics is what you reach for when things are already broken. It
+    must not be the next thing that breaks."""
+    def boom(*a, **kw):
+        raise OSError("no sudo here")
+    monkeypatch.setattr(api.subprocess, "run", boom)
+    body = client.get("/api/dewheater/diagnostics").json()
+    assert "could not inspect" in body["pin_owner"]
