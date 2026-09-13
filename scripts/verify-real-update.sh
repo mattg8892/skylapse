@@ -109,7 +109,18 @@ note "updater exited $update_rc"
 
 echo
 echo "== what survived =="
-note "version:  $(git -C "$ROOT_DIR" describe --tags --always 2>/dev/null)"
+landed="$(git -C "$ROOT_DIR" describe --tags --always 2>/dev/null)"
+note "version:  $landed"
+
+# Before anything else. The first run of this check reported PASS while the
+# updater had crashed on its first line and the tree was still on the old
+# release: every assertion below held because nothing had happened. A check
+# that cannot tell "it worked" from "it never ran" is worse than no check.
+[ "$update_rc" -eq 0 ] || fail "the updater exited $update_rc -- the update did not run,
+so nothing below would be testing an updated camera"
+[ "$landed" = "$TO_REF" ] || fail "the tree is on '$landed', not '$TO_REF' --
+the update did not land, so the checks below prove nothing"
+pass "the update actually landed on $TO_REF"
 note "owner:    $(stat -c %U "$ROOT_DIR")"
 note "sudoers:  $(tail -1 /etc/sudoers.d/skylapse 2>/dev/null || echo 'MISSING')"
 
