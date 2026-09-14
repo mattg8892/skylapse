@@ -642,6 +642,23 @@ def test_the_updater_installs_the_same_extras_as_the_installer():
         f"{sorted(from_updater)}; an updated camera and an imaged one would differ")
 
 
+def test_the_two_version_declarations_agree():
+    """__version__ and pyproject.toml both claim to be the version, and only
+    one of them is what the updater compares against the release tag. v0.5.23
+    shipped with pyproject bumped and __init__ forgotten: the rig installed
+    the new code, reported the old version, and offered itself the same
+    update forever -- while telling the user each attempt had succeeded."""
+    import re
+    from pathlib import Path
+    from skylapse import __version__
+    root = Path(__file__).resolve().parents[1]
+    pyproject = (root / "pyproject.toml").read_text(encoding="utf-8")
+    declared = re.search(r'^version\s*=\s*"([^"]+)"', pyproject, re.M).group(1)
+    assert declared == __version__, (
+        f"pyproject.toml says {declared} but skylapse.__version__ says "
+        f"{__version__}; the updater will loop on its own release")
+
+
 def test_every_declared_extra_is_actually_installed_somewhere():
     """An extra nobody installs is a feature that silently cannot work."""
     import re
