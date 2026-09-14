@@ -792,22 +792,36 @@ def dewheater_diagnostics() -> dict:
     return info
 
 
-LOG_UNITS = {"skylapse-daemon", "skylapse-api", "skylapse-netwatch", "all"}
+LOG_UNITS = {"skylapse-daemon", "skylapse-api", "skylapse-netwatch", "all",
+             "kernel"}
+
+# How far back a boot selector may reach. The journal is capped at ten files,
+# so anything past recent history is gone anyway; the bound is here because the
+# value reaches a root command line.
+LOG_MAX_BOOTS_BACK = 50
 
 
-def _read_logs(unit: str, lines: int) -> str:
+def _read_logs(unit: str, lines: int, boot: int | None = None) -> str:
     """Recent journal for one of our units, via the privileged helper.
 
     The API runs unprivileged and cannot read another unit's journal. Adding
     the service user to systemd-journal would grant that permanently and for
     every unit on the box; going through the helper keeps it to one audited
     path with a closed list of unit names.
+
+    `kernel` is in that list by name only -- it is journalctl -k. It is the
+    record of the one failure our own units cannot report: the whole machine
+    going down. `boot` counts backwards, 0 for this boot, 1 for the one
+    before; the journal is persistent precisely so that the reboot that
+    recovers the camera does not destroy the record of what killed it.
     """
     if unit not in LOG_UNITS:
         raise HTTPException(400, f"unknown unit {unit!r}")
     helper = str(Path(__file__).resolve().parents[2] / "scripts" / "skylapse-admin")
-    result = subprocess.run(["sudo", "-n", helper, "logs", unit, str(lines)],
-                            capture_output=True, text=True, timeout=60)
+    cmd = ["sudo", "-n", helper, "logs", unit, str(lines)]
+    if boot is not None:
+        cmd.append(str(max(0, min(int(boot), LOG_MAX_BOOTS_BACK))))
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
     if result.returncode != 0:
         raise HTTPException(500, (result.stderr or "").strip()[:200]
                             or "could not read the logs")
@@ -815,23 +829,28 @@ def _read_logs(unit: str, lines: int) -> str:
 
 
 @app.get("/api/logs")
-def logs(unit: str = "all", lines: int = 500) -> dict:
+def logs(unit: str = "all", lines: int = 500, boot: int | None = None) -> dict:
     """What the camera has been saying.
 
     There is no SSH on this rig, so before this the only way to see a log was
     to already have one. Every post-mortem here has run into the same wall --
     and worse, journald shipped volatile, so the reboot that recovered the
     camera destroyed the record of why it needed recovering.
+
+    unit=kernel with boot=1 is the post-mortem call: the kernel's last words
+    from the boot before this one.
     """
     lines = max(1, min(int(lines), 5000))
-    return {"unit": unit, "lines": lines, "text": _read_logs(unit, lines)}
+    return {"unit": unit, "lines": lines, "boot": boot,
+            "text": _read_logs(unit, lines, boot)}
 
 
 @app.get("/api/logs/download")
-def logs_download(unit: str = "all", lines: int = 5000) -> Response:
+def logs_download(unit: str = "all", lines: int = 5000,
+                  boot: int | None = None) -> Response:
     """The same thing as a file, for attaching to a bug report."""
     lines = max(1, min(int(lines), 5000))
-    text = _read_logs(unit, lines)
+    text = _read_logs(unit, lines, boot)
     return Response(
         content=text, media_type="text/plain",
         headers={"Content-Disposition":

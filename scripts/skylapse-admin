@@ -96,7 +96,7 @@ usage() {
     echo "                       |tailscale-install|tailscale-up" >&2
     echo "                       |tailscale-serve|tailscale-down|tailscale-status" >&2
     echo "                       |reinstall-units|i2c-enable" >&2
-    echo "                       |logs-persist|logs [unit] [lines]" >&2
+    echo "                       |logs-persist|logs [unit] [lines] [boot]" >&2
     echo "                       |gpio-info <pin>}" >&2
     exit 2
 }
@@ -469,9 +469,15 @@ CONF
     # Read them back without a terminal. The API has no privilege to read other
     # units' logs, and adding the service user to systemd-journal would grant
     # it permanently; going through here keeps it to one audited path.
+    #
+    # `kernel` is a unit here in name only: it is journalctl -k, the kernel
+    # ring buffer. It exists because of the failure our own units cannot see —
+    # the whole machine going down. On 2026-09-13 all three services went
+    # silent mid-line at once, no watchdog fired, and the only witness was the
+    # kernel, whose log nothing could read.
     unit="${2:-skylapse-daemon}"
     case "$unit" in
-        skylapse-daemon|skylapse-api|skylapse-netwatch|all) ;;
+        skylapse-daemon|skylapse-api|skylapse-netwatch|all|kernel) ;;
         *) echo "unknown unit: $unit" >&2; exit 3 ;;
     esac
     lines="${3:-500}"
@@ -479,10 +485,29 @@ CONF
         ''|*[!0-9]*) echo "lines must be a number" >&2; exit 3 ;;
     esac
     [ "$lines" -gt 5000 ] && lines=5000
-    if [ "$unit" = "all" ]; then
-        journalctl -n "$lines" --no-pager             -u skylapse-daemon -u skylapse-api -u skylapse-netwatch
+    # Which boot, counting back: 0 is this one, 1 the one before. Absent, the
+    # tail runs across boots, which is what a long look back wants. The journal
+    # was made persistent precisely so the reboot that recovers the camera
+    # does not destroy the record of what killed it — but reading that record
+    # means being able to say "the previous boot". Validated as a number
+    # because it reaches a root command line.
+    boot="${4:-}"
+    bootsel=""
+    if [ -n "$boot" ]; then
+        case "$boot" in
+            *[!0-9]*) echo "boot must be a number" >&2; exit 3 ;;
+        esac
+        [ "$boot" -gt 50 ] && boot=50
+        # The long form: `-b -2` reads as two flags to anything that re-parses
+        # the line, and the short attached form has no room for the sign.
+        bootsel="--boot=-$boot"
+    fi
+    if [ "$unit" = "kernel" ]; then
+        journalctl -k ${bootsel:+"$bootsel"} -n "$lines" --no-pager
+    elif [ "$unit" = "all" ]; then
+        journalctl ${bootsel:+"$bootsel"} -n "$lines" --no-pager             -u skylapse-daemon -u skylapse-api -u skylapse-netwatch
     else
-        journalctl -n "$lines" --no-pager -u "$unit"
+        journalctl ${bootsel:+"$bootsel"} -n "$lines" --no-pager -u "$unit"
     fi
     ;;
 

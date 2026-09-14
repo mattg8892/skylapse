@@ -88,6 +88,66 @@ def test_a_helper_failure_is_reported(client, monkeypatch):
     assert client.get("/api/logs").status_code == 500
 
 
+def test_kernel_logs_are_reachable(client, monkeypatch):
+    """The one failure our own units cannot report is the whole machine going
+    down. On 2026-09-13 all three services went silent mid-line at once, no
+    watchdog fired, and the only witness was the kernel -- whose log nothing
+    could read."""
+    calls = []
+    monkeypatch.setattr(api.subprocess, "run",
+                        lambda cmd, *a, **kw: calls.append(cmd) or
+                        subprocess.CompletedProcess(cmd, 0, "oops\n", ""))
+    body = client.get("/api/logs?unit=kernel").json()
+    assert body["text"] == "oops\n"
+    assert calls[0][4] == "kernel"
+
+
+def test_a_boot_selector_reaches_the_helper(client, monkeypatch):
+    """The journal is persistent precisely so the reboot that recovers the
+    camera does not destroy the record of what killed it. Reading that record
+    means being able to say "the previous boot"."""
+    calls = []
+    monkeypatch.setattr(api.subprocess, "run",
+                        lambda cmd, *a, **kw: calls.append(cmd) or
+                        subprocess.CompletedProcess(cmd, 0, "", ""))
+    client.get("/api/logs?unit=kernel&boot=1")
+    assert calls[0][6] == "1"
+
+
+def test_no_boot_selector_means_no_boot_argument(client, monkeypatch):
+    """Absent, the tail runs across boots -- the long look back. A default of
+    boot=0 would silently pin every existing caller to the current boot."""
+    calls = []
+    monkeypatch.setattr(api.subprocess, "run",
+                        lambda cmd, *a, **kw: calls.append(cmd) or
+                        subprocess.CompletedProcess(cmd, 0, "", ""))
+    client.get("/api/logs?unit=skylapse-daemon")
+    assert len(calls[0]) == 6, "a boot argument was passed unasked"
+
+
+def test_the_boot_selector_is_bounded(client, monkeypatch):
+    """The value reaches a root command line."""
+    calls = []
+    monkeypatch.setattr(api.subprocess, "run",
+                        lambda cmd, *a, **kw: calls.append(cmd) or
+                        subprocess.CompletedProcess(cmd, 0, "", ""))
+    client.get("/api/logs?unit=kernel&boot=99999")
+    assert int(calls[0][6]) <= api.LOG_MAX_BOOTS_BACK
+    calls.clear()
+    client.get("/api/logs?unit=kernel&boot=-3")
+    assert int(calls[0][6]) >= 0
+
+
+def test_the_helper_knows_the_kernel_and_validates_the_boot():
+    """Both new values reach journalctl as root; the checks live in the
+    helper, beside the command they guard."""
+    admin = (REPO / "scripts" / "skylapse-admin").read_text(encoding="utf-8")
+    block = admin.split("\n  logs)", 1)[1].split("\n  gpio-info)", 1)[0]
+    assert "kernel" in block
+    assert "journalctl -k" in block
+    assert "boot must be a number" in block
+
+
 # -- the reason none of this worked before -----------------------------------
 
 def test_the_installer_makes_the_journal_persistent():
