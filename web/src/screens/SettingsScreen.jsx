@@ -685,7 +685,92 @@ function DewHeaterCard({ showToast }) {
         heat held just above the dewpoint prevents it.
       </p>
 
-      {!state.i2c_ready ? (
+      <div className="mt-4">
+        <Select label="Control" value={state.mode || 'auto'}
+          onChange={(mode) =>
+            send('/api/dewheater', { mode }, 'mode', mode === 'manual'
+              ? 'Manual — the switch below drives the heater'
+              : 'Automatic — the sensor drives the heater')}
+          options={[
+            { value: 'auto', label: 'Automatic (dewpoint sensor)' },
+            { value: 'manual', label: 'Manual switch (no sensor needed)' },
+          ]} />
+      </div>
+
+      {state.mode === 'manual' ? (
+        <div className="mt-4 space-y-4">
+          <label className="flex items-start justify-between gap-3 text-sm">
+            <span>
+              <span className="text-zinc-300">Run the heater</span>
+              <span className="mt-1 block text-xs text-zinc-500">
+                Manual mode: no sensor, no dewpoint — the switch below is the
+                whole control. The heater still shuts off with the daemon, so
+                a crash cannot leave it latched on.
+              </span>
+            </span>
+            <Toggle checked={state.enabled} label="Run the heater"
+              onChange={(experimental_enabled) =>
+                send('/api/dewheater', { experimental_enabled },
+                     'toggle', experimental_enabled
+                       ? 'Heater control on'
+                       : 'Heater control off')} />
+          </label>
+
+          {state.enabled && (
+            <label className="flex items-center justify-between gap-3 rounded-lg bg-zinc-800/60 p-3 text-sm">
+              <span className={state.manual_on ? 'text-amber-300' : 'text-zinc-400'}>
+                {state.manual_on ? 'Heater is on' : 'Heater is off'}
+              </span>
+              <Toggle checked={state.manual_on} label="Heater"
+                onChange={(manual_on) =>
+                  send('/api/dewheater', { manual_on }, 'switch',
+                       manual_on ? 'Heater on — takes effect within a frame'
+                                 : 'Heater off — takes effect within a frame')} />
+            </label>
+          )}
+
+          {reading?.temp_c != null && (
+            <div className="rounded-lg bg-zinc-800/60 p-3 text-sm">
+              <div className="flex justify-between">
+                <span className="text-zinc-400">Air</span>
+                <span className="tabular-nums text-zinc-200">
+                  {reading.temp_c}°C
+                </span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-zinc-400">Dewpoint</span>
+                <span className="tabular-nums text-zinc-200">
+                  {reading.dewpoint_c}°C
+                </span>
+              </div>
+              <p className="mt-2 text-xs text-zinc-600">
+                A sensor is present, so readings are shown — but in manual
+                mode they only inform; the switch decides.
+              </p>
+            </div>
+          )}
+
+          <div className="space-y-2">
+            <Select label="Test the heater for" value={testSeconds}
+              onChange={(v) => setTestSeconds(Number(v))}
+              options={[
+                { value: 15, label: '15 seconds' },
+                { value: 60, label: '1 minute' },
+                { value: 120, label: '2 minutes' },
+              ]} />
+            <Button className="w-full" disabled={!!busy}
+              onClick={async () => {
+                setPulse(null)
+                const d = await send('/api/dewheater/test', { seconds: testSeconds },
+                                     'test', 'Test finished — the heater is off',
+                                     'POST')
+                if (d?.ok) setPulse(d)
+              }}>
+              {busy === 'test' ? 'Heating…' : 'Run the test'}
+            </Button>
+          </div>
+        </div>
+      ) : !state.i2c_ready ? (
         <div className="mt-4 space-y-3">
           <p className="text-sm text-amber-300">
             The I²C bus is switched off, so no sensor can be found.

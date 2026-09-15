@@ -57,9 +57,12 @@ class DewHeater:
     """Hardware orchestration. Constructed only when the experimental flag is
     on; degrades to disabled if the sensor or GPIO stack is absent."""
 
-    def __init__(self, gpio_pin: int, on_margin_c: float, off_margin_c: float) -> None:
+    def __init__(self, gpio_pin: int, on_margin_c: float, off_margin_c: float,
+                 mode: str = "auto", manual_on: bool = False) -> None:
         self.controller = HeaterController(on_margin_c, off_margin_c)
         self.gpio_pin = gpio_pin
+        self.mode = mode
+        self.manual_on = manual_on
         # Known state before anything else, and before the first reading.
         #
         # A GPIO holds whatever it was last driven to. If the daemon is killed
@@ -73,15 +76,45 @@ class DewHeater:
         # This one does not: whatever state the pin was left in, the next start
         # clears it.
         self._set_gpio(False)
-        self.available = self._probe_sensor()
+        self.sensor_ok = self._probe_sensor()
+        # Manual mode is a plain switch and needs no sensor -- that is its
+        # whole reason to exist. Auto without a sensor has nothing to act on.
+        self.available = self.sensor_ok or self.mode == "manual"
         self.last: dict | None = None
         if not self.available:
             log.info("Dew heater: no BME280 detected; feature hidden")
+
+    def apply(self, cfg) -> None:
+        """Adopt config changes on a live heater, no teardown.
+
+        The daemon reloads config every loop iteration; margins, the mode and
+        the manual switch all need to land on the running controller, not on
+        the next restart. The switch especially: a person who flips 'heater
+        off' is owed the pin actually going low on the next tick, not after a
+        service bounce.
+        """
+        self.controller.on_margin = cfg.on_margin_c
+        self.controller.off_margin = cfg.off_margin_c
+        self.mode = cfg.mode
+        self.manual_on = cfg.manual_on
+        self.available = self.sensor_ok or self.mode == "manual"
 
     def tick(self) -> dict | None:
         """One control cycle. Returns status dict for the dashboard, or None."""
         if not self.available:
             return None
+        if self.mode == "manual":
+            self._set_gpio(self.manual_on)
+            # Readings are informational if a sensor happens to be present;
+            # the switch, not the dewpoint, is what drives the pin.
+            self.last = {"heating": self.manual_on, "mode": "manual"}
+            reading = self._read_bme280() if self.sensor_ok else None
+            if reading is not None:
+                temp, hum = reading
+                self.last.update(
+                    temp_c=round(temp, 1), humidity_pct=round(hum, 1),
+                    dewpoint_c=round(dewpoint_c(temp, hum), 1))
+            return self.last
         reading = self._read_bme280()
         if reading is None:
             return self.last
@@ -93,6 +126,7 @@ class DewHeater:
             "humidity_pct": round(hum, 1),
             "dewpoint_c": round(dewpoint_c(temp, hum), 1),
             "heating": heating,
+            "mode": "auto",
         }
         return self.last
 

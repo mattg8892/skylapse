@@ -106,6 +106,11 @@ class DewHeaterConfig(BaseModel):
     series inside a sealed dome, switched low-side by an LR7843."""
     experimental_enabled: bool = False
     gpio_pin: int = 18                   # BCM numbering; PWM-capable pin
+    # "auto" reads the BME280 and holds the glass above the dewpoint; "manual"
+    # is a plain switch for rigs with no sensor at all -- the pin follows
+    # manual_on and nothing is probed or computed.
+    mode: str = "auto"                   # "auto" | "manual"
+    manual_on: bool = False              # manual mode only: the switch position
     on_margin_c: float = DEFAULT_ON_MARGIN_C    # heat when within this of dewpoint
     off_margin_c: float = DEFAULT_OFF_MARGIN_C  # stop once clear by this much
 

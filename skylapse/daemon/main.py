@@ -168,7 +168,7 @@ class CaptureDaemon:
         dh = self.cfg.dew_heater
         # Experimental gate: flag off -> the subsystem is never even built.
         self.dewheater = DewHeater(dh.gpio_pin, dh.on_margin_c,
-                                   dh.off_margin_c) \
+                                   dh.off_margin_c, dh.mode, dh.manual_on) \
             if dh.experimental_enabled else None
 
     # -- lifecycle ---------------------------------------------------------
@@ -598,7 +598,7 @@ class CaptureDaemon:
         dh = self.cfg.dew_heater
         # Experimental gate: flag off -> the subsystem is never even built.
         self.dewheater = DewHeater(dh.gpio_pin, dh.on_margin_c,
-                                   dh.off_margin_c) \
+                                   dh.off_margin_c, dh.mode, dh.manual_on) \
             if dh.experimental_enabled else None
         resume_cmd = config.RUN_DIR / "resume_cmd"
         was_day = False
@@ -734,11 +734,17 @@ class CaptureDaemon:
         if want and self.dewheater is None:
             dh = self.cfg.dew_heater
             log.info("Dew heater enabled; taking GPIO %d", dh.gpio_pin)
-            self.dewheater = DewHeater(dh.gpio_pin, dh.on_margin_c, dh.off_margin_c)
+            self.dewheater = DewHeater(dh.gpio_pin, dh.on_margin_c,
+                                       dh.off_margin_c, dh.mode, dh.manual_on)
         elif not want and self.dewheater is not None:
             log.info("Dew heater disabled; releasing the pin")
             self.dewheater.close()
             self.dewheater = None
+        elif self.dewheater is not None:
+            # Margins, mode and the manual switch land on the live heater --
+            # someone flipping 'heater off' is owed the pin going low on the
+            # next tick, not after a restart.
+            self.dewheater.apply(self.cfg.dew_heater)
 
     def _poll_dewheater_test(self) -> None:
         """Run a commissioning pulse here, because this is where the pin lives.

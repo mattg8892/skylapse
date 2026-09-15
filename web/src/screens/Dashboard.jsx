@@ -377,7 +377,10 @@ function DewHeaterBanner({ daemon: d }) {
   const dew = d.dew
   if (!dew) return null                    // feature off, or no reading yet
 
-  const margin = dew.temp_c - dew.dewpoint_c
+  // Manual mode with no sensor reports only the switch state -- there is no
+  // dewpoint to show, and NaN°C is not a margin.
+  const hasReading = dew.temp_c != null && dew.dewpoint_c != null
+  const margin = hasReading ? dew.temp_c - dew.dewpoint_c : null
   return (
     <Card title="Dew heater"
       right={dew.heating
@@ -385,28 +388,34 @@ function DewHeaterBanner({ daemon: d }) {
             Heating
           </span>
         : <span className="text-sm text-zinc-500">Idle</span>}>
-      <dl className="mt-3 grid grid-cols-3 gap-3 text-sm">
-        <div>
-          <dt className="text-zinc-500">Air</dt>
-          <dd className="tabular-nums text-zinc-200">{dew.temp_c}°C</dd>
-        </div>
-        <div>
-          <dt className="text-zinc-500">Dewpoint</dt>
-          <dd className="tabular-nums text-zinc-200">{dew.dewpoint_c}°C</dd>
-        </div>
-        <div>
-          <dt className="text-zinc-500">Margin</dt>
-          <dd className={`tabular-nums ${margin <= 2 ? 'text-amber-300' : 'text-zinc-200'}`}>
-            {margin.toFixed(1)}°C
-          </dd>
-        </div>
-      </dl>
+      {hasReading && (
+        <dl className="mt-3 grid grid-cols-3 gap-3 text-sm">
+          <div>
+            <dt className="text-zinc-500">Air</dt>
+            <dd className="tabular-nums text-zinc-200">{dew.temp_c}°C</dd>
+          </div>
+          <div>
+            <dt className="text-zinc-500">Dewpoint</dt>
+            <dd className="tabular-nums text-zinc-200">{dew.dewpoint_c}°C</dd>
+          </div>
+          <div>
+            <dt className="text-zinc-500">Margin</dt>
+            <dd className={`tabular-nums ${margin <= 2 ? 'text-amber-300' : 'text-zinc-200'}`}>
+              {margin.toFixed(1)}°C
+            </dd>
+          </div>
+        </dl>
+      )}
       <p className="mt-3 text-xs text-zinc-500">
-        {dew.heating
-          ? 'Running until the air pulls clear of the dewpoint. A whole damp '
-            + 'night of this is normal — the sensor is outside, so heating the '
-            + 'glass does not change what it reads.'
-          : 'The air is clear enough of the dewpoint that the glass should stay dry.'}
+        {dew.mode === 'manual'
+          ? (dew.heating
+              ? 'On manually — it runs until the switch in Settings turns it off.'
+              : 'Off — switched manually in Settings.')
+          : dew.heating
+            ? 'Running until the air pulls clear of the dewpoint. A whole damp '
+              + 'night of this is normal — the sensor is outside, so heating the '
+              + 'glass does not change what it reads.'
+            : 'The air is clear enough of the dewpoint that the glass should stay dry.'}
       </p>
     </Card>
   )

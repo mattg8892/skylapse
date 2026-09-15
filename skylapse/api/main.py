@@ -761,6 +761,8 @@ def dewheater_status() -> dict:
         "i2c_ready": bus_ready,
         "sensor_found": sensor,
         "gpio_pin": cfg.dew_heater.gpio_pin,
+        "mode": cfg.dew_heater.mode,
+        "manual_on": cfg.dew_heater.manual_on,
         "on_margin_c": cfg.dew_heater.on_margin_c,
         "off_margin_c": cfg.dew_heater.off_margin_c,
         # What the daemon last measured, if it is running the heater at all.
@@ -946,17 +948,22 @@ def dewheater_test(body: DewHeaterTest | None = None) -> dict:
 
 class DewHeaterSettings(BaseModel):
     experimental_enabled: bool | None = None
+    mode: str | None = None              # "auto" | "manual"
+    manual_on: bool | None = None
     on_margin_c: float | None = None
     off_margin_c: float | None = None
 
 
 @app.put("/api/dewheater")
 def dewheater_configure(body: DewHeaterSettings) -> dict:
-    """Turn it on, or move the hysteresis band.
+    """Turn it on, move the hysteresis band, or work the manual switch.
 
     The band is two numbers and they are not independent: heating starts when
     the glass is within on_margin of the dewpoint and stops once it clears
     off_margin, so off must exceed on or the thing chatters on and off forever.
+
+    Manual mode exists for rigs with no BME280 at all: the pin follows
+    `manual_on`, nothing is probed, and the margins are simply not consulted.
     """
     cfg = config.load()
     dh = cfg.dew_heater
@@ -965,13 +972,20 @@ def dewheater_configure(body: DewHeaterSettings) -> dict:
     if off <= on:
         raise HTTPException(400, "the off margin has to be above the on margin, "
                                  "or the heater will chatter")
+    if body.mode is not None:
+        if body.mode not in ("auto", "manual"):
+            raise HTTPException(400, f"unknown heater mode {body.mode!r}")
+        dh.mode = body.mode
+    if body.manual_on is not None:
+        dh.manual_on = body.manual_on
     dh.on_margin_c, dh.off_margin_c = on, off
     if body.experimental_enabled is not None:
         dh.experimental_enabled = body.experimental_enabled
     config.save(cfg)
     return {"ok": True, "enabled": dh.experimental_enabled,
+            "mode": dh.mode, "manual_on": dh.manual_on,
             "on_margin_c": on, "off_margin_c": off,
-            "note": "the daemon picks this up on its next camera open"}
+            "note": "takes effect within a frame"}
 
 
 # -- time sync (standalone mode) --------------------------------------------

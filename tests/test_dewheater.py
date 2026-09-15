@@ -1,6 +1,7 @@
 """Dewpoint math, hysteresis behavior, and — most importantly — that the
 experimental flag OFF means the subsystem is never constructed at all."""
 import math
+from pathlib import Path
 from unittest import mock
 
 from skylapse import config
@@ -88,6 +89,72 @@ def test_off_forces_gpio_low():
         h.off()
     # Low on construction and low again on off(); both are the safe state.
     assert gpio.call_args_list == [mock.call(False), mock.call(False)]
+
+
+# -- manual mode --------------------------------------------------------------
+
+def test_manual_mode_needs_no_sensor():
+    """The whole reason manual exists: a rig with no BME280 can still run a
+    heater. Auto without a sensor hides the feature; manual must not."""
+    with mock.patch.object(DewHeater, "_probe_sensor", return_value=False), \
+         mock.patch.object(DewHeater, "_set_gpio") as gpio:
+        h = DewHeater(18, 2.0, 4.0, mode="manual", manual_on=True)
+        status = h.tick()
+    assert h.available is True
+    assert status == {"heating": True, "mode": "manual"}
+    assert gpio.call_args_list[-1] == mock.call(True)
+
+
+def test_manual_switch_drives_the_pin_not_the_dewpoint():
+    """Reading says 'soaking wet, heat now'; the switch says off. Off wins --
+    in manual mode the sensor only informs."""
+    with mock.patch.object(DewHeater, "_probe_sensor", return_value=True), \
+         mock.patch.object(DewHeater, "_read_bme280", return_value=(10.0, 98.0)), \
+         mock.patch.object(DewHeater, "_set_gpio") as gpio:
+        h = DewHeater(18, 2.0, 4.0, mode="manual", manual_on=False)
+        status = h.tick()
+    assert status["heating"] is False
+    assert status["temp_c"] == 10.0          # reading still shown, informational
+    assert gpio.call_args_list[-1] == mock.call(False)
+
+
+def test_apply_lands_the_switch_on_a_live_heater():
+    """The daemon reloads config each loop and calls apply() -- flipping the
+    switch must reach the pin on the next tick, not the next restart."""
+    from skylapse.config import DewHeaterConfig
+    with mock.patch.object(DewHeater, "_probe_sensor", return_value=False), \
+         mock.patch.object(DewHeater, "_set_gpio") as gpio:
+        h = DewHeater(18, 2.0, 4.0, mode="manual", manual_on=False)
+        h.tick()
+        assert gpio.call_args_list[-1] == mock.call(False)
+        h.apply(DewHeaterConfig(mode="manual", manual_on=True))
+        h.tick()
+        assert gpio.call_args_list[-1] == mock.call(True)
+
+
+def test_apply_can_change_mode_without_a_rebuild():
+    """Manual -> auto on a sensorless rig collapses to unavailable, exactly
+    as if it had been constructed that way."""
+    from skylapse.config import DewHeaterConfig
+    with mock.patch.object(DewHeater, "_probe_sensor", return_value=False), \
+         mock.patch.object(DewHeater, "_set_gpio"):
+        h = DewHeater(18, 2.0, 4.0, mode="manual", manual_on=True)
+        assert h.available is True
+        h.apply(DewHeaterConfig(mode="auto"))
+    assert h.available is False
+    assert h.tick() is None
+
+
+def test_off_still_works_in_sensorless_manual_mode():
+    """The daemon exit path calls off(); it must reach the pin even though
+    there is no sensor -- a heater left latched on is the historical failure
+    this module exists to prevent."""
+    with mock.patch.object(DewHeater, "_probe_sensor", return_value=False), \
+         mock.patch.object(DewHeater, "_set_gpio") as gpio:
+        h = DewHeater(18, 2.0, 4.0, mode="manual", manual_on=True)
+        h.tick()
+        h.off()
+    assert gpio.call_args_list[-1] == mock.call(False)
 
 
 # -- commissioning -----------------------------------------------------------
@@ -446,9 +513,10 @@ def test_reconciling_twice_does_not_churn(monkeypatch, tmp_path):
     from skylapse.daemon import main as dmain
 
     monkeypatch.setattr(config, "CONFIG_PATH", tmp_path / "config.yaml")
-    built = []
+    built, applied = [], []
+    fake = type("H", (), {"apply": lambda self, cfg: applied.append(cfg)})
     monkeypatch.setattr(dmain, "DewHeater",
-                        lambda *a: built.append(a) or object())
+                        lambda *a: built.append(a) or fake())
 
     obj = dmain.CaptureDaemon.__new__(dmain.CaptureDaemon)
     obj.cfg = config.Config()
@@ -458,6 +526,8 @@ def test_reconciling_twice_does_not_churn(monkeypatch, tmp_path):
     for _ in range(5):
         obj._reconcile_dewheater()
     assert len(built) == 1, f"rebuilt the heater {len(built)} times"
+    # No churn does not mean no updates: config lands via apply() each pass.
+    assert len(applied) == 4
 
 
 def test_the_test_pulse_runs_in_the_daemon(monkeypatch, tmp_path):
@@ -570,3 +640,59 @@ def test_reading_the_status_does_not_touch_the_gpio(monkeypatch, tmp_path):
     body = TestClient(api.app).get("/api/dewheater").json()
     assert body["sensor_found"] is True
     assert not opened, "the status endpoint opened the heater pin"
+
+
+def test_the_api_round_trips_the_manual_switch(monkeypatch, tmp_path):
+    """Mode and switch go through PUT /api/dewheater and come back from GET —
+    the card cannot offer a switch the config cannot hold."""
+    from fastapi.testclient import TestClient
+    from skylapse.api import main as api
+
+    monkeypatch.setattr(config, "CONFIG_PATH", tmp_path / "config.yaml")
+    monkeypatch.setattr(config, "RUN_DIR", tmp_path / "run")
+    config.save(config.Config())
+    client = TestClient(api.app)
+
+    r = client.put("/api/dewheater",
+                   json={"mode": "manual", "manual_on": True,
+                         "experimental_enabled": True}).json()
+    assert r["mode"] == "manual" and r["manual_on"] is True
+    body = client.get("/api/dewheater").json()
+    assert body["mode"] == "manual"
+    assert body["manual_on"] is True
+    assert config.load().dew_heater.manual_on is True
+
+
+def test_an_unknown_mode_is_refused(monkeypatch, tmp_path):
+    from fastapi.testclient import TestClient
+    from skylapse.api import main as api
+
+    monkeypatch.setattr(config, "CONFIG_PATH", tmp_path / "config.yaml")
+    monkeypatch.setattr(config, "RUN_DIR", tmp_path / "run")
+    config.save(config.Config())
+    r = TestClient(api.app).put("/api/dewheater", json={"mode": "pwm"})
+    assert r.status_code == 400
+    assert config.load().dew_heater.mode == "auto", "a bad mode was persisted"
+
+
+def test_the_settings_card_offers_manual_without_a_sensor():
+    """Manual mode is FOR rigs with no BME280 — the card must not hide the
+    switch behind the sensor-missing warning."""
+    src = (Path(__file__).resolve().parents[1]
+           / "web" / "src" / "screens" / "SettingsScreen.jsx").read_text(
+               encoding="utf-8")
+    assert "manual_on" in src, "no manual switch in the settings card"
+    manual_branch = src.index("state.mode === 'manual'")
+    sensor_branch = src.index("state.sensor_found === false")
+    assert manual_branch < sensor_branch, \
+        "the manual branch must be checked before the sensor warnings"
+
+
+def test_the_dashboard_banner_survives_a_sensorless_reading():
+    """Manual mode reports {heating, mode} with no temperatures. The banner
+    used to compute temp_c - dewpoint_c unconditionally, which is NaN°C."""
+    src = (Path(__file__).resolve().parents[1]
+           / "web" / "src" / "screens" / "Dashboard.jsx").read_text(
+               encoding="utf-8")
+    assert "temp_c != null" in src, "the banner still assumes a reading exists"
+    assert "manual" in src, "the banner cannot explain a manually-run heater"
