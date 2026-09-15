@@ -213,11 +213,48 @@ def test_steady_state_costs_nothing(driver):
 def test_settling_gives_up_rather_than_blocking_forever(driver, caplog):
     """A sensor that never agrees must not hang the night."""
     driver._picam.settle_lag = 999
-    driver.set_controls(3_000_000, 2)
+    driver.set_controls(1_500_000, 2)          # short enough to still discard
     with caplog.at_level("WARNING"):
         frame = driver.capture()
     assert frame is not None
     assert any("did not settle" in r.getMessage() for r in caplog.records)
+
+
+def test_long_exposures_never_discard(driver):
+    """A discard costs one exposure, so the flat settle budget inverts as
+    exposures grow: flushing the pipeline at 25s costs 50-75s and usually
+    timed out anyway. Measured 2026-09-14: 79 settle warnings, ~100 gaps of
+    80-170s in a 30s-cadence night — two hours of sky thrown away. Long
+    frames are kept, honestly labelled, and flagged for the AE loop instead."""
+    driver._picam.settle_lag = 3
+    driver.set_controls(25_000_000, 2)
+    frame = driver.capture()
+    assert driver._picam.requests_made == 1, "a 25s frame was discarded"
+    assert frame.settled is False
+    assert frame.exposure_us == 100_000, \
+        "an old-settings frame must be labelled with the old settings"
+
+
+def test_unsettled_clears_once_the_pipeline_flushes(driver):
+    """The flag is per-frame truth, not a latch: as soon as a frame arrives
+    at the requested settings it must say so."""
+    driver._picam.settle_lag = 2
+    driver.set_controls(25_000_000, 2)
+    assert driver.capture().settled is False   # old settings, frame 1
+    assert driver.capture().settled is False   # old settings, frame 2
+    settled = driver.capture()                 # the command has landed
+    assert settled.settled is True
+    assert settled.exposure_us == 25_000_000
+
+
+def test_short_exposure_frames_are_settled_frames(driver):
+    """Below the threshold the discard loop still runs, so what comes out
+    already matches the request — the flag must agree."""
+    driver._picam.settle_lag = 3
+    driver.set_controls(500_000, 2)
+    frame = driver.capture()
+    assert frame.settled is True
+    assert frame.exposure_us == 500_000
 
 
 def test_frame_records_what_the_sensor_did_not_what_was_asked(driver):

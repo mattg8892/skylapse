@@ -59,6 +59,18 @@ SETTLE_MAX_S = 90.0
 # well inside the tolerance _settled() would have accepted anyway.
 SETTLE_WORTH_WAITING = 0.10
 
+# Above this exposure, nothing is discarded at all. A discard costs one
+# exposure, so the flat SETTLE_MAX_S budget inverts as exposures grow: at
+# 100ms eight discards are free, at 25s flushing the 2-3 in-flight frames
+# costs 50-75s and the 90s deadline expires around there — measured on
+# 2026-09-14, 79 settle warnings and ~100 gaps of 80-170s in a 30s-cadence
+# night, about two hours of sky spent on discards that mostly timed out
+# anyway. Long-exposure frames are kept instead, honestly labelled with the
+# sensor-reported settings and flagged unsettled; the daemon's AE holds its
+# next step until a frame confirms the last one (see Frame.settled), which
+# is the same wait moved off the capture path, where it cost the night.
+SETTLE_DISCARD_MAX_EXPOSURE_US = 2_000_000
+
 # The sensor quantises exposure to its line time (100000us is honoured as
 # 99954us), so settling is judged on a tolerance, never on equality.
 SETTLE_TOLERANCE = 0.02
@@ -202,6 +214,13 @@ class PiCamDriver(CameraDriver):
         Only pays the cost after a control change — in steady state, including
         every frame of a manual-exposure night, the first request is taken.
         """
+        # At long exposures the discard loop is disabled outright — even one
+        # discard costs a frame interval, and the whole flush costs minutes.
+        # The frame is taken as-is; capture() marks it unsettled and the AE
+        # loop upstream waits without throwing sky away.
+        if self._settling and self._exposure_us > SETTLE_DISCARD_MAX_EXPOSURE_US:
+            self._settling = False
+            return self._picam.capture_request()
         budget = SETTLE_FRAMES if self._settling else 0
         # Bounded by time as well as by frames. Eight discards is nothing at a
         # 100ms exposure and five and a half minutes at forty seconds — which is
@@ -260,6 +279,10 @@ class PiCamDriver(CameraDriver):
             gain=int(round(meta.get("AnalogueGain", self._gain_value))),
             timestamp=ts,
             sensor_temp_c=float(temp) if temp is not None else None,
+            # Per-frame truth, judged against the current request. When the
+            # discard loop is skipped (long exposures) this is what tells the
+            # AE loop the pipeline is still flushing its last command.
+            settled=self._settled(meta),
         )
 
     def close(self) -> None:

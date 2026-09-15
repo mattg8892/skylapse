@@ -50,6 +50,13 @@ class Frame:
     timestamp: float                 # unix time at capture start
     sensor_temp_c: float | None = None
     meta: dict = field(default_factory=dict)
+    # Whether this frame was exposed at the controls most recently asked for.
+    # False means the pipeline was still flushing a control change and the
+    # frame carries the previous settings — honestly labelled in exposure_us/
+    # gain above. AE must not react to such a frame: it shows the OLD command's
+    # result, and stepping again on it means stepping twice. Drivers whose
+    # exposures are synchronous (ZWO, sim) never produce one, hence the default.
+    settled: bool = True
 
 
 class CameraError(Exception):

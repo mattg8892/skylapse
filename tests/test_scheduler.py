@@ -133,6 +133,34 @@ def test_it_says_so_once_per_episode(caplog):
     assert len(said) == 1, f"logged {len(said)} times"
 
 
+def test_ae_holds_while_the_pipeline_flushes_a_control_change():
+    """At long exposures the driver keeps the 2-3 frames the pipeline exposes
+    at the OLD settings while a change lands (discarding them cost ~2h of the
+    night of 2026-09-14). Those frames meter the previous command's result,
+    so AE stepping on one is stepping twice: it sees a still-dark frame,
+    concludes its gain bump did nothing, and bumps again -- overshoot, then
+    the same dance back down."""
+    from skylapse.daemon.main import CaptureDaemon, AE_CONFIRM_PATIENCE
+
+    loop = type("L", (), {})()
+    loop.unsettled_streak = 0
+    assert CaptureDaemon._ae_may_step(loop), "steady state must not gate AE"
+    for streak in range(1, AE_CONFIRM_PATIENCE + 1):
+        loop.unsettled_streak = streak
+        assert not CaptureDaemon._ae_may_step(loop), \
+            f"stepped on an old-settings frame at streak {streak}"
+
+
+def test_ae_escapes_a_sensor_that_never_confirms():
+    """Past the measured pipeline depth the sensor is not going to agree
+    (it quantised the request outside the settle tolerance) -- holding longer
+    would freeze auto-exposure for the rest of the night."""
+    from skylapse.daemon.main import CaptureDaemon, AE_CONFIRM_PATIENCE
+    loop = type("L", (), {})()
+    loop.unsettled_streak = AE_CONFIRM_PATIENCE + 1
+    assert CaptureDaemon._ae_may_step(loop)
+
+
 def test_manual_exposure_never_reports_pinned():
     """Manual mode is a choice, not a limit that has been hit."""
     from skylapse.config import CaptureProfile

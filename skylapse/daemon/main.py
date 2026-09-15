@@ -41,6 +41,11 @@ IDLE_POLL_S = 30                 # recheck cadence while a night_only camera
                                  # is picked up promptly, long enough to idle
 COMMAND_POLL_S = 0.5             # how often a gap is interrupted to look for
                                  # UI commands; the bound on button latency
+# How many consecutive old-settings frames AE waits through before acting on
+# one anyway. The pipeline lag was measured at six frames on the IMX477, so a
+# streak past this means the sensor is not going to confirm (e.g. it quantised
+# the request outside the settle tolerance) — waiting longer would freeze AE.
+AE_CONFIRM_PATIENCE = 6
 # Consecutive frames pinned at BOTH auto-exposure ceilings before it is worth
 # saying so. Three, because one is a cloud crossing and three is the sky.
 AE_PINNED_FRAMES = 3
@@ -129,6 +134,10 @@ class CaptureDaemon:
         self.last_brightness: float | None = None
         self.exposure_us = 1_000_000
         self.gain = 100
+        # Frames in a row that arrived exposed at the previous settings (the
+        # pipeline flushing a control change; see Frame.settled). AE holds
+        # while this runs, so it never reacts to the old command's result.
+        self.unsettled_streak = 0
         # Rolling raw buffer for the "save RAW" keeper button (guarded by API).
         self.keeper_buffer: collections.deque[Frame] = collections.deque(maxlen=3)
         self.hotpixels = HotPixelMap(config.IMAGE_ROOT.parent / "calibration")
@@ -408,21 +417,41 @@ class CaptureDaemon:
 
             try:
                 prev_exposure, prev_gain = self.exposure_us, self.gain
-                self.exposure_us, self.gain = next_exposure(
-                    profile, self.last_brightness, self.exposure_us, self.gain)
-                # Debug, not info: one of these per frame alongside the capture
-                # line would double the journal volume for a decision that is
-                # only interesting when AE is misbehaving.
-                log.debug("AE(%s): measured=%s target=%d -> exposure %dus "
-                          "(was %dus), gain %d (was %d)", now_period,
-                          "none" if self.last_brightness is None
-                          else "%.1f" % self.last_brightness,
-                          profile.target_brightness, self.exposure_us,
-                          prev_exposure, self.gain, prev_gain)
+                # AE reacts only to a frame taken at its own last command. At
+                # long exposures the driver no longer discards the 2-3 frames
+                # the pipeline exposes at the old settings while a change
+                # lands (that flush cost ~2h of the night of 2026-09-14) — it
+                # delivers them honestly labelled instead, and the brightness
+                # they meter belongs to the PREVIOUS command. Stepping on one
+                # is stepping twice: AE sees a still-dark frame, concludes its
+                # bump did nothing, and bumps again — overshoot, then the same
+                # dance back down. So it holds. The streak bound is the escape
+                # for a sensor that never confirms (quantisation outside the
+                # settle tolerance): past the measured pipeline depth the
+                # frame in hand is the best truth available, so act on it.
+                if self._ae_may_step():
+                    self.exposure_us, self.gain = next_exposure(
+                        profile, self.last_brightness, self.exposure_us, self.gain)
+                    # Debug, not info: one of these per frame alongside the
+                    # capture line would double the journal volume for a
+                    # decision only interesting when AE is misbehaving.
+                    log.debug("AE(%s): measured=%s target=%d -> exposure %dus "
+                              "(was %dus), gain %d (was %d)", now_period,
+                              "none" if self.last_brightness is None
+                              else "%.1f" % self.last_brightness,
+                              profile.target_brightness, self.exposure_us,
+                              prev_exposure, self.gain, prev_gain)
+                else:
+                    log.debug("AE(%s): holding %dus gain %d; last frame was "
+                              "exposed at the previous settings (%d unsettled)",
+                              now_period, self.exposure_us, self.gain,
+                              self.unsettled_streak)
                 self._check_ae_headroom(profile)
                 self._remember_exposure(now_period)
                 self.driver.set_controls(self.exposure_us, self.gain)
                 frame = self.driver.capture()
+                self.unsettled_streak = 0 if frame.settled \
+                    else self.unsettled_streak + 1
             except CameraError:
                 log.exception("Capture failed; reopening camera")
                 self.driver.close()
@@ -868,6 +897,18 @@ class CaptureDaemon:
         config.save(self.cfg)
         log.info("Auto white balance: R %.2f B %.2f (measured %.2f/%.2f)",
                  cam.wb_r, cam.wb_b, measured_r, measured_b)
+
+    def _ae_may_step(self) -> bool:
+        """Whether AE may act on the latest metered brightness.
+
+        No while the pipeline is flushing a control change: those frames are
+        the PREVIOUS command's result, and stepping on one is stepping twice.
+        Yes again past the measured pipeline depth — a sensor that has not
+        confirmed by then never will (it quantised the request outside the
+        settle tolerance), and the frame in hand is the best truth available.
+        """
+        return self.unsettled_streak == 0 \
+            or self.unsettled_streak > AE_CONFIRM_PATIENCE
 
     def _check_ae_headroom(self, profile) -> None:
         """Notice when auto-exposure has run out of room.
