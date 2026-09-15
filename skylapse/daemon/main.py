@@ -313,6 +313,18 @@ class CaptureDaemon:
                 # 25 frames that had landed since instead of the 2205 from the
                 # night. It validated, it notified, and it was 2 seconds long.
                 latest_night = process.day_folder(time.time(), self.camera_id)
+                # The render is the hungriest load this rig ever presents, and
+                # it runs inline — so a heater that is on at dawn (the cold,
+                # damp moment it is on FOR) would stay on underneath the whole
+                # encode. On a supply with 0.25V of margin those two must never
+                # stack: drop the pin for the render and let the next loop's
+                # _reconcile_dewheater rebuild it, the same handoff the
+                # commissioning test uses. Minutes of pause at sunrise cost the
+                # lens nothing.
+                if self.dewheater is not None:
+                    log.info("Pausing dew heater for the dawn render")
+                    self.dewheater.close()
+                    self.dewheater = None
                 if latest_night.exists() and cam.timelapse.auto_render:
                     log.info("Rendering timelapse for %s", latest_night.name)
                     nightjobs.render_all(latest_night, cam.timelapse)

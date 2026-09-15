@@ -46,6 +46,47 @@ def ffmpeg_argv(run):
     raise AssertionError("ffmpeg was never invoked")
 
 
+def test_the_render_is_power_capped(tmp_path):
+    """-threads is a power ceiling, not a speed setting. The rig's supply
+    holds 5.0V against a 4.75V undervoltage trip, and an all-core libx264
+    encode was measured putting Undervoltage events in the kernel log at
+    dawn 2026-09-15 -- on a morning the dew heater happened to be off. The
+    encoder must never light every core."""
+    night = fake_night(tmp_path, "2026-08-13", frames=100)
+    runner, prober = rendering(night, 100)
+    with runner as run, prober, \
+         mock.patch("skylapse.daemon.nightjobs.notify.notify"):
+        nightjobs.render_night(night)
+    args = ffmpeg_argv(run)
+    assert str(nightjobs.RENDER_THREADS) == args[args.index("-threads") + 1]
+    assert nightjobs.RENDER_THREADS < 4, "the cap must leave cores dark"
+
+
+def test_the_verification_decode_is_power_capped(tmp_path):
+    """-count_frames decodes every frame of the film it checks, so an
+    uncapped probe is a second all-core spike right after the encode."""
+    with mock.patch.object(subprocess, "run",
+                           return_value=subprocess.CompletedProcess(
+                               [], 0, "nb_read_frames=1\n", "")) as run:
+        nightjobs._probe(Path("x.mp4"))
+    argv = run.call_args[0][0]
+    assert argv[0] == "ffprobe"
+    assert str(nightjobs.RENDER_THREADS) == argv[argv.index("-threads") + 1]
+
+
+def test_dawn_releases_the_heater_before_rendering():
+    """The render runs inline in the capture loop, so a heater that is on at
+    dawn -- the cold, damp moment it is on FOR -- would stay on underneath
+    the whole encode. On this supply those two loads must never stack."""
+    root = Path(__file__).resolve().parents[1]
+    main = (root / "skylapse" / "daemon" / "main.py").read_text(encoding="utf-8")
+    dawn = main.split("Dawn: running night jobs", 1)[1].split("last_period =", 1)[0]
+    release = dawn.index("self.dewheater.close()")
+    render = dawn.index("nightjobs.render_all")
+    assert release < render, (
+        "the dawn render starts with the heater pin still held high")
+
+
 def test_render_skips_tiny_folders(tmp_path):
     night = fake_night(tmp_path, "2026-08-13", frames=5)
     assert nightjobs.render_night(night) is None

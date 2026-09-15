@@ -194,6 +194,20 @@ def usable_frames(folder: Path) -> list[Path]:
     return frames
 
 
+# How many cores a render (or the full-decode verification pass after it) may
+# light up at once. Not a speed setting — a power ceiling.
+#
+# The supply this rig actually runs on holds 5.0V with no headroom, and the
+# Pi 5 flags undervoltage at 4.75V. Measured on hardware 2026-09-15: the dawn
+# render, all four A76 cores on libx264, put two Undervoltage events in the
+# kernel log — on a morning when the dew heater happened to be off. With the
+# heater on (dawn is the cold, damp moment it exists for), that sag stacks on
+# another ~2A, and three days earlier the same rig's PMIC latched off hard
+# enough to need a power pull. Nobody is waiting on a dawn render; halving its
+# peak draw costs minutes that the sky spends being blue anyway.
+RENDER_THREADS = 2
+
+
 def _probe(path: Path) -> dict | None:
     """Frame count and dimensions of a rendered file.
 
@@ -203,7 +217,10 @@ def _probe(path: Path) -> dict | None:
     """
     try:
         out = subprocess.run(
-            ["ffprobe", "-v", "error", "-count_frames", "-select_streams", "v:0",
+            # -count_frames decodes every frame of the film it is checking, so
+            # unthrottled it is a second all-core spike right after the encode.
+            ["ffprobe", "-threads", str(RENDER_THREADS),
+             "-v", "error", "-count_frames", "-select_streams", "v:0",
              "-show_entries", "stream=nb_read_frames,width,height",
              "-of", "default=noprint_wrappers=1:nokey=0", str(path)],
             capture_output=True, text=True, timeout=600).stdout
@@ -269,8 +286,10 @@ def _run_ffmpeg(folder: Path, frames: list[Path], out: Path, fps: int,
     listfile.write_text("".join(f"file '{f.name}'\n" for f in frames))
     try:
         subprocess.run(
-            ["ffmpeg", "-y", "-r", str(fps), "-f", "concat", "-safe", "0",
+            ["ffmpeg", "-y", "-threads", str(RENDER_THREADS),
+             "-r", str(fps), "-f", "concat", "-safe", "0",
              "-i", str(listfile), "-c:v", "libx264", "-preset", "medium",
+             "-threads", str(RENDER_THREADS),
              "-crf", crf, "-pix_fmt", "yuv420p", "-vf", scale,
              # Stated, not inferred. ffmpeg picks the container from the output
              # extension, and renders go to a .part file so a half-written one
