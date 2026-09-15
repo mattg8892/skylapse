@@ -338,10 +338,15 @@ case "${1:-}" in
         install -m 0644 "$tmp/keyring.gpg" "$TS_KEYRING"
         install -m 0644 "$tmp/tailscale.list" "$TS_SOURCES"
 
-        # Only this source: a full `apt-get update` on a camera pulls every
-        # index it has, which is slow on a Pi and is not what was asked for.
-        apt-get update -o Dir::Etc::sourcelist="$TS_SOURCES" \
-                       -o Dir::Etc::sourceparts="-" -o APT::Get::List-Cleanup="0"
+        # A FULL update, deliberately. This used to refresh only the Tailscale
+        # source to spare the Pi a slow update -- and that is the bug that
+        # sank remote access on hardware twice: apt then resolves the fresh
+        # tailscale package against Debian indexes stale since the image was
+        # flashed, cannot satisfy its dependencies against versions that no
+        # longer exist in that view, and dies with "you have held broken
+        # packages". Captured verbatim on the rig 2026-09-15. The extra minute
+        # of a real update is what makes the install possible at all.
+        apt-get update
         DEBIAN_FRONTEND=noninteractive apt-get install -y tailscale
     fi
     # Enabled but not authenticated: the machine joins nothing until someone

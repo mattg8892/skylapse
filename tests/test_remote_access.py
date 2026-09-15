@@ -157,6 +157,41 @@ def test_a_failed_install_says_why(client, monkeypatch):
     assert "signing key" in client.get("/api/remote/status").json()["error"]
 
 
+def test_a_long_apt_error_reaches_the_journal_in_full(client, monkeypatch, caplog):
+    """The 2026-09-15 rig failure: apt died with a dependency conflict whose
+    crucial line sat past the 300-char truncation, so the UI and the journal
+    both showed an error cut off exactly before the cause. Truncation is for
+    the card; the journal gets everything."""
+    long_error = ("E: Unable to correct problems, you have held broken "
+                  "packages.\n" + "x" * 500 +
+                  "\n2. tailscale:arm64=1.102.4 Depends libc6 which cannot")
+    monkeypatch.setattr(remote, "cli_path", lambda: "")
+    monkeypatch.setattr(remote, "can_install", lambda: True)
+    monkeypatch.setattr(remote.subprocess, "run",
+                        lambda cmd, *a, **kw: subprocess.CompletedProcess(
+                            cmd, 100, "", long_error))
+    import logging
+    with caplog.at_level(logging.WARNING, logger="skylapse.remote"):
+        client.post("/api/remote/install")
+    logged = "\n".join(r.getMessage() for r in caplog.records)
+    assert "Depends libc6 which cannot" in logged, \
+        "the tail of the apt error -- the part that names the cause -- was lost"
+
+
+def test_the_installer_updates_every_apt_source():
+    """The bug that sank remote access on hardware twice: refreshing only the
+    Tailscale source left apt resolving the fresh package against Debian
+    indexes stale since the image was flashed -- 'held broken packages',
+    captured verbatim on the rig 2026-09-15. The install must run a full
+    apt-get update, not a source-scoped one."""
+    admin = (Path(__file__).resolve().parents[1]
+             / "scripts" / "skylapse-admin").read_text(encoding="utf-8")
+    block = admin.split("tailscale-install)", 1)[1].split("\n  tailscale-up)", 1)[0]
+    assert "apt-get update" in block
+    assert "Dir::Etc::sourcelist" not in block, \
+        "the update is scoped to one source again; that is the stale-index bug"
+
+
 def test_installing_when_it_is_already_there_does_nothing(monkeypatch):
     calls = []
     monkeypatch.setattr(remote, "cli_path", lambda: "/usr/bin/tailscale")

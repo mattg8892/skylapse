@@ -187,8 +187,14 @@ def install() -> dict:
         return {"ok": False, "error": _read_error()}
 
     if result.returncode != 0:
-        detail = (result.stderr or result.stdout or "").strip()[:300]
-        _set_error(detail or "The Tailscale install failed.")
+        # The full output goes to the journal BEFORE any truncation. The 300
+        # char cut used to be applied first, and on the rig it cut the apt
+        # error off exactly at the dependency line that named the problem --
+        # the diagnostic re-hid the root cause, which is how this feature
+        # failed on hardware twice with nothing captured either time.
+        full = (result.stderr or result.stdout or "").strip()
+        log.warning("tailscale install failed:\n%s", full)
+        _set_error(full[:600] or "The Tailscale install failed.")
         return {"ok": False, "error": _read_error()}
     return {"ok": True, "installed": installed()}
 
