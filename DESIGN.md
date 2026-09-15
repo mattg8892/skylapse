@@ -778,13 +778,19 @@ accounts.
 - Implementation: FastAPI session middleware + login screen + Settings card. Must land
   **before** the setup wizard so the wizard integrates it.
 
-## Remote access (optional) — WRITTEN, NOT WORKING (skylapse/remote.py)
+## Remote access (optional) — VERIFIED ON HARDWARE 2026-09-15 (skylapse/remote.py)
 
-**Status as of 2026-08-17: parked, and the settings card says "coming soon".** It has now
-been rewritten once and failed on hardware twice. The code and the endpoints stay; what is
-switched off is offering it to someone as though it works. Marking it implemented when it
-had never run on a camera is what let it sit broken for weeks, so it does not get that
-label again until a real rig completes the flow.
+**Status: working, and the settings card is live.** The full flow — install from the
+card, QR login, HTTPS serve — completed on the image rig on 2026-09-15, ending with the
+dashboard loading on a phone over cellular. That was the bar set when it was parked, and
+it is the bar for ever re-labelling it if it regresses.
+
+The failure that sank it twice before was found the first time the flow was run with
+readable logs: `tailscale-install` refreshed only the Tailscale apt source, so apt
+resolved the fresh package against Debian indexes stale since the image was flashed and
+died with "held broken packages" — and the error handler truncated that message at 300
+chars, exactly before the line naming the cause. The verb now runs a full `apt-get
+update`, and install errors reach the journal untruncated.
 
 
 
