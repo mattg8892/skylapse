@@ -88,6 +88,28 @@ def is_newer(candidate: str, current: str) -> bool:
 
 # -- checking ---------------------------------------------------------------
 
+def _site_clock(ts: float) -> str:
+    """A wall-clock time in the CAMERA'S configured timezone, for messages.
+
+    The OS timezone on an imaged rig is whatever Raspberry Pi OS shipped and
+    nobody ever sets it, so time.localtime() answers in the wrong part of the
+    world: "the limit frees up at 01:27" was shown to a person whose clock
+    read 19:27 -- six hours of apparent wait for a 20-minute one. Setup asks
+    where the camera is and stores an IANA name; this uses it, exactly like
+    the frame filenames do (process.local_time is the same idea, but lives in
+    a module that imports cv2 and numpy -- too heavy for a message).
+    """
+    try:
+        from zoneinfo import ZoneInfo
+        from datetime import datetime
+        name = config.load().location.timezone
+        if name:
+            return datetime.fromtimestamp(ts, ZoneInfo(name)).strftime("%H:%M")
+    except Exception:
+        pass
+    return time.strftime("%H:%M", time.localtime(ts))
+
+
 def _read_cache_raw() -> dict | None:
     """The cache file as-is, expiry ignored. For carrying what a good check
     learned across a failed one -- stale knowledge of a release beats none."""
@@ -140,8 +162,7 @@ def _fetch_latest_release() -> tuple[dict | None, str, float]:
             pass
         if exc.code == 403 and (exc.headers.get("X-RateLimit-Remaining") == "0"
                                 or reset):
-            when = (time.strftime("%H:%M", time.localtime(reset)) if reset
-                    else "shortly")
+            when = _site_clock(reset) if reset else "shortly"
             log.info("Update check rate-limited by GitHub until %s", when)
             return None, (f"GitHub's hourly limit for this network is used up. "
                           f"It frees up at {when} — checking again before then "

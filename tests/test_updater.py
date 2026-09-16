@@ -524,6 +524,21 @@ def test_stale_knowledge_of_the_running_version_is_not_an_update(tmp_path, monke
     assert failed["available"] is False
 
 
+def test_the_reset_time_is_shown_in_the_site_timezone(tmp_path, monkeypatch):
+    """The rig's OS timezone is whatever the image shipped (UTC+1, never
+    set); the person reading the message is wherever setup said the camera
+    is. 'Frees up at 01:27' was shown to someone whose clock read 19:27 --
+    six hours of apparent wait for a twenty-minute one."""
+    monkeypatch.setattr(config, "CONFIG_PATH", tmp_path / "config.yaml")
+    monkeypatch.setattr(config, "RUN_DIR", tmp_path)
+    cfg = config.Config()
+    cfg.location.timezone = "America/Chicago"
+    config.save(cfg)
+    # 2026-09-16 00:27 UTC == 19:27 the previous evening in Chicago (CDT).
+    reset = 1789518420.0
+    assert updater._site_clock(reset) == "19:27"
+
+
 def test_a_rate_limit_waits_exactly_until_it_resets(tmp_path, monkeypatch):
     """Retrying before the reset cannot succeed and only spends the next hour's
     allowance, so the cache expires when GitHub says the limit does."""
