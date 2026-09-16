@@ -52,7 +52,9 @@ AE_PINNED_FRAMES = 3
 # Auto white balance. Every twentieth frame, because colour drifts over hours;
 # a fifth of the way each time, so nothing transient can recolour a night; and
 # only once exposure has settled, since a frame caught mid-hunt is not a colour
-# measurement.
+# measurement. Day frames only — grey-world's assumption is roughly true of a
+# sunlit sky and flatly false of a night one; dusk-to-dawn holds the day's
+# converged value (see _maybe_auto_wb for the measured night that forced this).
 AUTO_WB_EVERY_FRAMES = 20
 AUTO_WB_BLEND = 0.2
 AUTO_WB_SETTLED_BAND = 0.15
@@ -870,11 +872,28 @@ class CaptureDaemon:
         only acts every so often, because white balance drifts over hours, not
         seconds.
 
-        Grey-world is the estimate — it assumes the scene averages to grey,
-        which a sky does not exactly, which is why the setting stays adjustable
-        and why touching it turns this off.
+        Grey-world is the estimate — it assumes the scene averages to grey.
+        That is roughly true of a sunlit sky and flatly false of a night one,
+        which is why this only ever LEARNS during the day and holds overnight.
         """
         if not getattr(cam, "wb_auto", True) or self.last_brightness is None:
+            return
+        # An untouched camera has no white balance to drift from — see below;
+        # computed here because the day-only gate must exempt it.
+        cold_start = (cam.wb_r, cam.wb_b) == UNSET_WB
+        # Calibrate by day, hold by night. A night sky is never grey: rain
+        # clouds over a town are lit orange, blue hour is blue, and clear-sky
+        # airglow is green. Grey-world pointed at any of those "corrects" the
+        # sky's true colour away — measured on the night of 2026-09-15 it
+        # walked R from ~2.4 down to 1.73 neutralising orange rain clouds,
+        # then whipsawed through dawn (measured R 1.80→3.02 in fifteen
+        # minutes), recolouring the clip exactly where every timelapse gets
+        # watched. Daytime is where grey-world's assumption approximately
+        # holds, so that is the only time it may move — dusk inherits the
+        # day's converged value, and the night's colour is the sky's own.
+        # A cold start is exempt: a camera first set up at night still needs
+        # SOME answer, and the next day refines it.
+        if not cold_start and period(self.cfg) != "day":
             return
         profile = profile_for(self.cfg, cam)
         if profile.auto_exposure:
@@ -883,8 +902,7 @@ class CaptureDaemon:
                 return                       # still hunting, or out of road
         # An untouched camera has no white balance to drift from, so it does not
         # wait its twenty frames and does not creep: it takes the first good
-        # measurement outright.
-        cold_start = (cam.wb_r, cam.wb_b) == UNSET_WB
+        # measurement outright (cold_start, computed above the day gate).
         self.frames_since_wb += 1
         if not cold_start and self.frames_since_wb < AUTO_WB_EVERY_FRAMES:
             return

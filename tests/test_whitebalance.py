@@ -305,13 +305,19 @@ def test_the_blend_cannot_be_swung_by_one_frame():
 
 # -- acquiring a white balance, as opposed to tracking one -------------------
 
-def _daemon_for_wb(monkeypatch, tmp_path, wb):
-    """A capture object with just enough on it to run _maybe_auto_wb."""
+def _daemon_for_wb(monkeypatch, tmp_path, wb, period="day"):
+    """A capture object with just enough on it to run _maybe_auto_wb.
+
+    The period is pinned (day by default) because auto-WB only learns during
+    the day — computing it from the real clock would make these tests pass or
+    fail by the hour they were run at.
+    """
     from skylapse import config
     from skylapse.daemon import main as dmain
 
     monkeypatch.setattr(config, "CONFIG_PATH", tmp_path / "config.yaml")
     monkeypatch.setattr(config, "save", lambda cfg: None)
+    monkeypatch.setattr(dmain, "period", lambda cfg: period)
     cfg = config.Config()
     cam = cfg.camera("picam-imx477")
     cam.wb_r, cam.wb_b = wb
@@ -324,6 +330,50 @@ def _daemon_for_wb(monkeypatch, tmp_path, wb):
     profile = dmain.profile_for(cfg, cam)
     obj.last_brightness = profile.target_brightness      # settled
     return obj, cam
+
+
+# -- calibrate by day, hold by night ------------------------------------------
+
+def test_night_frames_never_move_the_white_balance(monkeypatch, tmp_path):
+    """A night sky is never grey — rain clouds over a town are lit orange,
+    blue hour is blue, airglow is green — so grey-world at night 'corrects'
+    the sky's true colour away. Measured on 2026-09-15: R walked from ~2.4
+    to 1.73 neutralising orange rain clouds, and the user found the whole
+    night 'way off'. Overnight, WB holds whatever the day converged to."""
+    from skylapse.daemon import main as dmain
+    for p in ("night", "twilight"):
+        obj, cam = _daemon_for_wb(monkeypatch, tmp_path, (2.4, 1.2), period=p)
+        monkeypatch.setattr(dmain.process, "gray_world", lambda means: (1.7, 1.5))
+        for _ in range(dmain.AUTO_WB_EVERY_FRAMES * 3):
+            obj._maybe_auto_wb(cam, object())
+        assert (cam.wb_r, cam.wb_b) == (2.4, 1.2), \
+            f"{p} frames recoloured the night to {cam.wb_r}/{cam.wb_b}"
+
+
+def test_a_cold_start_is_acquired_even_at_night(monkeypatch, tmp_path):
+    """A camera first set up after dark still needs SOME answer — a Bayer
+    sensor at 1.0/1.0 is strongly green, and holding THAT all night is worse
+    than a night-sky estimate. The next day refines it."""
+    from skylapse.daemon import main as dmain
+    obj, cam = _daemon_for_wb(monkeypatch, tmp_path, (1.0, 1.0), period="night")
+    monkeypatch.setattr(dmain.process, "gray_world", lambda means: (2.0, 1.5))
+    obj._maybe_auto_wb(cam, object())
+    assert cam.wb_r == 2.0 and cam.wb_b == 1.5
+
+
+def test_dawn_resumes_tracking_where_the_day_left_off(monkeypatch, tmp_path):
+    """The hold ends when day does: the same object that refused to move all
+    night creeps again on its first day frames."""
+    from skylapse.daemon import main as dmain
+    obj, cam = _daemon_for_wb(monkeypatch, tmp_path, (2.4, 1.2), period="night")
+    monkeypatch.setattr(dmain.process, "gray_world", lambda means: (2.8, 1.4))
+    for _ in range(dmain.AUTO_WB_EVERY_FRAMES):
+        obj._maybe_auto_wb(cam, object())
+    assert cam.wb_r == 2.4                       # held overnight
+    monkeypatch.setattr(dmain, "period", lambda cfg: "day")
+    for _ in range(dmain.AUTO_WB_EVERY_FRAMES):
+        obj._maybe_auto_wb(cam, object())
+    assert cam.wb_r > 2.4, "day frames should resume tracking"
 
 
 def test_a_fresh_camera_takes_the_first_measurement_whole(monkeypatch, tmp_path):

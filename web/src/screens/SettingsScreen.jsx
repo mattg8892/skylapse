@@ -1694,10 +1694,13 @@ function WhiteBalanceCard({ id, cam, onCamera }) {
         <span>
           <span className="text-zinc-300">Let the camera set it</span>
           <span className="mt-1 block text-xs text-zinc-500">
-            Measured every twentieth frame once the exposure has settled, and
-            moved a fifth of the way each time so nothing passing can recolour
-            a night. Moving either slider below turns this off — a value you
-            set by hand should not be quietly overwritten.
+            Calibrated during the day — measured every twentieth settled frame,
+            moved a fifth of the way each time — then held from dusk to dawn.
+            A night sky is never grey: city-lit clouds are orange, blue hour is
+            blue, and chasing that recolours the timelapse. Holding the day’s
+            value keeps the night’s colour the sky’s own. Moving either slider
+            below turns this off — a value you set by hand should not be
+            quietly overwritten.
           </span>
         </span>
         <Toggle checked={cam.wb_auto ?? true} label="Let the camera set it"
