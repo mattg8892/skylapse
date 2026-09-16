@@ -53,11 +53,12 @@ const SCHEDULE_OPTIONS = [
   { value: 'night_only', label: 'Night only' },
 ]
 
-export default function SettingsScreen({ showToast, storage }) {
+/** The config document plus optimistic save helpers, shared by every tab
+ * that edits it. Extracted when Settings split into Camera / Heater /
+ * Network / Settings tabs -- each screen fetches its own copy on mount, so
+ * a change made on one tab is re-read when another tab opens. */
+export function useConfig(showToast) {
   const [cfg, setCfg] = useState(null)
-  const [topic, setTopic] = useState(null)
-  const [testResult, setTestResult] = useState(null)
-  const [cameraInfo, refreshCameras] = useCameras()
 
   const reloadConfig = useCallback(() => {
     fetch('/api/config').then((r) => r.json()).then(setCfg).catch(() => {})
@@ -85,6 +86,101 @@ export default function SettingsScreen({ showToast, storage }) {
   const saveProfile = (id, period, patch) =>
     saveCamera(id, { [period]: { ...cfg.cameras[id][period], ...patch } })
 
+  return { cfg, save, saveCamera, saveProfile }
+}
+
+
+/* -- camera tab ------------------------------------------------------------ */
+
+/** Everything about the imaging itself: per-camera exposure, timelapse, RAW
+ * and overlay settings, plus the hardware panel for choosing/adding cameras.
+ * Split out of Settings when that page grew past finding things on it. */
+export function CameraScreen({ showToast, storage }) {
+  const { cfg, save, saveCamera, saveProfile } = useConfig(showToast)
+  const [cameraInfo, refreshCameras] = useCameras()
+
+  if (!cfg) return null
+  const cameras = Object.entries(cfg.cameras ?? {})
+  const activeName = (cfg.cameras?.[cfg.active_camera]?.label
+    || cfg.cameras?.[cfg.active_camera]?.model
+    || cameras[0]?.[1]?.label || cameras[0]?.[1]?.model
+    || cameras[0]?.[0] || '')
+
+  return (
+    <div className="mt-6 flex flex-col gap-8">
+      <Section title="This camera"
+        subtitle={activeName
+          ? `Imaging settings for ${activeName}`
+          : 'Imaging settings, once a camera has been seen'}>
+        {cameras.map(([id, cam]) => (
+          <CameraSettings
+            key={id} id={id} cam={cam} storage={storage}
+            onCamera={(patch) => saveCamera(id, patch)}
+            onProfile={(period, patch) => saveProfile(id, period, patch)} />
+        ))}
+      </Section>
+
+      <Section title="Hardware"
+        subtitle="What is attached, and adding a camera the Pi cannot find">
+        <Card title="Cameras">
+          <p className="mt-1 text-sm text-zinc-400">
+            {cameras.length > 1
+              ? 'Which camera is pointed at the sky, and how to add another.'
+              : 'What’s attached, a test shot to prove it works, and how to add '
+                + 'a camera the Pi can’t find by itself.'}
+          </p>
+          <div className="mt-4">
+            <CameraPanel info={cameraInfo} refresh={refreshCameras}
+              selected={cfg.active_camera}
+              onSelect={(active_camera) =>
+                save({ active_camera }, { ...cfg, active_camera })} />
+          </div>
+          {cameras.length === 0 && (
+            <p className="mt-4 text-xs text-zinc-500">
+              Capture settings appear above once a camera has been seen.
+            </p>
+          )}
+        </Card>
+      </Section>
+    </div>
+  )
+}
+
+
+/* -- heater tab ------------------------------------------------------------ */
+
+export function HeaterScreen({ showToast }) {
+  return (
+    <div className="mt-6 flex flex-col gap-8">
+      <Section title="Dew heater"
+        subtitle="Optional hardware that keeps the glass above the dewpoint">
+        <DewHeaterCard showToast={showToast} />
+      </Section>
+    </div>
+  )
+}
+
+
+/* -- network tab ------------------------------------------------------------ */
+
+export function NetworkScreen({ showToast }) {
+  return (
+    <div className="mt-6 flex flex-col gap-8">
+      <Section title="Network"
+        subtitle="Wi-Fi, the fallback hotspot, and reaching the camera from anywhere">
+        <NetworkCard showToast={showToast} />
+        <RemoteCard showToast={showToast} />
+      </Section>
+    </div>
+  )
+}
+
+
+export default function SettingsScreen({ showToast, storage }) {
+  const { cfg, save } = useConfig(showToast)
+  const [topic, setTopic] = useState(null)
+  const [testResult, setTestResult] = useState(null)
+
   const saveNotifications = (notifications) =>
     save({ notifications }, { ...cfg, notifications })
 
@@ -101,63 +197,13 @@ export default function SettingsScreen({ showToast, storage }) {
 
   if (!cfg) return null
   const n = cfg.notifications
-  const cameras = Object.entries(cfg.cameras ?? {})
-  // Named in the section header, so 'This camera' is never a question.
-  const activeName = (cfg.cameras?.[cfg.active_camera]?.label
-    || cfg.cameras?.[cfg.active_camera]?.model
-    || cameras[0]?.[1]?.label || cameras[0]?.[1]?.model
-    || cameras[0]?.[0] || '')
 
   return (
     <div className="mt-6 flex flex-col gap-8">
-      {/* Ordered by how often a setting is actually touched, not by the order
-          the features happened to be built in. Everything a night gets tuned
-          with is first and always visible; everything set once when the camera
-          was installed is last and folded away. */}
-      <Section title="This camera"
-        subtitle={activeName
-          ? `Imaging settings for ${activeName}`
-          : 'Imaging settings, once a camera has been seen'}>
-        {cameras.map(([id, cam]) => (
-          <CameraSettings
-            key={id} id={id} cam={cam} storage={storage}
-            onCamera={(patch) => saveCamera(id, patch)}
-            onProfile={(period, patch) => saveProfile(id, period, patch)} />
-        ))}
-      </Section>
-
-      <Section title="Hardware"
-        subtitle="What is attached, and adding a camera the Pi cannot find">
-        {/* Cameras: the same panel the wizard uses. Settings used to have no way
-            to add a camera at all — you plugged one in and hoped the daemon
-            noticed — so a second camera, or a first one the Pi cannot auto-detect,
-            meant walking setup again or reaching for SSH. */}
-        <Card title="Cameras">
-          <p className="mt-1 text-sm text-zinc-400">
-            {cameras.length > 1
-              ? 'Which camera is pointed at the sky, and how to add another.'
-              : 'What’s attached, a test shot to prove it works, and how to add '
-                + 'a camera the Pi can’t find by itself.'}
-          </p>
-          <div className="mt-4">
-            <CameraPanel info={cameraInfo} refresh={refreshCameras}
-              selected={cfg.active_camera}
-              onSelect={(active_camera) =>
-                save({ active_camera }, { ...cfg, active_camera })} />
-          </div>
-          {cameras.length === 0 && (
-            <p className="mt-4 text-xs text-zinc-500">
-              Capture settings appear below once a camera has been seen.
-            </p>
-          )}
-        </Card>
-      </Section>
-
-      <Section title="Dew heater"
-        subtitle="Optional hardware that keeps the glass above the dewpoint">
-        <DewHeaterCard showToast={showToast} />
-      </Section>
-
+      {/* The imaging, heater and network settings live on their own tabs now
+          -- this page keeps what is set once and rarely revisited. storage is
+          unused here since the camera settings moved out, but the prop stays:
+          the tab shell passes it uniformly. */}
       <Section title="Alerts"
         subtitle="What the camera tells your phone about, and when">
         {/* Notifications */}
@@ -201,10 +247,6 @@ export default function SettingsScreen({ showToast, storage }) {
 
       <Section title="Set up once"
         subtitle="Configured when you install the camera, then left alone">
-        {/* Network */}
-        <NetworkCard showToast={showToast} />
-        {/* Remote access */}
-        <RemoteCard showToast={showToast} />
         {/* Security */}
         <SecurityCard showToast={showToast} />
         <UpdateCard cfg={cfg} showToast={showToast}

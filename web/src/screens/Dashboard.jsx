@@ -1,7 +1,7 @@
 // Dashboard: latest frame, live capture status, and the actions that only make
 // sense while standing at the camera — keeper RAW, focus assist, re-render.
 import { useEffect, useState } from 'react'
-import SettingsScreen from './SettingsScreen.jsx'
+import SettingsScreen, { CameraScreen, HeaterScreen, NetworkScreen } from './SettingsScreen.jsx'
 import NightsScreen from './NightsScreen.jsx'
 import FocusScreen from './FocusScreen.jsx'
 import { Button, Card, Toast, useToast } from '../components/ui.jsx'
@@ -12,9 +12,15 @@ import { networkBadge } from '../lib/network.js'
 
 // One entry per navigable screen. Focus is deliberately absent: it is entered
 // from the dashboard, not navigated to, and leaving it must stop the session.
+// One tab per thing a person comes here to do. This grew from three when
+// Settings became the junk drawer -- imaging, heater and network controls
+// all lived under one scroll, and finding anything meant reading everything.
 const NAV = [
   { id: 'dashboard', label: 'Dashboard' },
   { id: 'nights', label: 'Nights' },
+  { id: 'camera', label: 'Camera' },
+  { id: 'heater', label: 'Heater' },
+  { id: 'network', label: 'Network' },
   { id: 'settings', label: 'Settings' },
 ]
 
@@ -52,7 +58,9 @@ export default function Dashboard({ status }) {
       </header>
 
       {/* Every destination is always present and one click always switches. */}
-      <nav className="mt-4 flex gap-2 text-sm">
+      {/* flex-wrap: six tabs no longer fit one row on a phone, and the rig is
+          operated from a phone standing next to it more than from anything. */}
+      <nav className="mt-4 flex flex-wrap gap-2 text-sm">
         {NAV.map((item) => (
           <button key={item.id} onClick={() => setScreen(item.id)}
             aria-current={screen === item.id ? 'page' : undefined}
@@ -69,6 +77,14 @@ export default function Dashboard({ status }) {
       {screen === 'settings' && (
         <SettingsScreen showToast={showToast} storage={status.storage} />
       )}
+
+      {screen === 'camera' && (
+        <CameraScreen showToast={showToast} storage={status.storage} />
+      )}
+
+      {screen === 'heater' && <HeaterScreen showToast={showToast} />}
+
+      {screen === 'network' && <NetworkScreen showToast={showToast} />}
 
       {screen === 'nights' && (
         <NightsScreen cameraId={current.camera_id} showToast={showToast}
