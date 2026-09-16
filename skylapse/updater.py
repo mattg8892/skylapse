@@ -88,6 +88,15 @@ def is_newer(candidate: str, current: str) -> bool:
 
 # -- checking ---------------------------------------------------------------
 
+def _read_cache_raw() -> dict | None:
+    """The cache file as-is, expiry ignored. For carrying what a good check
+    learned across a failed one -- stale knowledge of a release beats none."""
+    try:
+        return json.loads((config.RUN_DIR / CHECK_NAME).read_text())
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
 def _cached_check() -> dict | None:
     path = config.RUN_DIR / CHECK_NAME
     try:
@@ -194,6 +203,22 @@ def check(force: bool = False) -> dict:
                       # Cached like any other answer, so a failure backs off
                       # instead of retrying on every page load.
                       "retry_after": max(reset, time.time() + FAILED_TTL_S)}
+            # A failed check must not erase what the last good one knew. It
+            # used to: the rate-limited answer replaced the cache wholesale,
+            # available flipped to False, and the Update button vanished from
+            # under a person who had just been told an update exists -- for
+            # up to an hour, over a check that is only a freshness probe. The
+            # release itself installs over git and is never rate-limited.
+            prior = _read_cache_raw()
+            if prior and prior.get("latest"):
+                failed.update(
+                    latest=prior["latest"],
+                    target_ref=prior.get("target_ref"),
+                    notes=prior.get("notes", ""),
+                    title=prior.get("title", ""),
+                    url=prior.get("url", ""),
+                    available=is_newer(prior["latest"], __version__),
+                    stale=True)
             config.RUN_DIR.mkdir(parents=True, exist_ok=True)
             config.write_run_file(CHECK_NAME, json.dumps(failed))
             return failed

@@ -484,6 +484,46 @@ def test_a_failed_check_is_cached_so_it_stops_retrying(tmp_path, monkeypatch):
     assert len(calls) == 1, "a failure retried on every call — the old loop"
 
 
+def test_a_failed_check_keeps_what_the_last_good_one_knew(tmp_path, monkeypatch):
+    """Seen on the rig 2026-09-15: a rate-limited check replaced the cache
+    wholesale, available flipped to False, and the Update button vanished
+    from under a person who had just been told v0.5.29 existed. The release
+    installs over git and is never rate-limited -- only the freshness probe
+    is. Stale knowledge of a release beats none."""
+    monkeypatch.setattr(config, "RUN_DIR", tmp_path)
+    monkeypatch.setattr(updater, "__version__", "0.5.28")
+    monkeypatch.setattr(updater, "_fetch_latest_release",
+                        lambda: ({"tag_name": "v0.5.29", "body": "notes",
+                                  "name": "v0.5.29", "html_url": "u"}, "", 0.0))
+    good = updater.check(force=True)
+    assert good["available"] is True
+
+    monkeypatch.setattr(updater, "_fetch_latest_release",
+                        lambda: (None, "hourly limit used up", 0.0))
+    failed = updater.check(force=True)
+    assert failed["error"] == "hourly limit used up"
+    assert failed["available"] is True, "the button vanished with the check"
+    assert failed["latest"] == "0.5.29"
+    assert failed["target_ref"] == "v0.5.29"
+    assert failed.get("stale") is True
+
+
+def test_stale_knowledge_of_the_running_version_is_not_an_update(tmp_path, monkeypatch):
+    """Carry the release forward, but re-judge it: if the update was installed
+    between the good check and the failed one, offering it again is wrong."""
+    monkeypatch.setattr(config, "RUN_DIR", tmp_path)
+    monkeypatch.setattr(updater, "__version__", "0.5.28")
+    monkeypatch.setattr(updater, "_fetch_latest_release",
+                        lambda: ({"tag_name": "v0.5.29", "body": "",
+                                  "name": "", "html_url": ""}, "", 0.0))
+    updater.check(force=True)
+    monkeypatch.setattr(updater, "__version__", "0.5.29")   # it got installed
+    monkeypatch.setattr(updater, "_fetch_latest_release",
+                        lambda: (None, "limit", 0.0))
+    failed = updater.check(force=True)
+    assert failed["available"] is False
+
+
 def test_a_rate_limit_waits_exactly_until_it_resets(tmp_path, monkeypatch):
     """Retrying before the reset cannot succeed and only spends the next hour's
     allowance, so the cache expires when GitHub says the limit does."""

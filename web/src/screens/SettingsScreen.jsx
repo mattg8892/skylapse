@@ -1814,7 +1814,19 @@ function UpdateCard({ cfg, showToast, onChannel, onAutoCheck }) {
     <Card title="Updates"
       right={<span className="text-sm text-zinc-500">v{info?.current ?? '—'}</span>}>
       {info?.error ? (
-        <p className="mt-1 text-sm text-amber-400">{info.error}</p>
+        <>
+          <p className="mt-1 text-sm text-amber-400">{info.error}</p>
+          {/* A failed check no longer erases what the last good one knew:
+              the release is still offered, because installing goes over git
+              and is not subject to the API's rate limit. */}
+          {info.available && (
+            <p className="mt-2 text-sm text-sky-300">
+              Version {info.latest} is still available from the last
+              successful check — updating works even while the check is
+              limited.
+            </p>
+          )}
+        </>
       ) : info && info.auto_check === false && !info.checked_at ? (
         /* Never say "up to date" about a check that has not happened. */
         <p className="mt-1 text-sm text-zinc-400">

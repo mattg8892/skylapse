@@ -6,7 +6,7 @@ timelapses and RAW files, with no terminal in sight.
 
 <sub>[Getting started](#getting-started) · [Cameras](#cameras) · [Using it](#using-it) ·
 [Troubleshooting](#troubleshooting) · [Development](#development) ·
-[Design notes](DESIGN.md) · [Releases](https://github.com/mattg8892/skylapse/releases)</sub>
+[Design notes](DESIGN.md) · [Parts list](HARDWARE.md) · [Releases](https://github.com/mattg8892/skylapse/releases)</sub>
 
 ---
 
@@ -52,6 +52,8 @@ cannot stop the others writing frames.
 | **Optional** | A DS3231 RTC module (~$5) — a Pi has no battery-backed clock, so it boots with a stale time until it reaches the network. |
 
 Weatherproof housing and dew heater are up to you; this is the software half.
+The complete reference build — every part in the development rig, with prices
+and the reasoning behind the power architecture — is in [HARDWARE.md](HARDWARE.md).
 
 ## Getting started
 
