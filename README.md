@@ -42,18 +42,21 @@ cannot stop the others writing frames.
 
 ## What you need
 
+**The complete reference build — every part in the development rig, with
+prices, links, and the measured reasoning behind the power design — is in
+[HARDWARE.md](HARDWARE.md).** The short version:
+
 | | |
 |---|---|
 | **Raspberry Pi** | Pi 5 recommended, Pi 4 works. [Pi 5](https://www.raspberrypi.com/products/raspberry-pi-5/) |
-| **Power supply** | The official 5V/5A (Pi 5) or 5V/3A (Pi 4). Underpowering a USB3 camera shows up as mysterious disconnects mid-night, not as an obvious power error. |
+| **Power** | This matters more than it looks. The reference rig runs **one 12V supply** feeding the Pi through a **12V→5V/5A buck converter** (output above 5.0V — the official Pi 5 PSU's 5.1V exists for a reason), with the dew heater on the 12V rail directly. A plain 5V supply *can* work for a heater-less rig, but underpowering shows up as mysterious disconnects and undervoltage-latched hard shutdowns mid-night, not as an obvious power error — see [HARDWARE.md](HARDWARE.md) for why. |
 | **Storage** | 64 GB+ microSD. A [high-endurance card](https://www.raspberrypi.com/documentation/computers/getting-started.html#recommended-sd-cards) if you plan to shoot RAW — see [storage](#storage-and-raw). |
-| **Camera** | A Pi camera module — the [HQ Camera](https://www.raspberrypi.com/products/raspberry-pi-high-quality-camera/) / IMX477 is the recommended one and what this is developed against. A [ZWO ASI](https://www.zwoastro.com/) USB camera may also work; see [cameras](#cameras). |
-| **Lens** | A fisheye, or you are photographing a rectangle of sky rather than the sky. The development rig uses the [Arducam 180° fisheye M12](https://www.amazon.com/dp/B0897QD6C2) ([vendor page](https://www.arducam.com/arducam-180-degree-fisheye-1-2-3-m12-mount-with-lens-adapter-for-raspberry-pi-high-quality-camera.html)) — 1/2.3", matching the HQ camera's sensor, and it ships with the M12→CS adapter the HQ camera needs. |
+| **Camera** | A Pi camera module — the HQ-class **IMX477** (the reference rig uses the [Arducam 12.3MP IMX477](https://www.amazon.com/dp/B0D3WYQF2Q)) is what this is developed against. A [ZWO ASI](https://www.zwoastro.com/) USB camera may also work; see [cameras](#cameras). |
+| **Lens** | Wide and fast, or you are photographing a rectangle of sky rather than the sky. The reference rig uses a [2.5mm F1.2 CS-mount lens](https://www.amazon.com/dp/B0C46GP6HV) on the HQ camera. See [the lens matters](#the-lens-matters-as-much-as-the-camera). |
+| **Dew heater** | Optional but decisive on damp nights — [BME280 sensor](https://www.amazon.com/dp/B0DSVNCVVV) + [MOSFET switch module](https://www.amazon.com/dp/B07NWD8W26) + a heating element, driven automatically (or manually, no sensor needed) from the Heater tab. |
 | **Optional** | A DS3231 RTC module (~$5) — a Pi has no battery-backed clock, so it boots with a stale time until it reaches the network. |
 
-Weatherproof housing and dew heater are up to you; this is the software half.
-The complete reference build — every part in the development rig, with prices
-and the reasoning behind the power architecture — is in [HARDWARE.md](HARDWARE.md).
+Weatherproof housing is up to you; this is the software half.
 
 ## Getting started
 
@@ -126,19 +129,26 @@ The HQ Camera ships bare, and the stock C/CS lenses see a narrow rectangle — f
 bird box, useless for a sky. What you want is a **fisheye**, so a whole night's worth of
 sky lands inside one frame and the horizon comes out as a circle rather than a crop.
 
-The development rig uses the **[Arducam 180° fisheye M12](https://www.amazon.com/dp/B0897QD6C2)**
-([vendor page](https://www.arducam.com/arducam-180-degree-fisheye-1-2-3-m12-mount-with-lens-adapter-for-raspberry-pi-high-quality-camera.html)).
-Two things make it the easy pick rather than a lucky one:
+The reference rig currently uses a **[2.5mm F1.2 1/2.5″ CS-mount
+lens](https://www.amazon.com/dp/B0C46GP6HV)** — cheap, fast, and CS-mount, so
+it threads straight onto the HQ camera (via its included C-CS ring) with no
+adapter question. F1.2 matters at night: it is more than a stop faster than
+the typical F2.0 fisheye, which is the difference between 12s and 25s
+exposures for the same sky.
 
-- It is a **1/2.3" lens**, the HQ camera's own sensor format, so the image circle actually
-  covers the sensor.
-- It **includes the M12→CS adapter**. The HQ camera is C/CS mount and M12 lenses are not,
-  so a bare M12 fisheye will not attach to it at all — the single most common way to buy
-  the wrong thing here.
+Three things to get right whichever lens you pick:
 
-Any 180° fisheye of the right format works; this is the one that has been used, not an
-endorsement. Narrower fisheyes (Arducam sell 140° and 100°) trade sky for detail, which is
-a reasonable trade if you care more about one part of the sky than all of it.
+- **Mount**: the HQ camera is C/CS mount. M12 lenses need an M12→CS adapter
+  or they will not attach at all — the single most common way to buy the
+  wrong thing here. (The rig previously ran the [Arducam 180° fisheye
+  M12](https://www.amazon.com/dp/B0897QD6C2), which ships with that adapter
+  and remains a fine wider-view choice.)
+- **Format**: the image circle must cover the sensor — 1/2.5″ or 1/2.3″
+  glass on the HQ camera's 1/2.3″ sensor.
+- **Speed vs coverage**: a true 180° fisheye catches the whole sky at around
+  F2; a fast wide like the 2.5mm sees less horizon but drinks more light.
+  Which trade is right depends on whether you care more about all of the sky
+  or the darker parts of it.
 
 ### ZWO ASI cameras
 
