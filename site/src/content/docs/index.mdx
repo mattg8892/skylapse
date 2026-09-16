@@ -1,0 +1,68 @@
+---
+title: Skylapse
+description: Open-source night-sky timelapse software for Raspberry Pi. Write a card, plug it in, run the whole thing from your phone.
+template: splash
+hero:
+  tagline: Timelapse software for capturing the entire night sky, every night. Point a Raspberry Pi camera straight up and run the whole thing from your phone — live view, focus assist, timelapses and RAW files, with no terminal in sight.
+  image:
+    file: ../../assets/hero.png
+    alt: Skylapse — star trails over mountains and a lake, inside a circular frame
+  actions:
+    - text: Get started
+      link: /getting-started/
+      icon: right-arrow
+      variant: primary
+    - text: Parts list
+      link: /hardware/
+      icon: setting
+    - text: GitHub
+      link: https://github.com/mattg8892/skylapse
+      icon: github
+      variant: minimal
+---
+
+import { Card, CardGrid, LinkCard } from '@astrojs/starlight/components';
+
+## What it does
+
+<CardGrid stagger>
+  <Card title="No terminal. Ever." icon="rocket">
+    Write a card, plug it in, set it up on your phone. No config files, no account, nothing in the cloud. If there is no Wi-Fi to join, the camera serves its own.
+  </Card>
+  <Card title="Built for Pi cameras" icon="puzzle">
+    The HQ Camera / IMX477 above all — that is what Skylapse is developed and tested against. Boards the Pi cannot auto-detect can be declared from the setup screen. ZWO ASI USB cameras are supported second, best-effort.
+  </Card>
+  <Card title="Full-res JPEG + DNG raw" icon="document">
+    A full-resolution JPEG every frame, plus DNG raw on demand, on a schedule, or from a keeper button for when a meteor just went past.
+  </Card>
+  <Card title="Auto-exposure that tracks the sky" icon="sun">
+    Day, night and twilight profiles from sun altitude, plus a manual mode for star-tracker rigs.
+  </Card>
+  <Card title="Nights browser" icon="list-format">
+    Scrub a whole night frame by frame, with a star-count chart to find the clear stretch. Download any frame as JPEG or DNG.
+  </Card>
+  <Card title="Focus assist" icon="magnifier">
+    Live view with 1×–10× zoom into the full-resolution sensor image and a sharpness score to chase while you turn the ring.
+  </Card>
+  <Card title="Dawn timelapses" icon="open-book">
+    Rendered automatically every morning, with one-off length and quality overrides.
+  </Card>
+  <Card title="Survives your network" icon="approve-check-circle">
+    Falls back to its own Wi-Fi if your network disappears, and an access-point mode you can switch on by hand. Phone alerts over ntfy when capture stops — and when it recovers.
+  </Card>
+</CardGrid>
+
+Capture, the web UI, and networking are three separate services, so a problem in one cannot stop the others writing frames.
+
+## Free forever
+
+Skylapse has one hard rule: **no cost to the maintainer, no cost to the user, ever.** No native app (it is a PWA — no app-store fees to pass on), no cloud relay, no hosted service, no account. Everything runs on your Pi. Nothing in the project may create a recurring bill for anyone, and nothing may depend on a backend that could be shut down. MIT licensed, clean-room implementation.
+
+## Where to next
+
+<CardGrid>
+  <LinkCard title="Getting started" description="Write the SD card, power up, finish setup on your phone. Ten minutes." href="/getting-started/" />
+  <LinkCard title="Hardware & parts list" description="Every part in the reference rig, with links and prices — about $330 all in." href="/hardware/" />
+  <LinkCard title="Cameras & lenses" description="Which Pi camera to buy, why the lens matters as much, and where ZWO stands." href="/cameras/" />
+  <LinkCard title="Dew heater" description="Automatic from a BME280 dewpoint. A Skylapse 12V heater ring is coming." href="/dew-heater/" />
+</CardGrid>
