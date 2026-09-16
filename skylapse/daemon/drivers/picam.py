@@ -157,13 +157,28 @@ class PiCamDriver(CameraDriver):
                  self._info.max_gain)
         return self._info
 
-    def set_controls(self, exposure_us: int, gain: int) -> None:
+    def set_controls(self, exposure_us: int, gain: int,
+                     frame_interval_us: int | None = None) -> None:
         assert self._picam and self._info
         exposure_us = max(self._info.min_exposure_us,
                           min(exposure_us, self._info.max_exposure_us))
         # AnalogueGain is a float multiplier here, not the ZWO's integer scale.
         gain_value = max(1.0, min(float(gain), float(self._info.max_gain)))
         duration = exposure_us + FRAME_DURATION_MARGIN_US
+        # Phase-lock the sensor to the capture grid. The pipeline free-runs
+        # at the frame duration, so at a 25s exposure inside a 30s interval
+        # the stream beats against the tick and a "punctual" capture returns
+        # a frame that STARTED anywhere in a 25s window — start-to-start
+        # spacing jitters by up to a whole exposure. Stretching the duration
+        # to the interval makes the sensor itself tick at 30.000s: expose
+        # 25s, idle 5s, and every completion lands on the grid. Bonus: AE
+        # steps change only the exposure inside a constant frame period, so
+        # cadence is untouched by exposure hunting. Only above the discard
+        # threshold — below it the settle loop still discards frames, and a
+        # discard would then cost a whole interval instead of an exposure.
+        if (frame_interval_us and frame_interval_us > duration
+                and exposure_us > SETTLE_DISCARD_MAX_EXPOSURE_US):
+            duration = frame_interval_us
         self._picam.set_controls({
             "ExposureTime": exposure_us,
             "AnalogueGain": gain_value,

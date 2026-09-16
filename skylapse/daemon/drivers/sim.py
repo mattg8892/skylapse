@@ -42,7 +42,9 @@ class SimDriver(CameraDriver):
             width=WIDTH, height=HEIGHT, bayer=BayerPattern.RGGB, bit_depth=16,
             max_exposure_us=60_000_000, min_exposure_us=32, max_gain=500)
 
-    def set_controls(self, exposure_us: int, gain: int) -> None:
+    def set_controls(self, exposure_us: int, gain: int,
+                     frame_interval_us: int | None = None) -> None:
+        # Synchronous capture: the grid is the daemon's job here.
         self._exposure_us = max(32, min(exposure_us, 60_000_000))
         self._gain = max(1, min(gain, 500))
 

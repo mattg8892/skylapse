@@ -30,8 +30,9 @@ from .pipeline.analyze import star_count
 from .. import notify
 from . import nightjobs
 from .watchdog import StallWatch, describe as describe_age
-from .scheduler import (SAFETY_BRIGHT_LEVEL, next_dusk, next_exposure, period,
-                        profile_for, safety_should_stop, should_capture)
+from .scheduler import (SAFETY_BRIGHT_LEVEL, next_dusk, next_exposure,
+                        next_frame_due, period, profile_for,
+                        safety_should_stop, should_capture)
 
 log = logging.getLogger("skylapse.daemon")
 
@@ -140,6 +141,10 @@ class CaptureDaemon:
         # pipeline flushing a control change; see Frame.settled). AE holds
         # while this runs, so it never reacts to the old command's result.
         self.unsettled_streak = 0
+        # The capture grid: monotonic time the next frame is due, and the
+        # interval it was anchored at (a change of interval re-anchors).
+        self.frame_due: float | None = None
+        self.due_interval = 0.0
         # Rolling raw buffer for the "save RAW" keeper button (guarded by API).
         self.keeper_buffer: collections.deque[Frame] = collections.deque(maxlen=3)
         self.hotpixels = HotPixelMap(config.IMAGE_ROOT.parent / "calibration")
@@ -417,6 +422,12 @@ class CaptureDaemon:
                 self.idle_day = False
                 log.info("Dusk reached; resuming capture")
 
+            # Hold for the grid. The wait sits BEFORE capture (not after, as
+            # the old gap-sleep did) so a command wake-up can be serviced by
+            # the loop and the frame still lands on its tick.
+            if self._wait_interrupted_by_command():
+                continue
+
             try:
                 prev_exposure, prev_gain = self.exposure_us, self.gain
                 # AE reacts only to a frame taken at its own last command. At
@@ -450,7 +461,10 @@ class CaptureDaemon:
                               self.unsettled_streak)
                 self._check_ae_headroom(profile)
                 self._remember_exposure(now_period)
-                self.driver.set_controls(self.exposure_us, self.gain)
+                self.driver.set_controls(
+                    self.exposure_us, self.gain,
+                    frame_interval_us=int(profile.gap_s * 1_000_000)
+                    if profile.gap_s > 0 else None)
                 frame = self.driver.capture()
                 self.unsettled_streak = 0 if frame.settled \
                     else self.unsettled_streak + 1
@@ -537,12 +551,41 @@ class CaptureDaemon:
                 "dew": self.dewheater.tick() if self.dewheater else None,
             })
 
-            # Gap-based timing: wait gap_s after the frame (capture + save)
-            # finishes. Deterministic in both auto and manual modes.
+            # Interval timing: gap_s is start-to-start, on a fixed grid.
+            # "30s" has to MEAN a frame every 30 seconds — processing time,
+            # exposure drift and one-off stalls must not stretch it, because
+            # uneven spacing reads as stutter in the rendered timelapse no
+            # matter how good every frame is. The wait itself happens at the
+            # top of the next iteration (_wait_interrupted_by_command); here
+            # the next tick is only computed.
             if profile.gap_s > 0:
-                self._sleep_interruptible(profile.gap_s)
+                interval = float(profile.gap_s)
+                now = time.monotonic()
+                if self.frame_due is None or self.due_interval != interval:
+                    self.due_interval = interval
+                    self.frame_due = now + interval        # fresh anchor
+                else:
+                    self.frame_due = next_frame_due(self.frame_due, interval, now)
+            else:
+                self.frame_due = None                      # flat out
 
     # -- helpers -----------------------------------------------------------
+
+    def _wait_interrupted_by_command(self) -> bool:
+        """Sleep until the next grid tick. True means a UI command arrived
+        and the loop should go round to service it — the due time is left
+        alone, so after the command is handled the wait simply resumes and
+        the frame still lands on its tick."""
+        if self.frame_due is None:
+            return False
+        remaining = self.frame_due - time.monotonic()
+        if remaining <= 0:
+            return False
+        self._sleep_interruptible(remaining)
+        if any((config.RUN_DIR / name).exists() for name in COMMAND_FILES):
+            return True
+        # Woken by the deadline (or shutdown); either way, proceed.
+        return False
 
     def _sleep_interruptible(self, seconds: float) -> None:
         """Wait out a gap, but wake early when the UI asks for something.
@@ -824,7 +867,9 @@ class CaptureDaemon:
             return True
         if mode == "every_nth":
             n = max(1, cam.raw.every_nth)
-            cadence = max(1, cam.night.gap_s + frame.exposure_us // 1_000_000)
+            # gap_s is start-to-start now; exposure only matters when it has
+            # outgrown the interval and frames come as fast as they finish.
+            cadence = max(1, cam.night.gap_s, frame.exposure_us // 1_000_000)
             return int(frame.timestamp) % (n * cadence) < cadence
         # "window" mode: local-time window check
         if mode == "window":

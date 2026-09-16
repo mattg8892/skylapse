@@ -146,7 +146,10 @@ class ZwoDriver(CameraDriver):
                  self._info.width, self._info.height, bayer.value)
         return self._info
 
-    def set_controls(self, exposure_us: int, gain: int) -> None:
+    def set_controls(self, exposure_us: int, gain: int,
+                     frame_interval_us: int | None = None) -> None:
+        # Exposures are synchronous one-shots here, so start times already
+        # follow the daemon's grid; the interval hint has nothing to pin.
         assert self._cam and self._info
         exposure_us = max(self._info.min_exposure_us,
                           min(exposure_us, self._info.max_exposure_us))

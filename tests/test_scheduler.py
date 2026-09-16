@@ -133,6 +133,27 @@ def test_it_says_so_once_per_episode(caplog):
     assert len(said) == 1, f"logged {len(said)} times"
 
 
+def test_the_capture_grid_is_start_to_start():
+    """30 means a frame every 30 seconds. Processing time must not stretch
+    the cadence — the old gap-after-frame timing leaked capture and save
+    time into every interval (~30.6s measured), and the drift beat against
+    the sensor's frame stream as 40s/10s pairs in an otherwise clean night."""
+    from skylapse.daemon.scheduler import next_frame_due
+    due = 1000.0
+    for lateness in (0.4, 2.1, 0.9, 4.9):        # processing jitter
+        due = next_frame_due(due, 30.0, now=due + lateness)
+    assert due == 1000.0 + 4 * 30.0, "the grid drifted"
+
+
+def test_an_overrun_skips_to_the_next_grid_point():
+    """A dawn render can block the loop for minutes. One clean double-length
+    hold beats a permanently shifted grid."""
+    from skylapse.daemon.scheduler import next_frame_due
+    assert next_frame_due(1000.0, 30.0, now=1445.0) == 1450.0
+    # And an exact tick landing is not treated as an overrun of itself.
+    assert next_frame_due(1000.0, 30.0, now=1000.0) == 1030.0
+
+
 def test_ae_holds_while_the_pipeline_flushes_a_control_change():
     """At long exposures the driver keeps the 2-3 frames the pipeline exposes
     at the OLD settings while a change lands (discarding them cost ~2h of the

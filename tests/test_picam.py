@@ -172,6 +172,34 @@ def test_frame_duration_covers_the_exposure(driver):
     assert lo >= 30_000_000 and hi >= 30_000_000
 
 
+def test_long_exposures_phase_lock_to_the_capture_interval(driver):
+    """The pipeline free-runs at the frame duration, so a 25s exposure in a
+    30s interval beats against the tick: a punctual capture returns a frame
+    that STARTED anywhere in a 25s window. Stretching the duration to the
+    interval makes the sensor itself tick at exactly the cadence — and AE
+    steps then change only the exposure inside a constant frame period."""
+    driver.set_controls(25_000_000, 2, frame_interval_us=30_000_000)
+    lo, hi = driver._picam.controls_set["FrameDurationLimits"]
+    assert (lo, hi) == (30_000_000, 30_000_000)
+
+
+def test_short_exposures_ignore_the_interval_hint(driver):
+    """Below the discard threshold the settle loop still throws frames away,
+    and a discard at a pinned 30s duration would cost a whole interval. Short
+    exposures keep the fast frame period; the daemon's grid does the timing."""
+    driver.set_controls(500_000, 2, frame_interval_us=30_000_000)
+    lo, hi = driver._picam.controls_set["FrameDurationLimits"]
+    assert hi < 30_000_000, "a short exposure was pinned to the interval"
+
+
+def test_an_exposure_longer_than_the_interval_wins(driver):
+    """A 40s manual sub with a 30s interval cannot fit; the exposure keeps
+    its own duration rather than being squeezed."""
+    driver.set_controls(40_000_000, 2, frame_interval_us=30_000_000)
+    lo, hi = driver._picam.controls_set["FrameDurationLimits"]
+    assert lo >= 40_000_000
+
+
 def test_gain_is_clamped_to_the_analogue_range(driver):
     """AE works in the ZWO's integer scale and will ask for far more than this
     sensor's 22x ceiling."""

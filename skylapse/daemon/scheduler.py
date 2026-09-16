@@ -79,6 +79,23 @@ SAFETY_BRIGHT_LEVEL = 235.0      # mean 0-255; ~92% of full scale
 SAFETY_BRIGHT_FRAMES = 3         # consecutive frames required to trip
 
 
+def next_frame_due(prev_due: float, interval: float, now: float) -> float:
+    """The next point on the capture grid, in monotonic seconds.
+
+    A timelapse is ruined by uneven spacing more surely than by a missing
+    frame: intervals are start-to-start on a fixed grid, so processing time,
+    exposure changes and one-off stalls cannot stretch the cadence. When the
+    loop overruns a tick entirely (a dawn render, a camera reopen), the due
+    time jumps to the NEXT grid point rather than restarting from now -- one
+    clean double-length hold instead of a permanently shifted grid.
+    """
+    due = prev_due + interval
+    if due <= now:
+        missed = int((now - due) // interval) + 1
+        due += missed * interval
+    return due
+
+
 def safety_should_stop(profile: CaptureProfile, current_period: str,
                        consecutive_bright: int) -> str | None:
     """Returns a trip reason ('daylight' | 'bright_frames') or None.

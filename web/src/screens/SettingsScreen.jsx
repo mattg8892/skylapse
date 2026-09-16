@@ -1367,12 +1367,14 @@ function CameraSettings({ id, cam, storage, onCamera, onProfile }) {
           </div>
 
           <NumberField
-            label="Gap between frames" suffix="s" min={0} max={3600}
+            label="Time between frames" suffix="s" min={0} max={3600}
             value={profile.gap_s ?? 0}
             onChange={(gap_s) => onProfile(period, { gap_s })} />
           <p className="-mt-1 text-xs text-zinc-500">
-            Measured from the end of one frame to the start of the next, so it
-            stays predictable as auto-exposure changes the exposure.
+            Start to start, on a fixed grid — 30 means a frame every 30
+            seconds exactly, whatever the exposure or processing time. Set it
+            longer than your longest exposure; an exposure that outgrows it
+            takes over, and frames come as fast as exposures finish.
           </p>
 
           <Segmented

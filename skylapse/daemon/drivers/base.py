@@ -75,7 +75,13 @@ class CameraDriver(ABC):
     def open(self) -> CameraInfo: ...
 
     @abstractmethod
-    def set_controls(self, exposure_us: int, gain: int) -> None: ...
+    def set_controls(self, exposure_us: int, gain: int,
+                     frame_interval_us: int | None = None) -> None:
+        """Apply exposure/gain. frame_interval_us, when given, is the
+        capture grid's start-to-start interval: drivers whose sensors
+        free-run (Pi CSI) stretch the frame period to it so completions
+        land on the grid; synchronous drivers (ZWO, sim) may ignore it."""
+        ...
 
     @abstractmethod
     def capture(self) -> Frame:

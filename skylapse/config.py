@@ -21,8 +21,12 @@ RUN_DIR = Path(os.environ.get("SKYLAPSE_RUN", "/run/skylapse"))
 
 class CaptureProfile(BaseModel):
     """Per-period capture settings. auto_exposure targets mean brightness.
-    Timing is exposure + gap: the next capture starts gap_s after the
-    previous one ENDS — true in auto and manual mode alike."""
+    Timing is start-to-start: gap_s is the interval between frame STARTS,
+    held on a fixed grid — 30 means a frame every 30 seconds exactly,
+    whatever the exposure or the processing time, because uneven spacing
+    reads as stutter in a timelapse no matter how good the frames are.
+    Only an exposure that has outgrown the interval overrides it; frames
+    then come as fast as exposures finish."""
     gap_s: int = 5
     auto_exposure: bool = True
     target_brightness: int = 90          # 0-255 mean of previous frame
