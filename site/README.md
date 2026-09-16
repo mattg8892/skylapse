@@ -33,4 +33,4 @@ Every push to `main` that touches `site/` redeploys. Preview deployments are bui
 
 - [ ] `SITE` in `astro.config.mjs` matches the real domain (drives canonical URLs, sitemap, OG image URL).
 - [ ] Store page: replace the two disabled buttons with the real Etsy / Tindie listing URLs and remove `aria-disabled`.
-- [ ] Drop real screenshots into `src/assets/` and use them on the landing page in place of / alongside the SVG hero.
+- [ ] Drop real screenshots into `src/assets/` and use them on the landing page in place of / alongside the placeholder hero.
