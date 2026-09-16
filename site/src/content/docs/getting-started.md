@@ -23,30 +23,23 @@ Weatherproof housing and dew heater are covered on the [Hardware](/hardware/) pa
 ## 1. Write the card
 
 1. Download **`skylapse.img.xz`** from the [latest release](https://github.com/mattg8892/skylapse/releases/latest).
-2. Open [Raspberry Pi Imager](https://www.raspberrypi.com/software/), choose **Use custom**, and select the file you downloaded.
-3. Open Imager's **customisation** settings (the gear icon) before writing:
-   - enter your **Wi-Fi** credentials and country
-   - set a **hostname** if you like — the image already answers to `skylapse`, but give a second camera a different name: two `skylapse.local` on one network resolve to whichever answers first
-   - **enable SSH** if you ever want a terminal. You do not need it.
-4. Write the card, put it in the Pi, and power up.
+2. Open [Raspberry Pi Imager](https://www.raspberrypi.com/software/) and pick your **device** — Raspberry Pi 5 (or whichever Pi you have).
+3. Under **Choose OS**, scroll all the way to the bottom and pick **Use custom**, then select the `skylapse.img.xz` you downloaded.
+4. **Choose storage** — your microSD card — and hit **Write**.
 
-The first boot expands the filesystem and takes a minute or two longer than later ones.
+Imager will not offer its customisation screen for a custom image, so there is nowhere to enter Wi-Fi here — **that's expected**. The camera asks for your Wi-Fi itself on first boot, from your phone, in the next step.
+
+Put the written card in the Pi and power up. The first boot expands the filesystem and takes a minute or two longer than later ones.
 
 ## 2. Open it
 
-**If you entered Wi-Fi details**, the camera joins your network:
-
-```
-http://skylapse.local
-```
-
-**If you didn't**, the camera serves its own network instead. Join **`Skylapse-Setup`** from your phone's Wi-Fi settings — it is open, no password — and go to:
+The freshly written card knows nothing about your Wi-Fi yet, so the camera serves its own network. Join **`Skylapse-Setup`** from your phone's Wi-Fi settings — it is open, no password — and go to:
 
 ```
 http://10.42.0.1
 ```
 
-Either way, setup runs on the first visit: network, camera with a live test shot, where the camera is, what to capture, and optionally a password. A couple of minutes on a phone, and every answer can be changed later from the tabs across the top.
+Setup runs on the first visit: joining your Wi-Fi, camera with a live test shot, where the camera is, what to capture, and optionally a password. A couple of minutes on a phone, and every answer can be changed later from the tabs across the top.
 
 That is the whole install. No terminal, no config files, no account, nothing in the cloud.
 

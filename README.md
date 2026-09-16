@@ -63,45 +63,40 @@ Weatherproof housing is up to you; this is the software half.
 ### 1. Write the card
 
 Download **`skylapse.img.xz`** from the
-[latest release](https://github.com/mattg8892/skylapse/releases/latest), open
-[Raspberry Pi Imager](https://www.raspberrypi.com/software/), choose **Use custom** and
-select the file you downloaded.
+[latest release](https://github.com/mattg8892/skylapse/releases/latest) and open
+[Raspberry Pi Imager](https://www.raspberrypi.com/software/):
 
-Then open Imager's **customisation** settings (the gear icon) before writing:
+1. Pick your **device** — Raspberry Pi 5 (or whichever Pi you have).
+2. Under **Choose OS**, scroll all the way to the bottom, pick **Use custom**, and
+   select the `skylapse.img.xz` you downloaded.
+3. **Choose storage** — your microSD card — and hit **Write**.
 
-- enter your **Wi-Fi** credentials and country
-- set a **hostname** if you like — the image already answers to `skylapse`, but give a
-  second camera a different name: two `skylapse.local` on one network resolve to
-  whichever answers first
-- **enable SSH** if you ever want a terminal. You do not need it.
+Imager skips its customisation screen for a custom image, so there is nowhere to enter
+Wi-Fi here — that's expected. The camera asks for your Wi-Fi itself on first boot, from
+your phone, in the next step.
 
-Write the card, put it in the Pi, and power up. The first boot expands the filesystem and
-takes a minute or two longer than later ones.
+Put the card in the Pi and power up. The first boot expands the filesystem and takes a
+minute or two longer than later ones.
 
 ### 2. Open it
 
-**If you entered Wi-Fi details**, the camera joins your network:
-
-```
-http://skylapse.local
-```
-
-**If you didn't**, the camera serves its own network instead. Join **`Skylapse-Setup`**
-from your phone's Wi-Fi settings — it is open, no password — and go to:
+The freshly written card knows nothing about your Wi-Fi yet, so the camera serves its
+own network. Join **`Skylapse-Setup`** from your phone's Wi-Fi settings — it is open,
+no password — and go to:
 
 ```
 http://10.42.0.1
 ```
 
-Either way, setup runs on the first visit: network, camera with a live test shot, where
+Setup runs on the first visit: joining your Wi-Fi, camera with a live test shot, where
 the camera is, what to capture, and optionally a password. A couple of minutes on a
-phone, and every answer can be changed later in Settings.
+phone, and every answer can be changed later from the tabs across the top.
 
 That is the whole install. No terminal, no config files, no account, nothing in the cloud.
 
 > **If it says "No camera detected"**, that is usually not a fault. Raspberry Pi OS
 > identifies cameras by reading a chip that many third-party boards — including most
-> HQ/IMX477 clones — simply do not have. In **Settings → Cameras**, open
+> HQ/IMX477 clones — simply do not have. On the **Camera tab**, open
 > **"My camera isn't being detected"**, pick your sensor, and tap **Enable and restart**.
 > No terminal needed.
 >
@@ -121,7 +116,7 @@ one to buy if you are buying.
 
 Other Pi-compatible modules — IMX708, IMX219, IMX519, OV5647, IMX296 and the many
 third-party boards using those sensors — work through the same driver and can be
-declared from Settings → Cameras when the Pi cannot see them by itself.
+declared from the Camera tab when the Pi cannot see them by itself.
 
 ### The lens matters as much as the camera
 
@@ -163,7 +158,7 @@ one.
 - **It is not what new features are designed against.** A ZWO-only regression is likely
   to be found by you rather than by us.
 
-You no longer need a terminal for it, though. In **Settings → Cameras** (or on the
+You no longer need a terminal for it, though. On the **Camera tab** (or on the
 camera screen during setup), open **Add another camera → ZWO ASI camera (USB)**, accept
 ZWO's licence, and tap **Install ZWO support**. Skylapse downloads the library —
 about 4 MB, so the camera needs internet access at that moment — verifies it against a
@@ -212,7 +207,7 @@ the access point, and doing that halfway through somebody's setup is worse than 
 It also stays put for at least five minutes regardless, so a network that is flapping
 can't leave you chasing it.
 
-You can also switch to access-point mode by hand, from **Settings → Network** — useful
+You can also switch to access-point mode by hand, from the **Network tab** — useful
 when you're standing at the camera and don't want to wait for anything to time out. That
 choice sticks until you switch it back, and survives a reboot; there are timed options if
 you'd rather it return to Wi-Fi on its own.
@@ -232,7 +227,7 @@ The topic name is the only thing protecting it — treat it as a secret.
 skylapse-daemon`. Logs are `journalctl -u skylapse-daemon -f`, which prints one line per
 captured frame.
 
-**"No camera detected" with a ZWO attached.** First check Settings → Cameras says ZWO
+**"No camera detected" with a ZWO attached.** First check the Camera tab says ZWO
 support is installed; if it doesn't, install it there. If it does and the camera is still
 missing, it is power or the model: a USB3 camera on a non-official supply enumerates
 intermittently or not at all, and models other than the ASI676MC are not verified and may
