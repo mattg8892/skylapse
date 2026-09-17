@@ -733,13 +733,35 @@ export function TimelapsePanel({ cameraId, night, present, rendering,
         + `?force=true&clip_seconds=${clipSeconds}&quality=${quality}`
       const r = await fetch(url, { method: 'POST' })
       const body = await r.json()
-      if (r.ok) {
-        showToast(`Rendered ${body.file}`)
-        setVersion((v) => v + 1)
-        onRendered?.()
-      } else {
+      if (!r.ok) {
         showToast(errorText(body, 'Render failed'))
+        setBusy(false)
+        return
       }
+      // The render runs on the camera in the background — a synchronous
+      // render used to hold the API's one worker and every request from
+      // every client timed out until ffmpeg finished. The nights index says
+      // when it is done: `rendering` while the encode runs, then the
+      // timelapse flags.
+      showToast('Rendering — takes a few minutes')
+      const poll = setInterval(async () => {
+        try {
+          const nights = await (await fetch(`/api/nights/${cameraId}`)).json()
+          const me = nights.find?.((n) => n.night === night)
+          if (me && !me.rendering) {
+            clearInterval(poll)
+            setBusy(false)
+            setVersion((v) => v + 1)
+            onRendered?.()
+            showToast(me.has_timelapse || me.has_day_timelapse
+              ? 'Timelapse rendered'
+              : 'Render finished but produced nothing — see the logs')
+          }
+        } catch { /* camera busy encoding; keep polling */ }
+      }, 5000)
+      // Safety valve: stop polling after 45 minutes whatever happened.
+      setTimeout(() => { clearInterval(poll); setBusy(false) }, 45 * 60 * 1000)
+      return
     } catch {
       showToast('Render failed')
     }

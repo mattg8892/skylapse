@@ -6,8 +6,10 @@ config.yaml and /run/skylapse status files — no direct coupling.
 from __future__ import annotations
 
 import json
+import logging
 import shutil
 import subprocess
+import threading
 import time
 from pathlib import Path
 
@@ -1594,13 +1596,26 @@ def timelapse_file(camera_id: str, night: str, variant: str = "night"):
     return FileResponse(path, media_type="video/mp4")
 
 
+# One on-demand render at a time. A render is minutes of two cores; two at
+# once is four cores of encode plus capture, which is undervoltage territory
+# on the supplies this runs on — and it is also how the API wedged on
+# 2026-09-17, when a render held uvicorn's one worker synchronously and every
+# request from every client timed out until ffmpeg finished. Rendering is
+# background work; the request only starts it.
+_render_lock = threading.Lock()
+_render_log = logging.getLogger("skylapse.api.render")
+
+
 @app.post("/api/timelapse/render/{camera_id}/{night}")
 def render_timelapse(camera_id: str, night: str, force: bool = False,
                      clip_seconds: int | None = None,
                      quality: str | None = None) -> dict:
-    """On-demand render. force=true re-renders; clip_seconds/quality are
-    ONE-OFF overrides for this render only — saved settings are untouched,
-    so the dashboard can offer 'make this one 60s' without a settings trip."""
+    """Start an on-demand render and return at once. force=true re-renders;
+    clip_seconds/quality are ONE-OFF overrides for this render only — saved
+    settings are untouched, so the dashboard can offer 'make this one 60s'
+    without a settings trip. Progress is visible in the nights index: the
+    night reports `rendering` while the encode runs and `has_timelapse` when
+    it lands."""
     from ..daemon import nightjobs
     folder = config.IMAGE_ROOT / camera_id / night
     if not folder.is_dir():
@@ -1611,11 +1626,21 @@ def render_timelapse(camera_id: str, night: str, force: bool = False,
         settings.clip_seconds = max(5, min(600, clip_seconds))
     if quality in ("standard", "high", "max"):
         settings.quality = quality
-    rendered = nightjobs.render_all(folder, settings, force=force)
-    out = rendered.get("night") or rendered.get("day")
-    if out is None:
-        raise HTTPException(422, "Not enough frames or ffmpeg unavailable")
-    return {"ok": True, "file": out.name}
+    if not _render_lock.acquire(blocking=False):
+        raise HTTPException(409, "A render is already running — wait for it "
+                                 "to finish")
+
+    def _run() -> None:
+        try:
+            nightjobs.render_all(folder, settings, force=force)
+        except Exception:
+            _render_log.exception("On-demand render of %s failed", night)
+        finally:
+            _render_lock.release()
+
+    threading.Thread(target=_run, daemon=True, name="render-api").start()
+    return {"ok": True, "started": True,
+            "note": "rendering in the background — the night shows it"}
 
 
 # -- keeper button ------------------------------------------------------------

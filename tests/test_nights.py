@@ -123,3 +123,50 @@ def test_non_frame_files_are_not_served(store, client):
     """Only img_*.jpg — the sidecars and mp4 have their own routes or none."""
     r = client.get(f"/api/nights/{CAMERA}/{NIGHT}/frame/img_20260810_120000.json")
     assert r.status_code == 404
+
+
+# -- on-demand renders are background work ------------------------------------
+
+def test_an_on_demand_render_returns_before_the_encode(tmp_path, monkeypatch):
+    """A render held uvicorn's one worker synchronously on 2026-09-17: every
+    request from every client timed out until ffmpeg finished, minutes later.
+    The endpoint's job is to START the render; the nights index reports the
+    rest (`rendering` while the .part exists, the flags when it lands)."""
+    import threading
+    import time as _time
+    from fastapi.testclient import TestClient
+    from skylapse import config
+    from skylapse.api import main as api
+    from skylapse.daemon import nightjobs
+
+    monkeypatch.setattr(config, "CONFIG_PATH", tmp_path / "config.yaml")
+    monkeypatch.setattr(config, "RUN_DIR", tmp_path / "run")
+    monkeypatch.setattr(config, "IMAGE_ROOT", tmp_path / "img")
+    config.save(config.Config())
+    night = tmp_path / "img" / "picam-imx477" / "2026-09-15"
+    night.mkdir(parents=True)
+
+    release = threading.Event()
+    started = threading.Event()
+
+    def slow_render(folder, settings, force=False):
+        started.set()
+        release.wait(timeout=5)
+        return {}
+
+    monkeypatch.setattr(nightjobs, "render_all", slow_render)
+    client = TestClient(api.app)
+    t0 = _time.monotonic()
+    r = client.post("/api/timelapse/render/picam-imx477/2026-09-15")
+    took = _time.monotonic() - t0
+    try:
+        assert r.status_code == 200 and r.json()["started"] is True
+        assert took < 2, f"the endpoint blocked for {took:.1f}s on the encode"
+        assert started.wait(timeout=5), "the render never actually started"
+        # And a second render while one runs is refused, not queued: two
+        # 2-thread encodes plus capture is undervoltage territory.
+        r2 = client.post("/api/timelapse/render/picam-imx477/2026-09-15")
+        assert r2.status_code == 409
+    finally:
+        release.set()
+        _time.sleep(0.1)          # let the worker release the lock
