@@ -74,17 +74,23 @@ def test_the_verification_decode_is_power_capped(tmp_path):
     assert str(nightjobs.RENDER_THREADS) == argv[argv.index("-threads") + 1]
 
 
-def test_dawn_releases_the_heater_before_rendering():
-    """The render runs inline in the capture loop, so a heater that is on at
-    dawn -- the cold, damp moment it is on FOR -- would stay on underneath
-    the whole encode. On this supply those two loads must never stack."""
+def test_dawn_releases_the_heater_before_the_render_thread_starts():
+    """A heater that is on at dawn -- the cold, damp moment it is on FOR --
+    must never draw underneath the encode on this supply. The render now
+    runs on a worker thread, so the invariant is: pin dropped BEFORE the
+    thread starts, and the reconciler must not rebuild it while the thread
+    lives (that guard is asserted here too)."""
     root = Path(__file__).resolve().parents[1]
     main = (root / "skylapse" / "daemon" / "main.py").read_text(encoding="utf-8")
-    dawn = main.split("Dawn: running night jobs", 1)[1].split("last_period =", 1)[0]
-    release = dawn.index("self.dewheater.close()")
-    render = dawn.index("nightjobs.render_all")
-    assert release < render, (
-        "the dawn render starts with the heater pin still held high")
+    block = main.split("def _start_night_jobs", 1)[1].split("def _reconcile_dewheater", 1)[0]
+    release = block.index("self.dewheater.close()")
+    start = block.index("self.nightjobs_thread.start()")
+    assert release < start, (
+        "the render thread starts with the heater pin still held high")
+    reconcile = main.split("def _reconcile_dewheater", 1)[1].split("def _poll_dewheater_test", 1)[0]
+    assert "nightjobs_thread" in reconcile, (
+        "the reconciler would rebuild the heater one loop after the dawn "
+        "pause, silently undoing it while the render draws")
 
 
 def test_render_skips_tiny_folders(tmp_path):

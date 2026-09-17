@@ -11,6 +11,7 @@ import json
 import logging
 import signal
 import subprocess
+import threading
 import time
 
 import numpy as np
@@ -145,6 +146,9 @@ class CaptureDaemon:
         # interval it was anchored at (a change of interval re-anchors).
         self.frame_due: float | None = None
         self.due_interval = 0.0
+        # Dawn's render + cleanup run here, off the capture loop, so a long
+        # encode can neither starve the systemd watchdog nor pause capture.
+        self.nightjobs_thread: threading.Thread | None = None
         # Rolling raw buffer for the "save RAW" keeper button (guarded by API).
         self.keeper_buffer: collections.deque[Frame] = collections.deque(maxlen=3)
         self.hotpixels = HotPixelMap(config.IMAGE_ROOT.parent / "calibration")
@@ -183,8 +187,26 @@ class CaptureDaemon:
     def start(self) -> None:
         signal.signal(signal.SIGTERM, self._stop)
         signal.signal(signal.SIGINT, self._stop)
+        self._sweep_stale_partials()
         self._open_camera()
         self._loop()
+
+    def _sweep_stale_partials(self) -> None:
+        """Delete orphaned .mp4.part files at startup.
+
+        A render dies with the daemon -- the watchdog kill of 2026-09-16
+        proved it -- and the .part it leaves behind is what the nights API
+        reports as "rendering". With no daemon behind it that is a lie the
+        UI repeated for twenty hours, so at startup, when nothing can be
+        rendering by definition, any .part found is garbage from a killed
+        render and is removed. Re-rendering the night is one tap."""
+        for part in config.IMAGE_ROOT.glob("*/*/timelapse_*.mp4.part"):
+            log.warning("Removing stale partial render %s from a killed "
+                        "render", part.name)
+            try:
+                part.unlink()
+            except OSError:
+                log.debug("Could not remove %s", part, exc_info=True)
 
     def _stop(self, *_):
         self.running = False
@@ -315,36 +337,7 @@ class CaptureDaemon:
             # Dawn: night just became day -> render last night's timelapse,
             # then run cleanup while nothing interesting is in the sky.
             if self.last_period in ("night", "twilight") and now_period == "day":
-                log.info("Dawn: running night jobs (timelapse + cleanup)")
-                cam_root = config.IMAGE_ROOT / self.camera_id
-                # The folder frames are being written into right now, which at
-                # dawn is still the night that just ended — the rollover is at
-                # local noon, hours away. Deriving it from the same function
-                # that files the frames is what makes that true by construction.
-                #
-                # This used to be max() over the directory names, i.e. the
-                # newest folder, and on 2026-08-17 that was a folder created
-                # minutes earlier: the host clock was on London time, so the
-                # night rolled over at 6 AM local, and dawn then rendered the
-                # 25 frames that had landed since instead of the 2205 from the
-                # night. It validated, it notified, and it was 2 seconds long.
-                latest_night = process.day_folder(time.time(), self.camera_id)
-                # The render is the hungriest load this rig ever presents, and
-                # it runs inline — so a heater that is on at dawn (the cold,
-                # damp moment it is on FOR) would stay on underneath the whole
-                # encode. On a supply with 0.25V of margin those two must never
-                # stack: drop the pin for the render and let the next loop's
-                # _reconcile_dewheater rebuild it, the same handoff the
-                # commissioning test uses. Minutes of pause at sunrise cost the
-                # lens nothing.
-                if self.dewheater is not None:
-                    log.info("Pausing dew heater for the dawn render")
-                    self.dewheater.close()
-                    self.dewheater = None
-                if latest_night.exists() and cam.timelapse.auto_render:
-                    log.info("Rendering timelapse for %s", latest_night.name)
-                    nightjobs.render_all(latest_night, cam.timelapse)
-                nightjobs.cleanup(cam_root, self.cfg.cleanup_free_gb)
+                self._start_night_jobs(cam)
             self.last_period = now_period
 
             # Focus assist: rapid throwaway frames + live sharpness score.
@@ -766,6 +759,60 @@ class CaptureDaemon:
                             "rebaselined": time.monotonic() - self.focus_rebaselined_at < 4,
                             **info})
 
+    def _start_night_jobs(self, cam) -> None:
+        """Dawn's render + cleanup, on a worker thread — never the loop.
+
+        The render used to run inline, and on 2026-09-16 that killed the
+        daemon: the capture loop pings systemd's 600s watchdog once per
+        iteration, a 1338-frame night's encode ran past ten minutes, and
+        systemd shot a perfectly healthy process mid-ffmpeg. No error was
+        logged, the orphaned .mp4.part kept the UI saying "rendering" for
+        twenty hours, and nothing ever retries a night whose dawn has
+        passed. Every earlier morning survived only because its render
+        finished ~7 minutes into a 10-minute fuse.
+
+        On a thread, the loop keeps turning (watchdog fed, frames keep
+        landing on the grid straight through the encode) and a render can
+        take as long as it honestly takes.
+
+        The folder frames are being written into right now is still the
+        night that just ended — the rollover is at local noon, hours away.
+        Deriving it from the same function that files the frames is what
+        makes that true by construction (a max() over directory names once
+        rendered 25 stray frames instead of the 2205-frame night).
+        """
+        if self.nightjobs_thread is not None and self.nightjobs_thread.is_alive():
+            log.warning("Night jobs from a previous dawn still running; "
+                        "skipping this dawn's render")
+            return
+        # The render is the hungriest load this rig presents; the heater
+        # must never draw underneath it on a supply with 0.25V of margin.
+        # The pin drops before the thread starts, and _reconcile_dewheater
+        # holds off rebuilding until the thread is done.
+        if self.dewheater is not None:
+            log.info("Pausing dew heater for the dawn render")
+            self.dewheater.close()
+            self.dewheater = None
+        log.info("Dawn: running night jobs (timelapse + cleanup)")
+        cam_root = config.IMAGE_ROOT / self.camera_id
+        latest_night = process.day_folder(time.time(), self.camera_id)
+        render = latest_night.exists() and cam.timelapse.auto_render
+        timelapse_cfg = cam.timelapse
+        cleanup_floor = self.cfg.cleanup_free_gb
+
+        def _run() -> None:
+            try:
+                if render:
+                    log.info("Rendering timelapse for %s", latest_night.name)
+                    nightjobs.render_all(latest_night, timelapse_cfg)
+                nightjobs.cleanup(cam_root, cleanup_floor)
+            except Exception:
+                log.exception("Night jobs failed")
+
+        self.nightjobs_thread = threading.Thread(
+            target=_run, daemon=True, name="nightjobs")
+        self.nightjobs_thread.start()
+
     def _reconcile_dewheater(self) -> None:
         """Build or release the heater to match the config, every iteration.
 
@@ -777,6 +824,12 @@ class CaptureDaemon:
         """
         want = self.cfg.dew_heater.experimental_enabled
         if want and self.dewheater is None:
+            # Not while the render draws: the dawn pause dropped the pin so
+            # the two biggest loads never stack, and rebuilding here one loop
+            # later would silently undo it. The heater comes back the
+            # iteration after the night-jobs thread finishes.
+            if self.nightjobs_thread is not None and self.nightjobs_thread.is_alive():
+                return
             dh = self.cfg.dew_heater
             log.info("Dew heater enabled; taking GPIO %d", dh.gpio_pin)
             self.dewheater = DewHeater(dh.gpio_pin, dh.on_margin_c,

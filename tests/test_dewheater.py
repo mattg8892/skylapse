@@ -499,6 +499,7 @@ def test_the_daemon_takes_the_pin_when_the_feature_is_switched_on(monkeypatch, t
     obj.cfg = config.Config()
     obj.cfg.dew_heater.experimental_enabled = True
     obj.dewheater = None
+    obj.nightjobs_thread = None
 
     obj._reconcile_dewheater()
     assert built, "enabling the heater did not build it"
@@ -522,6 +523,7 @@ def test_reconciling_twice_does_not_churn(monkeypatch, tmp_path):
     obj.cfg = config.Config()
     obj.cfg.dew_heater.experimental_enabled = True
     obj.dewheater = None
+    obj.nightjobs_thread = None
 
     for _ in range(5):
         obj._reconcile_dewheater()
