@@ -74,6 +74,16 @@ AUTO_WB_SETTLED_BAND = 0.15
 # estimate is still clamped -- and every later frame goes back to blending, so a
 # single odd measurement is corrected rather than kept.
 UNSET_WB = (1.0, 1.0)
+# Night is the day calibration seen through a fixed tilt, unless the camera
+# has explicit night multipliers. Derivation, measured on the reference rig
+# 2026-09-16/17: the day-calibrated R 2.51 held overnight rendered city-lit
+# rain clouds neon orange; grey-world's full neutralisation (R 1.73) had
+# rendered the whole night blue-grey. The user called for the middle, and the
+# middle of those two nights is R x0.85, B x1.04 of the day values -- warm
+# enough that the sky still reads as a night sky, tame enough that clouds
+# are clouds rather than sodium lamps.
+NIGHT_WB_R_TILT = 0.85
+NIGHT_WB_B_TILT = 1.04
 # The shortest focus exposure worth asking for. Sensors floor this
 # themselves; going lower just wastes a round trip.
 FOCUS_MIN_EXPOSURE_US = 50
@@ -339,6 +349,25 @@ class CaptureDaemon:
             if self.last_period in ("night", "twilight") and now_period == "day":
                 self._start_night_jobs(cam)
             self.last_period = now_period
+
+            # While ANY render runs, capture and the heater stand down. The
+            # encode is the hungriest load this rig presents, and on
+            # 2026-09-17 an encode overlapping capture (and a second encode)
+            # latched the PMIC off -- a red LED and a walk outside. Frames
+            # missed here are grid ticks skipped cleanly (next_frame_due
+            # jumps to the next grid point), so the timelapse shows one
+            # even hold rather than stutter. The heater is closed by
+            # _reconcile_dewheater above for the same reason.
+            if self._render_in_progress():
+                if self.state != "rendering":
+                    log.info("Render in progress; capture standing down")
+                self.state = "rendering"
+                self._write_status({"state": "rendering",
+                                    "latest": self.latest_path})
+                self._sleep_interruptible(5)
+                continue
+            if self.state == "rendering":
+                log.info("Render finished; capture resuming")
 
             # Focus assist: rapid throwaway frames + live sharpness score.
             # Auto-exits after FOCUS_TIMEOUT so a forgotten session can't
@@ -759,6 +788,29 @@ class CaptureDaemon:
                             "rebaselined": time.monotonic() - self.focus_rebaselined_at < 4,
                             **info})
 
+    # A .part younger than this is a render actively writing; older is a
+    # corpse (ffmpeg appends continuously, so a live render's mtime is never
+    # more than a few seconds old). The daemon must not idle capture forever
+    # on the debris of a killed render.
+    RENDER_FRESH_S = 180
+
+    def _render_in_progress(self) -> bool:
+        """Whether ANY render is running -- this daemon's dawn thread or the
+        API's on-demand one in the other process. The .part file is the one
+        signal both share; freshness keeps a stale corpse from reading as
+        forever-rendering."""
+        if self.nightjobs_thread is not None and self.nightjobs_thread.is_alive():
+            return True
+        root = config.IMAGE_ROOT / self.camera_id
+        now = time.time()
+        try:
+            for part in root.glob("*/timelapse_*.mp4.part"):
+                if now - part.stat().st_mtime < self.RENDER_FRESH_S:
+                    return True
+        except OSError:
+            pass
+        return False
+
     def _start_night_jobs(self, cam) -> None:
         """Dawn's render + cleanup, on a worker thread — never the loop.
 
@@ -823,13 +875,17 @@ class CaptureDaemon:
         daemon had it, and the test runs in the API.
         """
         want = self.cfg.dew_heater.experimental_enabled
+        # Nothing draws beside a render. Not just "don't rebuild": an API
+        # render can start while the heater is up, so a running heater is
+        # actively closed too, and comes back the iteration after the render
+        # ends.
+        if self._render_in_progress():
+            if self.dewheater is not None:
+                log.info("Render in progress; pausing dew heater")
+                self.dewheater.close()
+                self.dewheater = None
+            return
         if want and self.dewheater is None:
-            # Not while the render draws: the dawn pause dropped the pin so
-            # the two biggest loads never stack, and rebuilding here one loop
-            # later would silently undo it. The heater comes back the
-            # iteration after the night-jobs thread finishes.
-            if self.nightjobs_thread is not None and self.nightjobs_thread.is_alive():
-                return
             dh = self.cfg.dew_heater
             log.info("Dew heater enabled; taking GPIO %d", dh.gpio_pin)
             self.dewheater = DewHeater(dh.gpio_pin, dh.on_margin_c,
@@ -902,16 +958,25 @@ class CaptureDaemon:
         config.write_run_file("keeper_result.json", json.dumps(
             {"saved": len(saved), "buffered": len(buffered), "at": time.time()}))
 
-    @staticmethod
-    def _wb(cam) -> tuple[float, float]:
-        """This camera's colour multipliers, read fresh from its registry entry.
+    def _wb(self, cam) -> tuple[float, float]:
+        """This camera's colour multipliers for the CURRENT period.
 
         Per camera rather than global: the multipliers describe a sensor and
         the lens in front of it, so the ASI676MC and the IMX477 have no
         business sharing a number. Read on every frame so a change from the
         settings screen takes effect on the next one, without a restart.
+
+        Day and night are different answers on purpose. The day pair is the
+        auto-calibration; the night pair is either the camera's explicit
+        night multipliers or the day pair through the night tilt -- one
+        number for a sunlit sky and the same number for a light-polluted
+        night was how a whole night came out neon orange.
         """
-        return (cam.wb_r, cam.wb_b)
+        if period(self.cfg) == "day":
+            return (cam.wb_r, cam.wb_b)
+        night_r = getattr(cam, "wb_night_r", 0.0) or cam.wb_r * NIGHT_WB_R_TILT
+        night_b = getattr(cam, "wb_night_b", 0.0) or cam.wb_b * NIGHT_WB_B_TILT
+        return (round(night_r, 3), round(night_b, 3))
 
     def _raw_due(self, frame: Frame) -> bool:
         cam = self.cfg.camera(self.camera_id)

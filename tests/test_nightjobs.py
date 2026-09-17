@@ -88,9 +88,10 @@ def test_dawn_releases_the_heater_before_the_render_thread_starts():
     assert release < start, (
         "the render thread starts with the heater pin still held high")
     reconcile = main.split("def _reconcile_dewheater", 1)[1].split("def _poll_dewheater_test", 1)[0]
-    assert "nightjobs_thread" in reconcile, (
-        "the reconciler would rebuild the heater one loop after the dawn "
-        "pause, silently undoing it while the render draws")
+    assert "_render_in_progress" in reconcile, (
+        "the reconciler no longer stands the heater down while a render "
+        "runs -- an API render overlapping the heater is the 2026-09-17 "
+        "latch-off recipe")
 
 
 def test_render_skips_tiny_folders(tmp_path):
@@ -272,7 +273,8 @@ def test_a_failed_render_is_retried_once_smaller(tmp_path):
     with mock.patch.object(subprocess, "run", side_effect=fake_run), \
          mock.patch.object(nightjobs, "_probe", return_value={"nb_read_frames": "1"}), \
          mock.patch("skylapse.daemon.nightjobs.notify.notify"):
-        nightjobs.render_night(night)
+        from skylapse.config import TimelapseConfig
+        nightjobs.render_night(night, TimelapseConfig(resolution="4k"))
 
     assert len(sizes) == 2, f"expected one retry, got {len(sizes)} attempts"
     assert sizes[0] != sizes[1], "retried at the same size"
@@ -691,3 +693,34 @@ def test_a_failed_render_keeps_the_film_that_was_already_there(tmp_path, monkeyp
     assert nightjobs.render_night(folder, force=True) is None
     assert good.exists(), "destroyed the previous film on a failed re-render"
     assert good.read_bytes() == b"the film from this morning"
+
+
+
+def test_the_retry_ladder_never_climbs():
+    """A render that failed at 1080p must not be retried at 4k: the retry
+    exists because the smaller size is LIGHTER, and escalating the encode on
+    a box that just choked on a smaller one is the 2026-09-17 power story
+    with extra steps. 1080p failures get no second attempt."""
+    from skylapse.config import TimelapseConfig
+    admin_calls = []
+
+    def failing_run(cmd, *a, **kw):
+        if cmd and cmd[0] == "ffmpeg":
+            admin_calls.append([x for x in cmd if "scale" in str(x)])
+            return subprocess.CompletedProcess(cmd, 1, "", "boom")
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    import tempfile
+    with tempfile.TemporaryDirectory() as td:
+        night = fake_night(Path(td), "2026-08-13", frames=100)
+        with mock.patch.object(subprocess, "run", side_effect=failing_run),              mock.patch.object(nightjobs, "_probe", return_value={}),              mock.patch("skylapse.daemon.nightjobs.notify.notify"):
+            nightjobs.render_night(night, TimelapseConfig(resolution="1080p"))
+    assert len(admin_calls) == 1,         f"a failed 1080p render was retried {len(admin_calls) - 1} more times"
+
+
+def test_the_default_render_size_is_hardware_friendly():
+    """The auto render runs unattended on the camera; the encode is its
+    hungriest load and has browned out marginal supplies. 4k stays one tap
+    away for the night that deserves it."""
+    from skylapse.config import TimelapseConfig
+    assert TimelapseConfig().resolution == "1080p"

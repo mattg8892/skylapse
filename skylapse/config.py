@@ -55,11 +55,17 @@ class TimelapseConfig(BaseModel):
                                          # frames — the rate is set by what the
                                          # output size can legally play at
     quality: str = "high"                # standard | high | max -> CRF 23/20/17
-    # Output size as a pixel budget. "4k" is the default because it is the
-    # largest that reliably plays: h264 level is set by macroblock count, so a
-    # 12 MP native render comes out at level 6.0 and no phone or browser
-    # hardware decoder will touch it. "full" is offered, and warned about.
-    resolution: str = "4k"               # 4k | 1080p | full
+    # Output size as a pixel budget. 1080p is the default because the auto
+    # render runs unattended on the camera itself, and the encode is the
+    # single hungriest load the rig presents -- a 4k render is minutes of
+    # sustained multi-core work that has measurably browned out marginal
+    # supplies. 1080p renders in a fraction of the time; anyone who wants a
+    # 4k of a special night turns it up and re-renders that one. ("4k" caps
+    # at a pixel budget, not 3840 wide: h264 level follows macroblock count,
+    # and a 12 MP native render comes out at level 6.0, which no phone or
+    # browser hardware decoder will touch. "full" is offered, and warned
+    # about.)
+    resolution: str = "1080p"            # 4k | 1080p | full
     # A night folder runs noon to noon, so it holds the daylight either side of
     # the night. That gets its own film rather than being spliced onto the front
     # of the night's, where the exposure changes by three orders of magnitude in
@@ -150,6 +156,15 @@ class CameraEntry(BaseModel):
     capture_schedule: str = "always"     # always | night_only. night_only skips
                                          # capture while the sun is up; every
                                          # other subsystem keeps running.
+    # Night white balance, as multipliers like wb_r/wb_b below. 0.0 means
+    # "derive from the day calibration through the night tilt" (see
+    # NIGHT_WB_*_TILT in the daemon): the day pair describes the sensor and
+    # lens; the night pair describes the same glass under a sky that is
+    # mostly light pollution, and holding the day values verbatim rendered
+    # city-lit rain clouds as neon orange while fully neutralising them
+    # rendered the whole night blue-grey. The tilt is the measured middle.
+    wb_night_r: float = 0.0
+    wb_night_b: float = 0.0
     day: CaptureProfile = Field(default_factory=lambda: CaptureProfile(
         gap_s=60, target_brightness=120, max_exposure_us=100_000, max_gain=50))
     night: CaptureProfile = Field(default_factory=CaptureProfile)
@@ -232,6 +247,12 @@ def _migrate(cfg: Config) -> Config:
         # driven real hardware, so nobody can have tuned them against a night.
         dh.on_margin_c = DEFAULT_ON_MARGIN_C
         dh.off_margin_c = DEFAULT_OFF_MARGIN_C
+    # Deliberately NO migration for timelapse.resolution, although "4k" on
+    # disk is usually just the old default: this loader runs on every load,
+    # so flipping 4k to 1080p here would also flip it for the person who
+    # re-chose 4k on purpose -- every night, forever. The default changed
+    # for new cameras; existing ones keep what their config says, and the
+    # one rig where "4k" was provably not a choice gets set once by hand.
     return cfg
 
 
