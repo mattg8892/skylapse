@@ -20,6 +20,15 @@ Freight, before tax and shipping — prices move, re-check before ordering.
 **Total: ~$333–$363** depending on enclosure choice. Multi-packs (buck,
 MOSFET, BME280) include spares.
 
+## Wiring
+
+The complete hookup — every conductor, numbered — is in
+[docs/wiring-12v.svg](docs/wiring-12v.svg): one 12V supply feeding the Pi
+through the buck and the dew heater through the MOSFET module, plus both
+BME280 sensors (outside at 0x76, inside the dome at 0x77 via its SDO
+solder bridge) sharing the I²C bus. Dots are joins; crossings without dots
+are not connections.
+
 ## Why this power architecture
 
 The 12V-rail design (one 12V supply → buck for the Pi, direct for the
