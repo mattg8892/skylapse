@@ -1,0 +1,179 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1150 940" font-family="Segoe UI, Arial, sans-serif">
+  <rect width="1150" height="940" fill="#ffffff"/>
+  <text x="30" y="36" font-size="22" font-weight="bold" fill="#111">Skylapse 12V — every wire, point to point</text>
+  <text x="30" y="56" font-size="12" fill="#555">Dots = wires joined. Lines crossing without a dot are NOT connected.</text>
+
+  <!-- legend -->
+  <g font-size="11">
+    <line x1="640" y1="26" x2="672" y2="26" stroke="#c62828" stroke-width="3"/><text x="678" y="30" fill="#333">12&#160;V</text>
+    <line x1="640" y1="42" x2="672" y2="42" stroke="#111" stroke-width="3"/><text x="678" y="46" fill="#333">GND</text>
+    <line x1="720" y1="26" x2="752" y2="26" stroke="#e07b00" stroke-width="4"/><text x="758" y="30" fill="#333">5&#160;V USB-C</text>
+    <line x1="720" y1="42" x2="752" y2="42" stroke="#1150b0" stroke-width="2.5"/><text x="758" y="46" fill="#333">GPIO trigger</text>
+    <line x1="840" y1="26" x2="872" y2="26" stroke="#d43f7c" stroke-width="2"/><text x="878" y="30" fill="#333">3.3&#160;V sensors</text>
+    <line x1="840" y1="42" x2="872" y2="42" stroke="#2c8a5b" stroke-width="2"/><text x="878" y="46" fill="#333">SDA</text>
+    <line x1="960" y1="26" x2="992" y2="26" stroke="#b8860b" stroke-width="2"/><text x="998" y="30" fill="#333">SCL</text>
+    <line x1="960" y1="42" x2="992" y2="42" stroke="#666" stroke-width="2"/><text x="998" y="46" fill="#333">sensor GND</text>
+  </g>
+
+  <!-- ================= MEAN WELL ================= -->
+  <rect x="60" y="120" width="180" height="140" rx="8" fill="#eef2f7" stroke="#334" stroke-width="2"/>
+  <text x="80" y="148" font-size="14" font-weight="bold" fill="#111">Mean Well 12V</text>
+  <text x="80" y="166" font-size="11" fill="#666">L · N · ⏚ AC terminals</text>
+  <text x="80" y="180" font-size="11" fill="#666">(cover + strain relief)</text>
+  <!-- AC in -->
+  <line x1="10" y1="205" x2="60" y2="205" stroke="#111" stroke-width="2"/>
+  <line x1="10" y1="222" x2="60" y2="222" stroke="#111" stroke-width="2"/>
+  <line x1="10" y1="239" x2="60" y2="239" stroke="#3a7d2c" stroke-width="2" stroke-dasharray="5,3"/>
+  <text x="8" y="198" font-size="10" fill="#333">AC L / N / earth</text>
+  <!-- DC terminals -->
+  <circle cx="240" cy="160" r="5" fill="#c62828"/><text x="205" y="155" font-size="12" fill="#c62828" font-weight="bold">+V</text>
+  <circle cx="240" cy="220" r="5" fill="#111"/><text x="205" y="216" font-size="12" fill="#111" font-weight="bold">−V</text>
+
+  <!-- +V: two red wires -->
+  <path d="M240 160 H280" stroke="#c62828" stroke-width="3" fill="none"/>
+  <circle cx="280" cy="160" r="4" fill="#c62828"/>
+  <path d="M280 160 V130 H380" stroke="#c62828" stroke-width="3" fill="none"/>
+  <text x="290" y="122" font-size="10" fill="#c62828">wire 1: +V → buck IN+</text>
+  <path d="M280 160 V460 H380" stroke="#c62828" stroke-width="3" fill="none"/>
+  <text x="288" y="330" font-size="10" fill="#c62828" transform="rotate(90 288 330)">wire 2: +V → MOSFET DC+</text>
+
+  <!-- −V: two black wires -->
+  <path d="M240 220 H262" stroke="#111" stroke-width="3" fill="none"/>
+  <circle cx="262" cy="220" r="4" fill="#111"/>
+  <path d="M262 220 V180 H380" stroke="#111" stroke-width="3" fill="none"/>
+  <text x="292" y="172" font-size="10" fill="#333">wire 3: −V → buck IN−</text>
+  <path d="M262 220 V505 H380" stroke="#111" stroke-width="3" fill="none"/>
+  <text x="252" y="330" font-size="10" fill="#333" transform="rotate(90 252 330)">wire 4: −V → MOSFET DC−</text>
+
+  <!-- ================= BUCK ================= -->
+  <rect x="380" y="95" width="180" height="110" rx="8" fill="#fff7e6" stroke="#a06b00" stroke-width="2"/>
+  <text x="398" y="122" font-size="13" font-weight="bold" fill="#111">Buck 12V→5V/5A</text>
+  <text x="398" y="139" font-size="10" fill="#a06b00">meter output ≥5.0V first</text>
+  <text x="386" y="127" font-size="10" fill="#c62828">IN+</text>
+  <text x="386" y="192" font-size="10" fill="#111">IN−</text>
+  <!-- wire 5: USB-C -->
+  <path d="M560 150 H700" stroke="#e07b00" stroke-width="5" fill="none"/>
+  <text x="580" y="142" font-size="10" fill="#e07b00" font-weight="bold">wire 5: USB-C cable → Pi power</text>
+
+  <!-- ================= PI ================= -->
+  <rect x="700" y="80" width="390" height="260" rx="10" fill="#eaf5ea" stroke="#2c6b2f" stroke-width="2"/>
+  <text x="730" y="110" font-size="15" font-weight="bold" fill="#111">Raspberry Pi 5</text>
+  <text x="730" y="128" font-size="11" fill="#333">USB-C power in (left edge)</text>
+  <text x="730" y="150" font-size="12" font-weight="bold" fill="#111">GPIO header — pins used, on the bottom edge:</text>
+  <!-- header pins -->
+  <g font-size="10" text-anchor="middle">
+    <circle cx="740" cy="340" r="5" fill="#d43f7c"/><text x="740" y="325" fill="#111" font-weight="bold">pin 1</text><text x="740" y="313" fill="#666">3.3V</text>
+    <circle cx="800" cy="340" r="5" fill="#2c8a5b"/><text x="800" y="325" fill="#111" font-weight="bold">pin 3</text><text x="800" y="313" fill="#666">SDA</text>
+    <circle cx="860" cy="340" r="5" fill="#b8860b"/><text x="860" y="325" fill="#111" font-weight="bold">pin 5</text><text x="860" y="313" fill="#666">SCL</text>
+    <circle cx="920" cy="340" r="5" fill="#666"/><text x="920" y="325" fill="#111" font-weight="bold">pin 9</text><text x="920" y="313" fill="#666">GND</text>
+    <circle cx="980" cy="340" r="5" fill="#1150b0"/><text x="980" y="325" fill="#111" font-weight="bold">pin 12</text><text x="980" y="313" fill="#666">GPIO18</text>
+    <circle cx="1045" cy="340" r="5" fill="#111"/><text x="1045" y="325" fill="#111" font-weight="bold">pin 14</text><text x="1045" y="313" fill="#666">GND</text>
+  </g>
+  <text x="730" y="365" font-size="0" fill="#666"> </text>
+
+  <!-- ================= MOSFET ================= -->
+  <rect x="380" y="430" width="200" height="150" rx="8" fill="#f3ecff" stroke="#5b3a9b" stroke-width="2"/>
+  <text x="405" y="458" font-size="13" font-weight="bold" fill="#111">ANMBEST MOSFET</text>
+  <text x="388" y="466" font-size="10" fill="#c62828">DC+</text>
+  <text x="388" y="512" font-size="10" fill="#111">DC−</text>
+  <text x="552" y="466" font-size="10" fill="#c62828">OUT+</text>
+  <text x="548" y="512" font-size="10" fill="#111">OUT−</text>
+  <circle cx="500" cy="580" r="4" fill="#1150b0"/><text x="482" y="572" font-size="10" fill="#1150b0" font-weight="bold">PWM</text>
+  <circle cx="548" cy="580" r="4" fill="#111"/><text x="540" y="572" font-size="10" fill="#111" font-weight="bold">GND</text>
+
+  <!-- wires 6,7: trigger pair from Pi -->
+  <path d="M980 340 V400 H620 V600 H500 V584" stroke="#1150b0" stroke-width="2.5" fill="none"/>
+  <text x="700" y="393" font-size="10" fill="#1150b0" font-weight="bold">wire 6: pin 12 → PWM</text>
+  <path d="M1045 340 V415 H643 V618 H548 V584" stroke="#111" stroke-width="2.5" fill="none"/>
+  <text x="700" y="428" font-size="10" fill="#333" font-weight="bold">wire 7: pin 14 → trigger GND</text>
+
+  <!-- ================= DOME ================= -->
+  <rect x="690" y="440" width="430" height="330" rx="18" fill="none" stroke="#999" stroke-width="2" stroke-dasharray="8,5"/>
+  <text x="1010" y="462" font-size="11" fill="#888" font-style="italic">inside dome</text>
+
+  <!-- ring -->
+  <circle cx="820" cy="545" r="55" fill="#1c6b46"/>
+  <circle cx="820" cy="545" r="24" fill="#ffffff"/>
+  <text x="762" y="622" font-size="11" font-weight="bold" fill="#111">DEW RING 12V</text>
+  <circle cx="772" cy="518" r="4" fill="#e0b64a"/>
+  <circle cx="768" cy="570" r="4" fill="#e0b64a"/>
+
+  <!-- wires 8,9: ring -->
+  <path d="M580 460 H740 V518 H768" stroke="#c62828" stroke-width="3" fill="none"/>
+  <text x="596" y="453" font-size="10" fill="#c62828">wire 8: OUT+ → ring pad</text>
+  <path d="M580 505 H715 V570 H764" stroke="#111" stroke-width="3" fill="none"/>
+  <text x="596" y="522" font-size="10" fill="#333">wire 9: OUT− → ring pad</text>
+
+  <!-- inside sensor -->
+  <rect x="930" y="610" width="170" height="110" rx="6" fill="#e8f0fe" stroke="#1150b0" stroke-width="2"/>
+  <text x="944" y="634" font-size="12" font-weight="bold" fill="#111">BME280 #2 — dome</text>
+  <text x="944" y="650" font-size="11" fill="#333">answers as 0x77</text>
+  <!-- its pins on bottom edge -->
+  <g font-size="9" text-anchor="middle">
+    <circle cx="950" cy="720" r="4" fill="#d43f7c"/><text x="950" y="708" fill="#333">VCC</text>
+    <circle cx="985" cy="720" r="4" fill="#666"/><text x="985" y="708" fill="#333">GND</text>
+    <circle cx="1020" cy="720" r="4" fill="#2c8a5b"/><text x="1020" y="708" fill="#333">SDA</text>
+    <circle cx="1055" cy="720" r="4" fill="#b8860b"/><text x="1055" y="708" fill="#333">SCL</text>
+    <circle cx="1085" cy="720" r="4" fill="#8033cc"/><text x="1085" y="708" fill="#333">SDO</text>
+  </g>
+  <!-- SDO bridge -->
+  <path d="M1085 724 V742 H950 V724" stroke="#8033cc" stroke-width="2" fill="none"/>
+  <text x="952" y="758" font-size="10" fill="#8033cc" font-weight="bold">solder bridge: SDO → VCC  (this is what makes it 0x77)</text>
+
+  <!-- outside sensor -->
+  <rect x="200" y="740" width="170" height="105" rx="6" fill="#e8f0fe" stroke="#1150b0" stroke-width="2"/>
+  <text x="214" y="764" font-size="12" font-weight="bold" fill="#111">BME280 #1 — outside</text>
+  <text x="214" y="780" font-size="11" fill="#333">answers as 0x76 (as shipped,</text>
+  <text x="214" y="794" font-size="11" fill="#333">SDO left alone)</text>
+  <!-- its pins on top edge -->
+  <g font-size="9" text-anchor="middle">
+    <circle cx="225" cy="740" r="4" fill="#d43f7c"/><text x="225" y="732" fill="#333">VCC</text>
+    <circle cx="260" cy="740" r="4" fill="#666"/><text x="260" y="732" fill="#333">GND</text>
+    <circle cx="295" cy="740" r="4" fill="#2c8a5b"/><text x="295" y="732" fill="#333">SDA</text>
+    <circle cx="330" cy="740" r="4" fill="#b8860b"/><text x="330" y="732" fill="#333">SCL</text>
+  </g>
+
+  <!-- ============ SENSOR WIRES: 8 separate wires, joined in pairs at the Pi pins ============ -->
+  <!-- 3.3V: pin1 splits at junction (740,635) -->
+  <path d="M740 345 V635" stroke="#d43f7c" stroke-width="2" fill="none"/>
+  <circle cx="740" cy="635" r="4" fill="#d43f7c"/>
+  <path d="M740 635 H225 V736" stroke="#d43f7c" stroke-width="2" fill="none"/>
+  <text x="410" y="630" font-size="10" fill="#d43f7c">wire 10: pin 1 → #1 VCC</text>
+  <path d="M740 635 H900 V690 H950 V716" stroke="#d43f7c" stroke-width="2" fill="none"/>
+  <text x="748" y="630" font-size="10" fill="#d43f7c">wire 11: pin 1 → #2 VCC</text>
+
+  <!-- GND: pin9 splits at (920,655) -->
+  <path d="M920 345 V655" stroke="#666" stroke-width="2" fill="none"/>
+  <circle cx="920" cy="655" r="4" fill="#666"/>
+  <path d="M920 655 H260 V736" stroke="#666" stroke-width="2" fill="none"/>
+  <text x="410" y="650" font-size="10" fill="#666">wire 12: pin 9 → #1 GND</text>
+  <path d="M920 655 H985 V716" stroke="#666" stroke-width="2" fill="none"/>
+  <text x="928" y="672" font-size="10" fill="#666">wire 13: pin 9 → #2 GND</text>
+
+  <!-- SDA: pin3 splits at (800,675) -->
+  <path d="M800 345 V675" stroke="#2c8a5b" stroke-width="2" fill="none"/>
+  <circle cx="800" cy="675" r="4" fill="#2c8a5b"/>
+  <path d="M800 675 H295 V736" stroke="#2c8a5b" stroke-width="2" fill="none"/>
+  <text x="410" y="670" font-size="10" fill="#2c8a5b">wire 14: pin 3 → #1 SDA</text>
+  <path d="M800 675 H1020 V716" stroke="#2c8a5b" stroke-width="2" fill="none"/>
+  <text x="820" y="691" font-size="10" fill="#2c8a5b">wire 15: pin 3 → #2 SDA</text>
+
+  <!-- SCL: pin5 splits at (860,695) -->
+  <path d="M860 345 V695" stroke="#b8860b" stroke-width="2" fill="none"/>
+  <circle cx="860" cy="695" r="4" fill="#b8860b"/>
+  <path d="M860 695 H330 V736" stroke="#b8860b" stroke-width="2" fill="none"/>
+  <text x="410" y="690" font-size="10" fill="#b8860b">wire 16: pin 5 → #1 SCL</text>
+  <path d="M860 695 H1055 V716" stroke="#b8860b" stroke-width="2" fill="none"/>
+  <text x="866" y="712" font-size="10" fill="#b8860b">wire 17: pin 5 → #2 SCL</text>
+
+  <!-- note -->
+  <rect x="30" y="440" width="230" height="180" rx="8" fill="#fafafa" stroke="#bbb"/>
+  <text x="46" y="466" font-size="13" font-weight="bold" fill="#111">The sharing, spelled out</text>
+  <text x="46" y="490" font-size="11" fill="#333">Wires 10–17 are the I²C bus:</text>
+  <text x="46" y="508" font-size="11" fill="#333">each Pi pin feeds TWO wires</text>
+  <text x="46" y="526" font-size="11" fill="#333">(join at the dots). Both sensors</text>
+  <text x="46" y="544" font-size="11" fill="#333">hear everything; each answers</text>
+  <text x="46" y="562" font-size="11" fill="#333">only to its own address —</text>
+  <text x="46" y="580" font-size="11" fill="#333">0x76 outside, 0x77 dome</text>
+  <text x="46" y="598" font-size="11" fill="#333">(set by the SDO bridge).</text>
+</svg>

@@ -17,7 +17,7 @@ Every part in (or headed into) the reference sky-camera rig this software is dev
 | 6 | Mean Well LRS-50-12 (12V 4.2A) | 12V main power supply | [Amazon B019GYODX0](https://www.amazon.com/dp/B019GYODX0) | $17.99 |
 | 7 | Waterproof 12V→5V 5A buck converter, USB-C output (2-pack) | Clean 5V for the Pi from the 12V rail | [Amazon B0FD735LFG](https://www.amazon.com/dp/B0FD735LFG) | $15.99 |
 | 8 | ANMBEST dual-MOSFET trigger/PWM switch module, 5–36V 15A (5-pack) | Switches the dew heater from a Pi GPIO — straight-through screw-terminal wiring | [Amazon B07NWD8W26](https://www.amazon.com/dp/B07NWD8W26) | $7.99 |
-| 9 | BME280 3.3V sensor module (2-pack) | Temperature / humidity / pressure — drives the automatic dew heater | [Amazon B0DSVNCVVV](https://www.amazon.com/dp/B0DSVNCVVV) | $12.99 |
+| 9 | BME280 3.3V sensor module (2-pack) | Temperature / humidity / pressure — one outside drives the automatic dew heater; the second, inside the dome, adds temperature regulation (v0.5.38+) | [Amazon B0DSVNCVVV](https://www.amazon.com/dp/B0DSVNCVVV) | $12.99 |
 | 10 | 25 ft 14/3 indoor/outdoor extension cord | AC power run to the camera | [Harbor Freight item 62920](https://www.harborfreight.com/25-ft-x-143-gauge-indooroutdoor-extension-cord-orange-62920.html) | $14.99 |
 
 **Total: ~$333–$363** depending on enclosure choice. Multi-packs (buck, MOSFET, BME280) include spares.
@@ -25,6 +25,12 @@ Every part in (or headed into) the reference sky-camera rig this software is dev
 :::tip[Skip the kit markup]
 The Pi 5 kit (#1) is priced well above the board plus the official Active Cooler bought separately from [PiShop](https://www.pishop.us/), [Adafruit](https://www.adafruit.com/) or [CanaKit](https://www.canakit.com/). The bundled ABS case is not used inside a weatherproof enclosure anyway. Price-check before buying.
 :::
+
+## Wiring
+
+Every conductor in the build, numbered — dots are joins, crossings without dots are not connections. Click for full size.
+
+[![Complete 12V wiring diagram: Mean Well supply, buck converter, MOSFET module, heater ring, and both BME280 sensors](/wiring-12v.svg)](/wiring-12v.svg)
 
 ## Why this power architecture
 
@@ -53,6 +59,7 @@ Mean Well LRS-50-12 ── 12V ─┬─► MOSFET module ─► heater ring
 - **Heater ring (#4)** — a Skylapse-made 12V ring is coming; until then wire any resistive element as shown on the [Dew heater](/dew-heater/) page.
 - **MOSFET module (#8)** — signal ground is common with power ground on the board; with the single-12V architecture that is automatically satisfied.
 - **BME280 (#9)** — must be a BME280, **not** a BMP280. The BMP cannot measure humidity, and humidity is the whole input to a dewpoint. Skylapse rejects BMP280s by chip id rather than compute nonsense.
+- **Second BME280** — bridge its SDO pad to VCC (one solder joint) and it answers at 0x77; mounted inside the dome it becomes the dome-temperature sensor, and the heater regulates against a hard dome limit instead of running open-loop. See [Dew heater](/dew-heater/#two-sensors-a-thermostat).
 - The dew heater also runs without any sensor at all — manual on/off switch on the Heater tab (v0.5.27+).
 
 ## Optional extras

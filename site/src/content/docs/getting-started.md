@@ -12,13 +12,14 @@ The whole install is: write a card, power up, open a web page on your phone. Not
 | | |
 |---|---|
 | **Raspberry Pi** | Pi 5 recommended, Pi 4 works. |
-| **Power supply** | The official 5V/5A (Pi 5) or 5V/3A (Pi 4). Underpowering a USB3 camera shows up as mysterious disconnects mid-night, not as an obvious power error. |
+| **Power** | This matters more than it looks. The reference rig runs **one 12V supply** feeding the Pi through a **12V→5V/5A buck converter**, with the dew heater on the 12V rail directly — see [why](/hardware/#why-this-power-architecture). A plain 5V supply *can* work for a heater-less rig, but underpowering shows up as mysterious disconnects and hard shutdowns mid-night, not as an obvious power error. |
 | **Storage** | 64 GB+ microSD. A [high-endurance card](https://www.raspberrypi.com/documentation/computers/getting-started.html#recommended-sd-cards) if you plan to shoot RAW — see [Storage & RAW](/storage-and-raw/). |
-| **Camera** | A Pi camera module. The [HQ Camera](https://www.raspberrypi.com/products/raspberry-pi-high-quality-camera/) / IMX477 is the recommended one and what Skylapse is developed against. A ZWO ASI USB camera may also work; see [Cameras](/cameras/). |
-| **Lens** | A fisheye, or you are photographing a rectangle of sky rather than the sky. See [Cameras & lenses](/cameras/#the-lens-matters-as-much-as-the-camera). |
+| **Camera** | A Pi camera module. The HQ-class **IMX477** is what Skylapse is developed against. A ZWO ASI USB camera may also work; see [Cameras](/cameras/). |
+| **Lens** | Wide and fast, or you are photographing a rectangle of sky rather than the sky. The reference rig uses a 2.5mm F1.2 CS-mount lens; see [Cameras & lenses](/cameras/#the-lens-matters-as-much-as-the-camera). |
+| **Dew heater** | Optional but decisive on damp nights — a BME280 sensor plus a MOSFET-switched heating element, run automatically (or manually, no sensor needed) from the Heater tab. See [Dew heater](/dew-heater/). |
 | **Optional** | A DS3231 RTC module (~$5) — a Pi has no battery-backed clock, so it boots with a stale time until it reaches the network. |
 
-Weatherproof housing and dew heater are covered on the [Hardware](/hardware/) page. The complete reference build, with prices, is there too.
+Weatherproof housing and the dew heater are covered on the [Hardware](/hardware/) page — the complete reference build with prices, plus the full [wiring diagram](/hardware/#wiring).
 
 ## 1. Write the card
 
