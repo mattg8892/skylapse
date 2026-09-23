@@ -101,7 +101,7 @@ def test_manual_mode_needs_no_sensor():
         h = DewHeater(18, 2.0, 4.0, mode="manual", manual_on=True)
         status = h.tick()
     assert h.available is True
-    assert status == {"heating": True, "mode": "manual"}
+    assert status == {"heating": True, "mode": "manual", "capped": False}
     assert gpio.call_args_list[-1] == mock.call(True)
 
 
@@ -702,3 +702,79 @@ def test_the_dashboard_banner_survives_a_sensorless_reading():
                encoding="utf-8")
     assert "temp_c != null" in src, "the banner still assumes a reading exists"
     assert "manual" in src, "the banner cannot explain a manually-run heater"
+
+
+# -- dome sensor: regulate, don't blast ---------------------------------------
+
+def _dome_heater(monkeypatch, outside=(10.0, 98.0), dome=None, cap=45.0,
+                 mode="auto", manual_on=False):
+    """A heater with a faked outside sensor and, optionally, a dome sensor."""
+    from skylapse.daemon import dewheater as dw
+    with mock.patch.object(DewHeater, "_probe_sensor", return_value=True), \
+         mock.patch.object(DewHeater, "_set_gpio"):
+        h = DewHeater(18, 5.0, 8.0, mode=mode, manual_on=manual_on,
+                      max_dome_temp_c=cap)
+    h.sensor_ok = True
+    monkeypatch.setattr(h, "_read_bme280", lambda: outside)
+    monkeypatch.setattr(h, "_read_dome",
+                        lambda: dome if dome is not None else None)
+    return h
+
+
+def test_the_dome_cap_cuts_the_heater_even_in_manual(monkeypatch):
+    """The bench ring hit 58C free-air in five minutes; a sealed dome climbs
+    further. A manual switch left on is exactly the overheat case, so the
+    cap outranks the switch."""
+    with mock.patch.object(DewHeater, "_set_gpio") as gpio:
+        h = _dome_heater(monkeypatch, dome=50.0, cap=45.0,
+                         mode="manual", manual_on=True)
+        monkeypatch.setattr(h, "_set_gpio", lambda on: gpio(on))
+        status = h.tick()
+    assert status["heating"] is False
+    assert status["capped"] is True
+    assert status["dome_temp_c"] == 50.0
+
+
+def test_the_cap_latches_and_resumes_below_the_band(monkeypatch):
+    """A plain threshold would chatter at the cap; the latch releases only
+    once the dome has cooled the resume band below it. The numbers here are
+    chosen so the release point is also inside the dew margin -- otherwise
+    the controller itself correctly declines to heat a dome that is thirty
+    degrees clear of the dewpoint, which an earlier draft of this test
+    mistook for a stuck latch."""
+    # Outside 10C/98% -> dewpoint ~9.7C. Cap 20, resume at 15.
+    h = _dome_heater(monkeypatch, outside=(10.0, 98.0), dome=21.0, cap=20.0)
+    monkeypatch.setattr(h, "_set_gpio", lambda on: None)
+    s1 = h.tick()
+    assert s1["heating"] is False and s1["capped"] is True   # tripped at 21
+    monkeypatch.setattr(h, "_read_dome", lambda: 16.0)
+    s2 = h.tick()
+    assert s2["heating"] is False and s2["capped"] is True   # cooler, latched
+    monkeypatch.setattr(h, "_read_dome", lambda: 14.5)       # below resume,
+    s3 = h.tick()                                            # margin 4.8 <= 5
+    assert s3["capped"] is False
+    assert s3["heating"] is True                # released, and dew demands heat
+
+
+def test_the_margin_is_dome_versus_ambient_dewpoint(monkeypatch):
+    """The dome is the surface being protected; the ambient dewpoint is the
+    threat. A warm dome under saturated air must NOT heat: its own margin is
+    what matters, not the air's."""
+    # Outside: 10C at 98% RH -> dewpoint ~9.7C, air margin ~0.3C (would heat).
+    # Dome: 20C -> dome margin ~10.3C, comfortably clear of the 8C off band.
+    h = _dome_heater(monkeypatch, outside=(10.0, 98.0), dome=20.0)
+    monkeypatch.setattr(h, "_set_gpio", lambda on: None)
+    status = h.tick()
+    assert status["heating"] is False, \
+        "heated a dome already 10C clear of the dewpoint"
+    assert status["dome_temp_c"] == 20.0
+
+
+def test_without_a_dome_sensor_nothing_changed(monkeypatch):
+    """One sensor means the old behavior exactly: ambient stands in for the
+    dome, margins as configured, no cap."""
+    h = _dome_heater(monkeypatch, outside=(10.0, 98.0), dome=None)
+    monkeypatch.setattr(h, "_set_gpio", lambda on: None)
+    status = h.tick()
+    assert status["heating"] is True             # 0.3C margin: heat
+    assert "dome_temp_c" not in status

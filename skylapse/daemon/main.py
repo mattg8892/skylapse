@@ -189,7 +189,8 @@ class CaptureDaemon:
         dh = self.cfg.dew_heater
         # Experimental gate: flag off -> the subsystem is never even built.
         self.dewheater = DewHeater(dh.gpio_pin, dh.on_margin_c,
-                                   dh.off_margin_c, dh.mode, dh.manual_on) \
+                                   dh.off_margin_c, dh.mode, dh.manual_on,
+                                   dh.max_dome_temp_c) \
             if dh.experimental_enabled else None
 
     # -- lifecycle ---------------------------------------------------------
@@ -665,7 +666,8 @@ class CaptureDaemon:
         dh = self.cfg.dew_heater
         # Experimental gate: flag off -> the subsystem is never even built.
         self.dewheater = DewHeater(dh.gpio_pin, dh.on_margin_c,
-                                   dh.off_margin_c, dh.mode, dh.manual_on) \
+                                   dh.off_margin_c, dh.mode, dh.manual_on,
+                                   dh.max_dome_temp_c) \
             if dh.experimental_enabled else None
         resume_cmd = config.RUN_DIR / "resume_cmd"
         was_day = False
@@ -889,7 +891,8 @@ class CaptureDaemon:
             dh = self.cfg.dew_heater
             log.info("Dew heater enabled; taking GPIO %d", dh.gpio_pin)
             self.dewheater = DewHeater(dh.gpio_pin, dh.on_margin_c,
-                                       dh.off_margin_c, dh.mode, dh.manual_on)
+                                       dh.off_margin_c, dh.mode, dh.manual_on,
+                                       dh.max_dome_temp_c)
         elif not want and self.dewheater is not None:
             log.info("Dew heater disabled; releasing the pin")
             self.dewheater.close()

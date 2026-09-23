@@ -758,15 +758,18 @@ def dewheater_status() -> dict:
         #
         # Asking the sensor whether it is there needs no GPIO at all.
         sensor = dewheater.find_sensor() is not None
+    dome = dewheater.find_sensor_at(dewheater.INSIDE_ADDR) if bus_ready else None
     return {
         "enabled": cfg.dew_heater.experimental_enabled,
         "i2c_ready": bus_ready,
         "sensor_found": sensor,
+        "dome_sensor_found": dome,
         "gpio_pin": cfg.dew_heater.gpio_pin,
         "mode": cfg.dew_heater.mode,
         "manual_on": cfg.dew_heater.manual_on,
         "on_margin_c": cfg.dew_heater.on_margin_c,
         "off_margin_c": cfg.dew_heater.off_margin_c,
+        "max_dome_temp_c": cfg.dew_heater.max_dome_temp_c,
         # What the daemon last measured, if it is running the heater at all.
         "reading": (_read_status("daemon") or {}).get("dew"),
     }
@@ -954,6 +957,7 @@ class DewHeaterSettings(BaseModel):
     manual_on: bool | None = None
     on_margin_c: float | None = None
     off_margin_c: float | None = None
+    max_dome_temp_c: float | None = None
 
 
 @app.put("/api/dewheater")
@@ -980,6 +984,10 @@ def dewheater_configure(body: DewHeaterSettings) -> dict:
         dh.mode = body.mode
     if body.manual_on is not None:
         dh.manual_on = body.manual_on
+    if body.max_dome_temp_c is not None:
+        # Bounded hard: below 25 the heater could never run on a mild day,
+        # above 70 the cap has stopped being a safety at all.
+        dh.max_dome_temp_c = max(25.0, min(70.0, body.max_dome_temp_c))
     dh.on_margin_c, dh.off_margin_c = on, off
     if body.experimental_enabled is not None:
         dh.experimental_enabled = body.experimental_enabled

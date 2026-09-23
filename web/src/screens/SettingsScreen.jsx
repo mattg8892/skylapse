@@ -887,11 +887,23 @@ function DewHeaterCard({ showToast }) {
               <div className="flex justify-between">
                 <span className="text-zinc-400">Margin</span>
                 <span className="tabular-nums text-zinc-200">
-                  {(reading.temp_c - reading.dewpoint_c).toFixed(1)}°C
+                  {((reading.dome_temp_c ?? reading.temp_c) - reading.dewpoint_c).toFixed(1)}°C
                 </span>
               </div>
-              <p className={`mt-2 ${reading.heating ? 'text-amber-300' : 'text-zinc-500'}`}>
-                {reading.heating ? 'Heating' : 'Idle — the glass is clear of the dewpoint'}
+              {reading.dome_temp_c != null && (
+                <div className="flex justify-between">
+                  <span className="text-zinc-400">Dome</span>
+                  <span className="tabular-nums text-zinc-200">
+                    {reading.dome_temp_c}°C
+                  </span>
+                </div>
+              )}
+              <p className={`mt-2 ${reading.capped ? 'text-rose-400'
+                : reading.heating ? 'text-amber-300' : 'text-zinc-500'}`}>
+                {reading.capped
+                  ? 'Too warm — heater held off until the dome cools'
+                  : reading.heating ? 'Heating'
+                  : 'Idle — the glass is clear of the dewpoint'}
               </p>
             </div>
           ) : (
@@ -1013,6 +1025,20 @@ function DewHeaterCard({ showToast }) {
             step={0.5} value={state.off_margin_c}
             onChange={(off_margin_c) =>
               send('/api/dewheater', { off_margin_c }, 'margin')} />
+
+          {state.dome_sensor_found && (
+            <>
+              <NumberField label="Dome temperature limit" suffix="°C"
+                min={25} max={70} step={1} value={state.max_dome_temp_c}
+                onChange={(max_dome_temp_c) =>
+                  send('/api/dewheater', { max_dome_temp_c }, 'cap')} />
+              <p className="-mt-1 text-xs text-zinc-500">
+                A second sensor inside the dome enforces this whatever else is
+                true — including in manual mode. The heater cuts at the limit
+                and resumes once the dome has cooled 5°C below it.
+              </p>
+            </>
+          )}
         </div>
       )}
     </Card>

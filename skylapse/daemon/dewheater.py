@@ -20,6 +20,17 @@ import math
 log = logging.getLogger("skylapse.dewheater")
 
 BME280_ADDR = 0x76           # 0x77 on some boards; both probed
+# Two sensors, two jobs. With BOTH addresses answering, 0x76 is the OUTSIDE
+# sensor (ambient dewpoint -- the threat) and 0x77, the one you jumper SDO
+# high on, is INSIDE the dome (the surface being protected, and the thing
+# that must not cook). With only one sensor, whichever address it answers on,
+# it is outside, exactly as before the dome sensor existed.
+OUTSIDE_ADDR = 0x76
+INSIDE_ADDR = 0x77
+# How far the dome must cool below the cap before heating may resume. The
+# 12V ring hit 58C free-air in five minutes on the bench; in a sealed dome
+# it climbs further, so the cap trips hard and comes back gently.
+CAP_RESUME_BAND_C = 5.0
 
 
 def dewpoint_c(temp_c: float, humidity_pct: float) -> float:
@@ -45,7 +56,15 @@ class HeaterController:
         self.heating = False
 
     def update(self, temp_c: float, humidity_pct: float) -> bool:
-        margin = temp_c - dewpoint_c(temp_c, humidity_pct)
+        return self.update_margin(temp_c - dewpoint_c(temp_c, humidity_pct))
+
+    def update_margin(self, margin: float) -> bool:
+        """The hysteresis itself, on a margin someone else computed.
+
+        With a dome sensor, the margin worth acting on is DOME temperature
+        minus AMBIENT dewpoint -- the actual surface being protected against
+        the actual air threatening it -- which no single sensor can supply.
+        """
         if margin <= self.on_margin:
             self.heating = True
         elif margin >= self.off_margin:
@@ -58,11 +77,21 @@ class DewHeater:
     on; degrades to disabled if the sensor or GPIO stack is absent."""
 
     def __init__(self, gpio_pin: int, on_margin_c: float, off_margin_c: float,
-                 mode: str = "auto", manual_on: bool = False) -> None:
+                 mode: str = "auto", manual_on: bool = False,
+                 max_dome_temp_c: float = 45.0) -> None:
         self.controller = HeaterController(on_margin_c, off_margin_c)
         self.gpio_pin = gpio_pin
         self.mode = mode
         self.manual_on = manual_on
+        self.max_dome_temp_c = max_dome_temp_c
+        # The cap is a latch with a resume band, not a bare threshold: the
+        # 12V ring heats a sealed dome fast, and a threshold would chatter
+        # at the cap. Once tripped, heating stays off until the dome has
+        # cooled CAP_RESUME_BAND_C below it.
+        self.capped = False
+        # Set for real by _probe_sensor; initialised here so a heater whose
+        # probe is stubbed out (tests) still has an answer: no dome sensor.
+        self._dome_addr: int | None = None
         # Known state before anything else, and before the first reading.
         #
         # A GPIO holds whatever it was last driven to. If the daemon is killed
@@ -97,37 +126,75 @@ class DewHeater:
         self.controller.off_margin = cfg.off_margin_c
         self.mode = cfg.mode
         self.manual_on = cfg.manual_on
+        self.max_dome_temp_c = getattr(cfg, "max_dome_temp_c", 45.0)
         self.available = self.sensor_ok or self.mode == "manual"
+
+    def _apply_cap(self, dome_temp: float | None, want_heat: bool) -> bool:
+        """The dome must never cook, whoever asked for heat.
+
+        Applies in manual mode too, deliberately: a manual switch left on is
+        exactly the case most likely to overheat a sealed dome, and a person
+        having asked for heat is not a reason to soften the enclosure. The
+        bench ring hit 58C free-air in five minutes.
+        """
+        if dome_temp is None:
+            return want_heat
+        if self.capped:
+            if dome_temp <= self.max_dome_temp_c - CAP_RESUME_BAND_C:
+                self.capped = False
+                log.info("Dome cooled to %.1fC; heater may run again",
+                         dome_temp)
+        elif dome_temp >= self.max_dome_temp_c:
+            self.capped = True
+            log.warning("Dome at %.1fC, cap is %.1fC; heater off until it "
+                        "cools", dome_temp, self.max_dome_temp_c)
+        return want_heat and not self.capped
 
     def tick(self) -> dict | None:
         """One control cycle. Returns status dict for the dashboard, or None."""
         if not self.available:
             return None
+        dome_temp = self._read_dome() if self.sensor_ok else None
         if self.mode == "manual":
-            self._set_gpio(self.manual_on)
+            heating = self._apply_cap(dome_temp, self.manual_on)
+            self._set_gpio(heating)
             # Readings are informational if a sensor happens to be present;
-            # the switch, not the dewpoint, is what drives the pin.
-            self.last = {"heating": self.manual_on, "mode": "manual"}
+            # the switch (and the cap) drive the pin, not the dewpoint.
+            self.last = {"heating": heating, "mode": "manual",
+                         "capped": self.capped}
             reading = self._read_bme280() if self.sensor_ok else None
             if reading is not None:
                 temp, hum = reading
                 self.last.update(
                     temp_c=round(temp, 1), humidity_pct=round(hum, 1),
                     dewpoint_c=round(dewpoint_c(temp, hum), 1))
+            if dome_temp is not None:
+                self.last["dome_temp_c"] = round(dome_temp, 1)
             return self.last
         reading = self._read_bme280()
         if reading is None:
             return self.last
         temp, hum = reading
-        heating = self.controller.update(temp, hum)
+        dewpoint = dewpoint_c(temp, hum)
+        # With a dome sensor the margin is the surface being protected
+        # against the air threatening it: dome temperature minus ambient
+        # dewpoint. Without one, ambient temperature stands in for the
+        # dome, which is why the default margins are as generous as they
+        # are.
+        margin_temp = dome_temp if dome_temp is not None else temp
+        want = self.controller.update_margin(margin_temp - dewpoint)
+        heating = self._apply_cap(dome_temp, want)
         self._set_gpio(heating)
         self.last = {
             "temp_c": round(temp, 1),
             "humidity_pct": round(hum, 1),
-            "dewpoint_c": round(dewpoint_c(temp, hum), 1),
+            "dewpoint_c": round(dewpoint, 1),
             "heating": heating,
             "mode": "auto",
+            "capped": self.capped,
         }
+        if dome_temp is not None:
+            self.last["dome_temp_c"] = round(dome_temp, 1)
         return self.last
 
     def off(self) -> None:
@@ -157,10 +224,25 @@ class DewHeater:
 
     def _probe_sensor(self) -> bool:
         self._addr = find_sensor()
+        # A second BME280, jumpered to the inside address, is the dome
+        # sensor. Only distinct when both answer: a single sensor is
+        # outside, whichever address it uses, exactly as before.
+        self._dome_addr = None
+        if self._addr == OUTSIDE_ADDR and find_sensor_at(INSIDE_ADDR):
+            self._dome_addr = INSIDE_ADDR
+            log.info("Dome sensor found at 0x%02x; regulating dome "
+                     "temperature against ambient dewpoint", INSIDE_ADDR)
         return self._addr is not None
 
     def _read_bme280(self) -> tuple[float, float] | None:
         return read_sensor(self._addr)
+
+    def _read_dome(self) -> float | None:
+        """Dome temperature, or None when there is no inside sensor."""
+        if self._dome_addr is None:
+            return None
+        reading = read_sensor(self._dome_addr)
+        return reading[0] if reading is not None else None
 
     def _set_gpio(self, on: bool) -> None:
         try:
@@ -194,6 +276,16 @@ def find_sensor() -> int | None:
         except OSError:
             continue
     return None
+
+
+def find_sensor_at(addr: int) -> bool:
+    """Whether a BME280 answers at exactly this address."""
+    try:
+        import smbus2
+        bus = smbus2.SMBus(1)
+        return bus.read_byte_data(addr, 0xD0) == 0x60
+    except Exception:
+        return False
 
 
 def read_sensor(addr: int | None) -> tuple[float, float] | None:

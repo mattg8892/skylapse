@@ -123,6 +123,12 @@ class DewHeaterConfig(BaseModel):
     manual_on: bool = False              # manual mode only: the switch position
     on_margin_c: float = DEFAULT_ON_MARGIN_C    # heat when within this of dewpoint
     off_margin_c: float = DEFAULT_OFF_MARGIN_C  # stop once clear by this much
+    # Hard ceiling on dome temperature, enforced whenever a second BME280
+    # (jumpered to 0x77) sits inside the dome. Applies in manual mode too:
+    # the 12V ring hit 58C free-air on the bench in five minutes, and a
+    # sealed dome climbs further. 45C is far below anywhere acrylic minds,
+    # and far above anywhere dew survives.
+    max_dome_temp_c: float = 45.0
 
 
 class NotifyConfig(BaseModel):
