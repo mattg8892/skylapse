@@ -29,6 +29,15 @@ BME280 sensors (outside at 0x76, inside the dome at 0x77 via its SDO
 solder bridge) sharing the I²C bus. Dots are joins; crossings without dots
 are not connections.
 
+The MOSFET module's terminal labels are printed on its *back*, so
+[docs/wiring-mosfet.svg](docs/wiring-mosfet.svg) shows the six heater wires
+landed on a photo of the front: top screw block is the 12V input (VIN), bottom
+block is the switched output to the ring (VOUT), outer screw of each block is
++, inner screw is −, and the J1 header's two big holes are GND (upper) and
+TRIG/PWM (lower). Confirm the +/− with a meter before powering: VIN+ to VOUT+
+is a straight bus and beeps; VIN− to the J1 GND hole beeps; VIN− to VOUT− is
+the switched leg and reads open.
+
 ## Why this power architecture
 
 The 12V-rail design (one 12V supply → buck for the Pi, direct for the

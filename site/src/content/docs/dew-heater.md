@@ -44,7 +44,7 @@ Pi GPIO 18 ─► MOSFET module (signal)
 BME280 ─► Pi I2C (SDA, SCL, 3.3V, GND)
 ```
 
-Any resistive element works: a ring of power resistors around the dome base (~3–5 W at 12V), a USB lens-warmer band, or nichrome. Keep it on the **12V rail**, not the Pi's 5V — see [why the power is built this way](/hardware/#why-this-power-architecture). The complete hookup, every wire numbered, is on the [Hardware page](/hardware/#wiring).
+Any resistive element works: a ring of power resistors around the dome base (~3–5 W at 12V), a USB lens-warmer band, or nichrome. Keep it on the **12V rail**, not the Pi's 5V — see [why the power is built this way](/hardware/#why-this-power-architecture). The complete hookup, every wire numbered, is on the [Hardware page](/hardware/#wiring), and the MOSFET module's screws are called out one by one on a [photo of the board](/hardware/#the-mosfet-module-up-close) — its labels are on the back, which is easy to get wrong.
 
 ## A Skylapse heater ring is coming <span class="pill">coming soon</span>
 

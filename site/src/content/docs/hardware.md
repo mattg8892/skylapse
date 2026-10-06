@@ -32,6 +32,14 @@ Every conductor in the build, numbered — dots are joins, crossings without dot
 
 [![Complete 12V wiring diagram: Mean Well supply, buck converter, MOSFET module, heater ring, and both BME280 sensors](/wiring-12v.svg)](/wiring-12v.svg)
 
+### The MOSFET module, up close
+
+Its terminal labels are printed on the **back** of the board, so here are the six heater wires landed on a photo of the front. Top screw block is the 12V input, bottom block is the switched output to the ring; the outer screw of each block is +, the inner screw is −. The J1 header's two big holes are GND (upper) and TRIG/PWM (lower).
+
+[![The MOSFET module photographed component-side up, with wires 2, 4, 6, 7, 8 and 9 drawn onto their screws and header holes](/wiring-mosfet.svg)](/wiring-mosfet.svg)
+
+Confirm the polarity with a meter before powering, module unpowered: **VIN+ to VOUT+** is a straight bus and beeps, **VIN− to the J1 GND hole** beeps, and **VIN− to VOUT−** is the leg the MOSFET switches, so it reads open.
+
 ## Why this power architecture
 
 The 12V-rail design — one 12V supply, a buck converter for the Pi, 12V direct for the heater — is not arbitrary. Running a 5V heater and a Pi 5 from one 5V supply was measured on the reference rig causing repeated undervoltage and hard PMIC latch-offs: the camera dies with a red LED and stays dead until physically unplugged. Splitting the loads ends that. The Heater tab carries the same warning.
