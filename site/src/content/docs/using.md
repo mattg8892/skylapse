@@ -9,6 +9,11 @@ Skylapse is a web app served by the camera itself. Open it on a phone, tablet or
 
 ## Dashboard
 
+<figure class="screen">
+  <img src="/screens/dashboard.png" alt="The Skylapse dashboard: the latest frame from the dome, capture status, the dew heater card with outside temperature, dewpoint and margin, focus assist, and storage" loading="lazy" />
+  <figcaption>The dashboard on the reference rig, mid-afternoon. Daytime frames look like this; the interesting ones come after dark.</figcaption>
+</figure>
+
 The latest frame, a status pill driven by whether frames are actually arriving rather than by what the daemon claims, a countdown to the next one, storage, the heater's state, and the **Save RAW** button: the keeper for when a meteor just went past. Focus assist starts from here too.
 
 ## Nights
@@ -27,6 +32,11 @@ Start it from the dashboard, then zoom to 8× and turn the ring until the sharpn
 
 ## Camera
 
+<figure class="screen">
+  <img src="/screens/camera.png" alt="The Camera tab: 24/7 or night-only capture, separate night and day settings, time between frames, auto exposure with a brightness slider, timelapse options, and the red and blue white balance sliders" loading="lazy" />
+  <figcaption>Night and day keep separate settings. The white balance sliders sit at the bottom, with the camera's learned values.</figcaption>
+</figure>
+
 Everything about the imaging itself:
 
 - **Capture schedule**: 24/7 or night-only.
@@ -37,6 +47,11 @@ Everything about the imaging itself:
 - **Hardware**: declare a board the Pi cannot detect, add a ZWO camera, install ZWO support.
 
 ## Heater
+
+<figure class="screen">
+  <img src="/screens/heater.png" alt="The Heater tab: outside, dome and dewpoint readings, the switch-on and switch-off temperatures for tonight, a timed test button, the run switch, and the margin and dome limit fields" loading="lazy" />
+  <figcaption>Both sensors reporting. The dome sat at 49 °C in afternoon sun, so the 45 °C limit had already held the heater off, which is the limit doing its job.</figcaption>
+</figure>
 
 The dew heater's own tab. The readings come from the two BME280s: **Outside** is the air, **Dome** is the glass, and the **Dewpoint** is computed from the outside temperature and humidity.
 
@@ -64,6 +79,11 @@ Capture never depends on the network. Networking is its own service, so a Wi-Fi 
 There is no captive portal: you have to type `10.42.0.1` yourself.
 
 ## Settings
+
+<figure class="screen">
+  <img src="/screens/settings.png" alt="The Settings tab: notifications, password, run setup again, updates with automatic checks and a development channel, logs, restart, and config backup" loading="lazy" />
+  <figcaption>Set once and left alone: alerts, an optional password, updates with rollback, logs readable from the page, a clean restart, and a config backup.</figcaption>
+</figure>
 
 What is set once and rarely revisited: notifications, config backup, an optional password, logs readable from the page, a clean restart button, and updates.
 
