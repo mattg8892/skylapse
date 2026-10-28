@@ -787,23 +787,41 @@ function DewHeaterCard({ showToast }) {
             </label>
           )}
 
-          {reading?.temp_c != null && (
+          {(reading?.temp_c != null || reading?.dome_temp_c != null) && (
             <div className="rounded-lg bg-zinc-800/60 p-3 text-sm">
-              <div className="flex justify-between">
-                <span className="text-zinc-400">Air</span>
-                <span className="tabular-nums text-zinc-200">
-                  {reading.temp_c}°C
-                </span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-zinc-400">Dewpoint</span>
-                <span className="tabular-nums text-zinc-200">
-                  {reading.dewpoint_c}°C
-                </span>
-              </div>
+              {reading.temp_c != null && (
+                <div className="flex justify-between">
+                  <span className="text-zinc-400">Outside</span>
+                  <span className="tabular-nums text-zinc-200">
+                    {reading.temp_c}°C
+                  </span>
+                </div>
+              )}
+              {reading.dome_temp_c != null && (
+                <div className="flex justify-between">
+                  <span className="text-zinc-400">Dome</span>
+                  <span className="tabular-nums text-zinc-200">
+                    {reading.dome_temp_c}°C
+                  </span>
+                </div>
+              )}
+              {reading.dewpoint_c != null && (
+                <div className="flex justify-between">
+                  <span className="text-zinc-400">Dewpoint</span>
+                  <span className="tabular-nums text-zinc-200">
+                    {reading.dewpoint_c}°C
+                  </span>
+                </div>
+              )}
+              {reading.capped && (
+                <p className="mt-2 text-rose-400">
+                  Too warm — heater held off until the dome cools
+                </p>
+              )}
               <p className="mt-2 text-xs text-zinc-600">
-                A sensor is present, so readings are shown — but in manual
-                mode they only inform; the switch decides.
+                {reading.dome_temp_c != null
+                  ? `The switch decides, but the dome limit still applies: held off at ${state.max_dome_temp_c}°C, runs again below ${state.max_dome_temp_c - 5}°C.`
+                  : 'A sensor is present, so readings are shown — but in manual mode they only inform; the switch decides.'}
               </p>
             </div>
           )}
@@ -898,6 +916,15 @@ function DewHeaterCard({ showToast }) {
                   {((reading.dome_temp_c ?? reading.temp_c) - reading.dewpoint_c).toFixed(1)}°C
                 </span>
               </div>
+              <p className="mt-2 text-xs text-zinc-500">
+                Heats when the {reading.dome_temp_c != null ? 'dome' : 'outside air'} drops
+                below <span className="tabular-nums text-zinc-300">{(reading.dewpoint_c + state.on_margin_c).toFixed(1)}°C</span>,
+                stops once it is above <span className="tabular-nums text-zinc-300">{(reading.dewpoint_c + state.off_margin_c).toFixed(1)}°C</span>
+                {reading.dome_temp_c != null && (
+                  <> — never above <span className="tabular-nums text-zinc-300">{state.max_dome_temp_c}°C</span></>
+                )}.
+                The band follows the dewpoint as the night changes.
+              </p>
               <p className={`mt-2 ${reading.capped ? 'text-rose-400'
                 : reading.heating ? 'text-amber-300' : 'text-zinc-500'}`}>
                 {reading.capped
