@@ -396,7 +396,10 @@ function DewHeaterBanner({ daemon: d }) {
   // Manual mode with no sensor reports only the switch state -- there is no
   // dewpoint to show, and NaN°C is not a margin.
   const hasReading = dew.temp_c != null && dew.dewpoint_c != null
-  const margin = hasReading ? dew.temp_c - dew.dewpoint_c : null
+  const hasDome = dew.dome_temp_c != null
+  // With a dome sensor the margin is the glass against the dewpoint, the
+  // same number the Heater tab shows; without one the air stands in for it.
+  const margin = hasReading ? (hasDome ? dew.dome_temp_c : dew.temp_c) - dew.dewpoint_c : null
   return (
     <Card title="Dew heater"
       right={dew.heating
@@ -405,11 +408,19 @@ function DewHeaterBanner({ daemon: d }) {
           </span>
         : <span className="text-sm text-zinc-500">Idle</span>}>
       {hasReading && (
-        <dl className="mt-3 grid grid-cols-3 gap-3 text-sm">
+        <dl className={`mt-3 grid gap-3 text-sm ${hasDome ? 'grid-cols-2 sm:grid-cols-4' : 'grid-cols-3'}`}>
           <div>
             <dt className="text-zinc-500">Outside</dt>
             <dd className="tabular-nums text-zinc-200">{dew.temp_c}°C</dd>
           </div>
+          {hasDome && (
+            <div>
+              <dt className="text-zinc-500">Dome</dt>
+              <dd className={`tabular-nums ${dew.capped ? 'text-rose-400' : 'text-zinc-200'}`}>
+                {dew.dome_temp_c}°C
+              </dd>
+            </div>
+          )}
           <div>
             <dt className="text-zinc-500">Dewpoint</dt>
             <dd className="tabular-nums text-zinc-200">{dew.dewpoint_c}°C</dd>
@@ -427,11 +438,17 @@ function DewHeaterBanner({ daemon: d }) {
           ? (dew.heating
               ? 'On manually — it runs until the switch in Settings turns it off.'
               : 'Off — switched manually in Settings.')
+          : dew.capped
+            ? 'Too warm — the heater is held off until the dome cools.'
           : dew.heating
-            ? 'Running until the air pulls clear of the dewpoint. A whole damp '
-              + 'night of this is normal — the sensor is outside, so heating the '
-              + 'glass does not change what it reads.'
-            : 'The air is clear enough of the dewpoint that the glass should stay dry.'}
+            ? (hasDome
+                ? 'Running until the dome is clear of the dewpoint.'
+                : 'Running until the air pulls clear of the dewpoint. A whole damp '
+                  + 'night of this is normal — the sensor is outside, so heating the '
+                  + 'glass does not change what it reads.')
+            : (hasDome
+                ? 'The dome is clear of the dewpoint and should stay dry.'
+                : 'The air is clear enough of the dewpoint that the glass should stay dry.')}
       </p>
     </Card>
   )
