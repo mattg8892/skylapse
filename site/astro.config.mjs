@@ -7,6 +7,20 @@ const SITE = 'https://skylapse.dev';
 
 export default defineConfig({
   site: SITE,
+  // The site used to have thirteen pages; it now has six. Old links keep working.
+  redirects: {
+    '/getting-started': '/build',
+    '/hardware': '/parts',
+    '/cameras': '/parts/#camera-and-lens',
+    '/dew-heater': '/build/#7-switch-the-heater-on',
+    '/network': '/using/#network',
+    '/phone-alerts': '/using/#phone-alerts',
+    '/storage-and-raw': '/using/#storage--raw',
+    '/troubleshooting': '/help',
+    '/status': '/help/#what-is-verified-on-hardware',
+    '/design': '/help/#for-developers',
+    '/development': '/help/#for-developers',
+  },
   integrations: [
     starlight({
       title: 'Skylapse',
@@ -28,39 +42,13 @@ export default defineConfig({
       customCss: ['./src/styles/custom.css'],
       lastUpdated: true,
       sidebar: [
-        {
-          label: 'Start here',
-          items: [
-            { label: 'Getting started', slug: 'getting-started' },
-            { label: 'Hardware & parts list', slug: 'hardware' },
-            { label: 'Cameras & lenses', slug: 'cameras' },
-          ],
-        },
-        {
-          label: 'Using Skylapse',
-          items: [
-            { label: 'The screens', slug: 'using' },
-            { label: 'Storage & RAW', slug: 'storage-and-raw' },
-            { label: 'Wi-Fi & access point', slug: 'network' },
-            { label: 'Phone alerts', slug: 'phone-alerts' },
-            { label: 'Dew heater', slug: 'dew-heater' },
-          ],
-        },
-        {
-          label: 'Help',
-          items: [
-            { label: 'Troubleshooting', slug: 'troubleshooting' },
-            { label: 'Status & roadmap', slug: 'status' },
-          ],
-        },
-        {
-          label: 'Project',
-          items: [
-            { label: 'Development', slug: 'development' },
-            { label: 'Design notes', slug: 'design' },
-            { label: 'Store', slug: 'store' },
-          ],
-        },
+        { label: 'Home', link: '/' },
+        { label: 'Parts list', slug: 'parts' },
+        { label: 'Build', slug: 'build' },
+        { label: 'Using the app', slug: 'using' },
+        { label: 'Help & status', slug: 'help' },
+        { label: 'Store', slug: 'store' },
+        { label: 'Gallery', slug: 'gallery' },
       ],
       head: [
         { tag: 'meta', attrs: { property: 'og:image', content: `${SITE}/og.png` } },
