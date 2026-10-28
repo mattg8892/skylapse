@@ -17,17 +17,18 @@ The rule on this project: **only claim what has been witnessed working on real h
 - Self-updating with rollback
 - Wi-Fi fallback and access-point mode — including the guard that refuses to drop the access point while a phone is connected to it, which was tested with a real phone because there is no other way to test it
 - Dew heater control from a BME280, and the manual heater switch (v0.5.27+)
+- The two-sensor dome thermostat (v0.5.38+) and the Skylapse 12V heater ring, run together in the reference rig: dome sensor found at 0x77, a two-minute test raised the dome 5 °C with the outside reading unchanged, dome limit armed
+- Remote access over Tailscale from the Network tab (v0.5.29+)
 
 The whole path on [Getting started](/getting-started/) — write a card, power it up, join the camera's own Wi-Fi, finish setup on a phone, and have it capturing — has been done end to end on a Pi 5 with an IMX477, with no terminal at any point.
 
 ## Not there yet
 
 - **No captive portal.** Joining the camera's own network works, but you have to type `10.42.0.1` yourself — it will not pop up a sign-in page the way a hotel network does.
-- **No remote access yet.** Viewing the camera from outside your own network — over [Tailscale](https://tailscale.com), your account, nothing hosted by us — is written and does not work on real hardware yet. The settings card says so rather than offering a button that fails. On your own network everything works today, and the camera has never needed the internet to run.
 - **ZWO support is best effort.** It is verified on one model (ASI676MC), its SDK has to be downloaded on demand because it cannot be redistributed, and it may not work with your camera at all. Pi camera modules are the supported path — see [Cameras](/cameras/).
 - **No white balance for mono sensors**, and no colour management beyond the per-camera multipliers.
 - **External image store on a USB SSD** is specified as a guided feature but not built; today `SKYLAPSE_IMAGES` relocates the store by hand.
-- **The Skylapse dew heater ring** is coming — see [Dew heater](/dew-heater/).
+- **The Skylapse dew heater ring is not listed for sale yet.** The board is real and running in the reference rig — see [Dew heater](/dew-heater/) — and the [Store](/store/) page goes live once the listings exist.
 
 ## Designed for, not built
 

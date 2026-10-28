@@ -9,7 +9,7 @@ Freight, before tax and shipping — prices move, re-check before ordering.
 | 1 | Raspberry Pi 5 kit, 4GB (board + case + Active Cooler) | Compute — runs Skylapse (capture daemon, API, watchdog) | [RasTech / Amazon B0FNBYQWX3](https://www.amazon.com/dp/B0FNBYQWX3) | $158.99 |
 | 2 | Arducam HQ Camera, 12.3MP IMX477 (no-lens variant) | Camera sensor — Skylapse's Pi/CSI driver | [Arducam / Amazon B0D3WYQF2Q](https://www.amazon.com/dp/B0D3WYQF2Q) | $51.99 |
 | 3 | 2.5mm F1.2 1/2.5″ CS-mount lens | Wide-angle allsky lens for the HQ camera | [Amazon B0C46GP6HV](https://www.amazon.com/dp/B0C46GP6HV) | $12.49 |
-| 4 | **Skylapse 12V PCB dew heater ring** *(coming soon)* | Dew heater around the dome — software-controlled via the MOSFET module below | Skylapse custom PCB | ~$20 (est.) |
+| 4 | **Skylapse 12V PCB dew heater ring** | Dew heater around the dome — software-controlled via the MOSFET module below; verified in this rig 2026-10-27 | Skylapse custom PCB | ~$20 |
 | 5 | Weatherproof enclosure | Housing for Pi, camera, PSU and electronics | TBD | $20–$50 |
 | 6 | Mean Well LRS-50-12 (12V 4.2A) | 12V main power supply | [Amazon B019GYODX0](https://www.amazon.com/dp/B019GYODX0) | $17.99 |
 | 7 | Waterproof 12V→5V 5A buck converter, USB-C output (2-pack) | Clean 5V for the Pi from the 12V rail | [Amazon B0FD735LFG](https://www.amazon.com/dp/B0FD735LFG) | $15.99 |
@@ -54,8 +54,11 @@ Settings carries the same warning. The Pi 5's undervoltage threshold is
   separately (PiShop/Adafruit/CanaKit) — price-check before buying.
 - **Lens (#3)**: fixed-focus CCTV lens; focus is set once against a live
   view (Settings → focus assist) and locked.
-- **Heater ring (#4)**: custom PCB, 5V and 12V variants designed and at the
-  fab; ordering and availability details coming.
+- **Heater ring (#4)**: custom PCB, copper trace as the element, 50mm hole /
+  85mm outer, ~31Ω / ~4.2W at 12V. In the rig and verified under software
+  control 2026-10-27: a 120s test took the dome sensor 18.9→23.6°C with the
+  outside sensor unchanged. A 5V variant exists but the 12V one is the
+  reference, for the power reasons below.
 - **MOSFET module (#8)**: signal ground is common with power ground on the
   board; with the single-12V architecture that is automatically satisfied.
 - **BME280 (#9)**: must be a BME280, not a BMP280 — the BMP cannot measure

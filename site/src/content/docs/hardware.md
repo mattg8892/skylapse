@@ -12,7 +12,7 @@ Every part in (or headed into) the reference sky-camera rig this software is dev
 | 1 | Raspberry Pi 5 kit, 4GB (board + case + Active Cooler) | Compute — runs Skylapse (capture daemon, API, watchdog) | [RasTech / Amazon B0FNBYQWX3](https://www.amazon.com/dp/B0FNBYQWX3) | $158.99 |
 | 2 | Arducam HQ Camera, 12.3MP IMX477 (no-lens variant) | Camera sensor — Skylapse's Pi/CSI driver | [Arducam / Amazon B0D3WYQF2Q](https://www.amazon.com/dp/B0D3WYQF2Q) | $51.99 |
 | 3 | 2.5mm F1.2 1/2.5″ CS-mount lens | Wide-angle sky lens for the HQ camera | [Amazon B0C46GP6HV](https://www.amazon.com/dp/B0C46GP6HV) | $12.49 |
-| 4 | Dew heater — **Skylapse 12V heater ring** <span class="pill">coming soon</span> | Heater around the dome — software-controlled via the MOSFET module below. Any resistive element works today | [Dew heater](/dew-heater/) | ~$20 (est.) |
+| 4 | Dew heater — **Skylapse 12V heater ring** | Heater around the dome — software-controlled via the MOSFET module below, verified in this rig. Any resistive element works too | [Store](/store/) | ~$20 |
 | 5 | Weatherproof enclosure | Housing for Pi, camera, PSU and electronics | TBD | $20–$50 |
 | 6 | Mean Well LRS-50-12 (12V 4.2A) | 12V main power supply | [Amazon B019GYODX0](https://www.amazon.com/dp/B019GYODX0) | $17.99 |
 | 7 | Waterproof 12V→5V 5A buck converter, USB-C output (2-pack) | Clean 5V for the Pi from the 12V rail | [Amazon B0FD735LFG](https://www.amazon.com/dp/B0FD735LFG) | $15.99 |
@@ -64,7 +64,7 @@ Mean Well LRS-50-12 ── 12V ─┬─► MOSFET module ─► heater ring
 
 - **Pi 5 kit (#1)** — see the tip above; you are paying for the case.
 - **Lens (#3)** — fixed-focus CCTV lens; focus is set once against a live view (focus assist on the dashboard) and locked. For a true 180° view see the fisheye discussion on [Cameras & lenses](/cameras/#the-lens-matters-as-much-as-the-camera).
-- **Heater ring (#4)** — a Skylapse-made 12V ring is coming; until then wire any resistive element as shown on the [Dew heater](/dew-heater/) page.
+- **Heater ring (#4)** — the Skylapse 12V ring, ~31 Ω / ~4.2 W, is what this rig runs; specs and the verification run are on the [Dew heater](/dew-heater/) page, and any resistive element wires in the same way.
 - **MOSFET module (#8)** — signal ground is common with power ground on the board; with the single-12V architecture that is automatically satisfied.
 - **BME280 (#9)** — must be a BME280, **not** a BMP280. The BMP cannot measure humidity, and humidity is the whole input to a dewpoint. Skylapse rejects BMP280s by chip id rather than compute nonsense.
 - **Second BME280** — bridge its SDO pad to VCC (one solder joint) and it answers at 0x77; mounted inside the dome it becomes the dome-temperature sensor, and the heater regulates against a hard dome limit instead of running open-loop. See [Dew heater](/dew-heater/#two-sensors-a-thermostat).

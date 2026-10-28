@@ -12,9 +12,9 @@ The software is free forever and always will be. Hardware made for it — starti
 
 ## Skylapse 12V dew heater ring
 
-<span class="pill">coming soon</span>
+<span class="pill">listing soon</span>
 
-A purpose-made 12V heater ring for the dome, switched by Skylapse itself from a BME280 dewpoint reading (or by hand from the Heater tab). Estimated **~$20**. Details when it is real and in hand — see the [Dew heater](/dew-heater/) page for how the software side works and how to wire your own heater today.
+A purpose-made 12V heater ring for the dome, switched by Skylapse itself from a BME280 dewpoint reading (or by hand from the Heater tab). It is real, in hand, and running in the reference rig: 50 mm hole / 85 mm outer, ~31 Ω, ~4.2 W at 12 V, two solder pads and nothing else on the board. **~$20**. The [Dew heater](/dew-heater/) page has the specs, the verification run and the wiring, screw by screw.
 
 <div class="buy-row">
   <a class="buy primary" href="https://www.etsy.com/" aria-disabled="true">Buy on Etsy — soon</a>

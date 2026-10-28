@@ -3,9 +3,6 @@ title: Dew heater
 description: How Skylapse controls a dew heater from a BME280 sensor, and how to wire one today.
 sidebar:
   order: 5
-  badge:
-    text: Coming soon
-    variant: tip
 ---
 
 A fisheye dome pointed at a clear sky radiates heat to space and drops below the air temperature. When it crosses the dewpoint, the dome fogs and the rest of the night is lost — the reference rig has logged dew arriving twice in a single night, between 02:30 and 05:00. A few watts of heat on the dome base fixes it, and Skylapse can run that heat itself.
@@ -38,7 +35,7 @@ The BMP280 looks identical and costs a dollar less, but it has **no humidity sen
 
 ## Wiring it today
 
-The [reference build](/hardware/) already has everything except the heating element:
+The [reference build](/hardware/) uses the Skylapse 12V heater ring below, but any resistive element wires in the same way:
 
 ```
 Pi GPIO 18 ─► MOSFET module (signal)
@@ -50,6 +47,15 @@ BME280 ─► Pi I2C (SDA, SCL, 3.3V, GND)
 
 Any resistive element works: a ring of power resistors around the dome base (~3–5 W at 12V), a USB lens-warmer band, or nichrome. Keep it on the **12V rail**, not the Pi's 5V — see [why the power is built this way](/hardware/#why-this-power-architecture). The complete hookup, every wire numbered, is on the [Hardware page](/hardware/#wiring), and the MOSFET module's screws are called out one by one on a [photo of the board](/hardware/#the-mosfet-module-up-close) — its labels are on the back, which is easy to get wrong.
 
-## A Skylapse heater ring is coming <span class="pill">coming soon</span>
+## The Skylapse heater ring
 
-A purpose-made 12V heater ring for the dome, switched by Skylapse exactly as described above. First prototypes are in hand and measured to spec on the bench — 30.3Ω, ~4.2W at 12V, warm across the whole face in minutes. Estimated **~$20**. It goes on sale on the [Store](/store/) page once it has run real nights on the reference rig — announcements there and in the [GitHub release notes](https://github.com/mattg8892/skylapse/releases). Until then, the resistor ring above works fine.
+A purpose-made 12V heater ring for the dome, switched by Skylapse exactly as described above. The copper trace *is* the element — no components, two solder pads for the feed wires — so there is nothing on it to fail.
+
+| | |
+|---|---|
+| Fits | 50 mm centre hole, 85 mm outer — the seat of a standard acrylic dome |
+| Supply | 12 V from the rig's own rail, through the MOSFET module |
+| Element | ~31 Ω, 0.39 A, ~4.2 W warm |
+| Wiring | two pads, no polarity; 24 AWG is plenty |
+
+It is in the reference rig now and verified under software control: with both BME280s in place, a two-minute heater test took the dome sensor from 18.9 °C to 23.6 °C while the outside sensor did not move, the dome limit armed, and the thermostat took over from there. It runs nightly on the reference rig from here on. It is sold at a small margin on the [Store](/store/) page — announcements there and in the [GitHub release notes](https://github.com/mattg8892/skylapse/releases). The resistor ring above still works fine if you would rather wind your own.
