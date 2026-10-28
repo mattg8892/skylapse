@@ -873,11 +873,19 @@ function DewHeaterCard({ showToast }) {
           {reading ? (
             <div className="rounded-lg bg-zinc-800/60 p-3 text-sm">
               <div className="flex justify-between">
-                <span className="text-zinc-400">Glass</span>
+                <span className="text-zinc-400">Outside</span>
                 <span className="tabular-nums text-zinc-200">
                   {reading.temp_c}°C
                 </span>
               </div>
+              {reading.dome_temp_c != null && (
+                <div className="flex justify-between">
+                  <span className="text-zinc-400">Dome</span>
+                  <span className="tabular-nums text-zinc-200">
+                    {reading.dome_temp_c}°C
+                  </span>
+                </div>
+              )}
               <div className="flex justify-between">
                 <span className="text-zinc-400">Dewpoint</span>
                 <span className="tabular-nums text-zinc-200">
@@ -890,20 +898,14 @@ function DewHeaterCard({ showToast }) {
                   {((reading.dome_temp_c ?? reading.temp_c) - reading.dewpoint_c).toFixed(1)}°C
                 </span>
               </div>
-              {reading.dome_temp_c != null && (
-                <div className="flex justify-between">
-                  <span className="text-zinc-400">Dome</span>
-                  <span className="tabular-nums text-zinc-200">
-                    {reading.dome_temp_c}°C
-                  </span>
-                </div>
-              )}
               <p className={`mt-2 ${reading.capped ? 'text-rose-400'
                 : reading.heating ? 'text-amber-300' : 'text-zinc-500'}`}>
                 {reading.capped
                   ? 'Too warm — heater held off until the dome cools'
                   : reading.heating ? 'Heating'
-                  : 'Idle — the glass is clear of the dewpoint'}
+                  : reading.dome_temp_c != null
+                    ? 'Idle — the dome is clear of the dewpoint'
+                    : 'Idle — the outside air is clear of the dewpoint'}
               </p>
             </div>
           ) : (

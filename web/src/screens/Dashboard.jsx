@@ -407,7 +407,7 @@ function DewHeaterBanner({ daemon: d }) {
       {hasReading && (
         <dl className="mt-3 grid grid-cols-3 gap-3 text-sm">
           <div>
-            <dt className="text-zinc-500">Air</dt>
+            <dt className="text-zinc-500">Outside</dt>
             <dd className="tabular-nums text-zinc-200">{dew.temp_c}°C</dd>
           </div>
           <div>

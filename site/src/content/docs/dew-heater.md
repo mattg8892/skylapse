@@ -28,6 +28,10 @@ With both sensors present:
 
 One sensor, at either address, behaves exactly as before.
 
+:::note[First switch-on: turn I²C on]
+Raspberry Pi OS ships the I²C bus **off**, so a freshly set-up camera reports *no BME280 detected* even when both sensors are wired perfectly. The Heater tab offers **Enable I²C**; tap it, then **reboot once** from Settings. The sensors are found the moment the camera is back — on the reference rig both appeared within seconds, outside at 0x76 and dome at 0x77.
+:::
+
 :::caution[BME280, not BMP280]
 The BMP280 looks identical and costs a dollar less, but it has **no humidity sensor** — and humidity is the whole input to a dewpoint. Skylapse checks the chip id and rejects a BMP280 rather than compute nonsense.
 :::
