@@ -264,8 +264,7 @@ function StatusLine({ daemon: d }) {
     `gain ${d.gain}`,
     `brightness ${d.brightness}`,
   ]
-  // stars is null in daylight by design; Kp only once the aurora poll has run.
-  if (d.stars != null) bits.push(`${d.stars.toLocaleString()} stars`)
+  // Kp only once the aurora poll has run.
   if (d.kp != null) bits.push(`Kp ${d.kp}`)
   return (
     <>

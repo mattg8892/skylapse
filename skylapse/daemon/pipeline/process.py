@@ -287,7 +287,7 @@ def write_preview(frame: Frame, path: Path, quality: int = 85,
 
 
 def save_jpeg(frame: Frame, camera_id: str, quality: int = 92,
-              overlay: bool = False, stars: int | None = None,
+              overlay: bool = False,
               wb: tuple[float, float] = NEUTRAL_WB) -> Path:
     # The thumbnail is cut from this same array further down, so it inherits
     # the white balance for free — a filmstrip that did not match the frames
@@ -412,8 +412,6 @@ def _write_sidecar(image_path: Path, frame: Frame) -> None:
         "bayer": frame.bayer.value,
         "bit_depth": frame.bit_depth,
     }
-    if getattr(frame, "_stars", None) is not None:
-        meta["stars"] = frame._stars
     # Per-plane means of the raw mosaic, before any white balance. The
     # metering loop computes these anyway, and keeping them makes a colour
     # cast readable straight out of a night's sidecars instead of needing

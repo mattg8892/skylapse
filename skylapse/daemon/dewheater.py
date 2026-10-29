@@ -257,6 +257,21 @@ class DewHeater:
 
 # -- sensor -----------------------------------------------------------------
 
+def _close(bus) -> None:
+    """Release a bus handle, whatever it is.
+
+    Every SMBus open is a file descriptor, and one left to the garbage
+    collector is not reliably released. With two sensors read every frame the
+    daemon ran out of descriptors after about 3h50 and died three times in one
+    night (2026-10-28), each restart costing a black frame. Tolerant of fakes
+    without close(), which the tests use.
+    """
+    try:
+        bus.close()
+    except Exception:
+        pass
+
+
 def find_sensor() -> int | None:
     """The I2C address a BME280 answers on, or None.
 
@@ -269,13 +284,16 @@ def find_sensor() -> int | None:
         bus = smbus2.SMBus(1)
     except Exception:
         return None
-    for addr in (BME280_ADDR, 0x77):
-        try:
-            if bus.read_byte_data(addr, 0xD0) == 0x60:
-                return addr
-        except OSError:
-            continue
-    return None
+    try:
+        for addr in (BME280_ADDR, 0x77):
+            try:
+                if bus.read_byte_data(addr, 0xD0) == 0x60:
+                    return addr
+            except OSError:
+                continue
+        return None
+    finally:
+        _close(bus)
 
 
 def find_sensor_at(addr: int) -> bool:
@@ -283,9 +301,14 @@ def find_sensor_at(addr: int) -> bool:
     try:
         import smbus2
         bus = smbus2.SMBus(1)
+    except Exception:
+        return False
+    try:
         return bus.read_byte_data(addr, 0xD0) == 0x60
     except Exception:
         return False
+    finally:
+        _close(bus)
 
 
 def read_sensor(addr: int | None) -> tuple[float, float] | None:
@@ -296,12 +319,18 @@ def read_sensor(addr: int | None) -> tuple[float, float] | None:
         import bme280
         import smbus2
         bus = smbus2.SMBus(1)
+    except Exception as exc:
+        log.debug("BME280 read failed: %s", exc)
+        return None
+    try:
         params = bme280.load_calibration_params(bus, addr)
         sample = bme280.sample(bus, addr, params)
         return sample.temperature, sample.humidity
     except Exception as exc:
         log.debug("BME280 read failed: %s", exc)
         return None
+    finally:
+        _close(bus)
 
 
 def read_error(addr: int | None) -> str:
@@ -323,11 +352,16 @@ def read_error(addr: int | None) -> str:
     try:
         import smbus2
         bus = smbus2.SMBus(1)
+    except Exception as exc:
+        return f"reading the sensor failed: {exc}"
+    try:
         params = bme280.load_calibration_params(bus, addr)
         bme280.sample(bus, addr, params)
         return ""
     except Exception as exc:
         return f"reading the sensor failed: {exc}"
+    finally:
+        _close(bus)
 
 
 def diagnostics() -> dict:

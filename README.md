@@ -24,7 +24,7 @@ timelapses and RAW files, with no terminal in sight.
   from a keeper button for when a meteor just went past.
 - **Auto-exposure that tracks the sky**, with day/night/twilight profiles from sun
   altitude, and a manual mode for star-tracker rigs.
-- **Nights browser** — scrub a whole night frame by frame, with a star-count chart to
+- **Nights browser** — scrub a whole night frame by frame to
   find the clear stretch, and download any frame as JPEG or DNG.
 - **Focus assist** — a live view with 1×–10× zoom into the full-resolution sensor image
   and a sharpness score to chase while you turn the ring.

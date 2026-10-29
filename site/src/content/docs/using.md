@@ -20,7 +20,7 @@ The latest frame, a status pill driven by whether frames are actually arriving r
 
 Every night captured, with frame counts and sizes. Open one to:
 
-- **scrub the filmstrip** frame by frame, with a star-count chart to find the clear stretch
+- **scrub the filmstrip** frame by frame to find the clear stretch
 - **jump between frames that have RAW files**
 - **watch the timelapse** rendered at dawn
 - **download any frame** as JPEG or DNG

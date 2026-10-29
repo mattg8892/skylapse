@@ -56,5 +56,8 @@ def test_the_margin_is_shown_not_just_the_two_temperatures():
     """Margin is the number the control law actually acts on. Making the reader
     subtract two figures to find out how close they are is a small cruelty."""
     body = source().split("function DewHeaterBanner", 1)[1]
-    assert "temp_c - dew.dewpoint_c" in body.replace("dew.temp_c", "temp_c")
+    # The margin is the dome against the dewpoint when a dome sensor exists,
+    # and the air against it otherwise -- the same number the Heater tab shows.
+    assert "- dew.dewpoint_c" in body
+    assert "dew.dome_temp_c : dew.temp_c" in body
     assert "Margin" in body

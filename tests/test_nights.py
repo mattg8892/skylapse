@@ -32,7 +32,7 @@ def store(tmp_path, monkeypatch):
         cv2.imwrite(str(night / f"{stem}.jpg"), img)
         (night / f"{stem}.json").write_text(json.dumps({
             "timestamp": 1_786_000_000.0 + i, "exposure_us": 500_000,
-            "gain": 100, "stars": 100 + i,
+            "gain": 100,
         }))
     # Only the first frame has a raw beside it.
     (night / "img_20260810_120000.dng").write_bytes(b"II*\x00" + b"\0" * 64)
@@ -67,7 +67,6 @@ def test_frame_index_carries_sidecar_data(store, client):
     body = client.get(f"/api/nights/{CAMERA}/{NIGHT}/frames").json()
     assert body["total"] == 5
     first = body["frames"][0]
-    assert first["stars"] == 100
     assert first["exposure_us"] == 500_000
     assert first["has_dng"] is True
     assert body["frames"][1]["has_dng"] is False

@@ -27,7 +27,6 @@ from . import aurora
 from . import sdnotify
 from . import dewheater as dewheater_mod
 from .dewheater import DewHeater
-from .pipeline.analyze import star_count
 from .. import notify
 from . import nightjobs
 from .watchdog import StallWatch, describe as describe_age
@@ -517,12 +516,8 @@ class CaptureDaemon:
             self.consecutive_bright = (self.consecutive_bright + 1
                                        if self.last_brightness >= SAFETY_BRIGHT_LEVEL
                                        else 0)
-            frame._stars = star_count(
-                corrected if corrected is not arr else arr,
-                frame.bayer, frame.exposure_us, frame.gain) \
-                if period(self.cfg) != "day" else None
             jpeg = process.save_jpeg(frame, self.camera_id, self.cfg.jpeg_quality,
-                                     overlay=cam.overlay, stars=frame._stars,
+                                     overlay=cam.overlay,
                                      wb=self._wb(cam))
             # The settings screen renders pending multipliers from this, since
             # the JPEG just written already has the applied ones baked in.
@@ -537,11 +532,10 @@ class CaptureDaemon:
             # is the only durable per-frame record of what the capture loop did,
             # so it carries every field needed to reconstruct a night afterwards
             # (the status file holds just the latest frame and is overwritten).
-            log.info("Frame t=%s exposure=%dus gain=%d brightness=%.1f stars=%s "
+            log.info("Frame t=%s exposure=%dus gain=%d brightness=%.1f "
                      "dng=%s file=%s",
                      time.strftime("%H:%M:%S", time.localtime(frame.timestamp)),
                      frame.exposure_us, frame.gain, self.last_brightness,
-                     frame._stars if frame._stars is not None else "-",
                      "yes" if dng_saved else "no", jpeg.name)
 
             self.latest_path = str(jpeg)
@@ -569,7 +563,6 @@ class CaptureDaemon:
                 # duplicating the profile lookup and getting it subtly wrong.
                 "target_brightness": profile.target_brightness,
                 "brightness": round(self.last_brightness, 1),
-                "stars": getattr(frame, "_stars", None),
                 "kp": self.last_kp,
                 "dew": self.dewheater.tick() if self.dewheater else None,
             })

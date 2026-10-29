@@ -778,3 +778,44 @@ def test_without_a_dome_sensor_nothing_changed(monkeypatch):
     status = h.tick()
     assert status["heating"] is True             # 0.3C margin: heat
     assert "dome_temp_c" not in status
+
+
+# -- bus handles ---------------------------------------------------------------
+
+def test_every_bus_handle_is_closed(monkeypatch):
+    """Each open is a file descriptor. Two sensors read every frame leaked two
+    per frame; the daemon hit the descriptor limit after ~3h50 and died three
+    times on the night of 2026-10-28, each restart costing a black frame."""
+    from skylapse.daemon import dewheater
+
+    opened, closed = [], []
+
+    class Bus:
+        def __init__(self, n):
+            opened.append(self)
+        def read_byte_data(self, addr, reg):
+            if addr == 0x76:
+                return 0x60
+            raise OSError("nothing here")
+        def close(self):
+            closed.append(self)
+
+    class Sample:
+        temperature, humidity = 10.0, 50.0
+
+    class FakeBme280:
+        @staticmethod
+        def load_calibration_params(bus, addr): return object()
+        @staticmethod
+        def sample(bus, addr, params): return Sample()
+
+    sys_modules = __import__("sys").modules
+    monkeypatch.setitem(sys_modules, "smbus2", type("M", (), {"SMBus": Bus}))
+    monkeypatch.setitem(sys_modules, "bme280", FakeBme280)
+
+    assert dewheater.find_sensor() == 0x76
+    assert dewheater.find_sensor_at(0x77) is False
+    assert dewheater.read_sensor(0x76) == (10.0, 50.0)
+    assert dewheater.read_error(0x76) == ""
+    assert len(opened) == 4
+    assert len(closed) == 4, "a bus handle was opened and never closed"

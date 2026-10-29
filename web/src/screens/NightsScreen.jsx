@@ -315,7 +315,6 @@ function NightView({ cameraId, night, showToast, onBack }) {
   const [frames, setFrames] = useState([])
   const [total, setTotal] = useState(0)
   const [index, setIndex] = useState(0)
-  const [stars, setStars] = useState([])
   const [fullscreen, setFullscreen] = useState(false)
   const [hasTimelapse, setHasTimelapse] = useState(false)
   // A render in progress is a real file that no player can open.
@@ -343,8 +342,6 @@ function NightView({ cameraId, night, showToast, onBack }) {
       setIndex((i) => Math.min(i, Math.max(0, all.length - 1)))
     }
     pull(0).catch(() => {})
-    fetch(`/api/stars/${cameraId}/${night}`)
-      .then((r) => r.json()).then((s) => alive && setStars(s)).catch(() => {})
     fetch(`/api/nights/${cameraId}`).then((r) => r.json())
       .then((ns) => {
         if (!alive) return
@@ -441,7 +438,6 @@ function NightView({ cameraId, night, showToast, onBack }) {
                 {frame.exposure_us != null &&
                   ` · ${(frame.exposure_us / 1e6).toFixed(1)}s`}
                 {frame.gain != null && ` · gain ${frame.gain}`}
-                {frame.stars != null && ` · ${frame.stars.toLocaleString()} stars`}
               </span>
               {frame.has_dng && (
                 <span className="rounded-full bg-emerald-950 px-2.5 py-0.5 text-xs
@@ -487,8 +483,6 @@ function NightView({ cameraId, night, showToast, onBack }) {
           <p className="mt-3 text-sm text-zinc-500">Loading frames…</p>
         )}
       </Card>
-
-      <StarChart stars={stars} current={frame?.timestamp} onSeek={seekToTime} />
 
       {fullscreen && frame && (
         <Fullscreen frameUrl={frameUrl} dngUrl={dngUrl} name={frame.name}
@@ -621,60 +615,6 @@ function Filmstrip({ cameraId, night, frames, index, onPick }) {
 }
 
 /* -- star chart ------------------------------------------------------------ */
-
-function StarChart({ stars, current, onSeek }) {
-  const svgRef = useRef(null)
-  const { points, t0, t1, max } = useMemo(() => {
-    if (!stars.length) return { points: '', t0: 0, t1: 0, max: 0 }
-    const t0 = stars[0].t, t1 = stars[stars.length - 1].t
-    const max = Math.max(...stars.map((s) => s.stars)) || 1
-    const span = Math.max(1, t1 - t0)
-    const points = stars.map((s) =>
-      `${((s.t - t0) / span) * 100},${100 - (s.stars / max) * 100}`).join(' ')
-    return { points, t0, t1, max }
-  }, [stars])
-
-  if (!stars.length) {
-    return (
-      <Card title="Sky quality">
-        <p className="mt-1 text-sm text-zinc-500">
-          No star counts for this night — they’re only measured after dark.
-        </p>
-      </Card>
-    )
-  }
-
-  const seek = (e) => {
-    const rect = svgRef.current.getBoundingClientRect()
-    const x = ((e.clientX ?? e.touches?.[0]?.clientX) - rect.left) / rect.width
-    onSeek(t0 + Math.min(1, Math.max(0, x)) * (t1 - t0))
-  }
-
-  const cursorPct = current != null && t1 > t0
-    ? Math.min(100, Math.max(0, ((current - t0) / (t1 - t0)) * 100)) : null
-
-  return (
-    <Card title="Sky quality"
-      right={<span className="text-sm text-zinc-500">peak {max.toLocaleString()}</span>}>
-      <p className="mt-1 text-sm text-zinc-400">
-        Stars counted per frame. A collapse is cloud — click to jump there.
-      </p>
-      <svg ref={svgRef} viewBox="0 0 100 100" preserveAspectRatio="none"
-        onClick={seek} role="img" aria-label="Star count across the night"
-        className="mt-3 h-32 w-full cursor-pointer rounded-xl bg-zinc-800/60">
-        <polyline points={points} fill="none" stroke="#38bdf8" strokeWidth="1"
-          vectorEffect="non-scaling-stroke" />
-        {cursorPct != null && (
-          <line x1={cursorPct} y1="0" x2={cursorPct} y2="100" stroke="#fbbf24"
-            strokeWidth="1" vectorEffect="non-scaling-stroke" />
-        )}
-      </svg>
-      <div className="mt-1 flex justify-between text-xs text-zinc-500">
-        <span>{clockOf(t0)}</span><span>{clockOf(t1)}</span>
-      </div>
-    </Card>
-  )
-}
 
 /* -- fullscreen ------------------------------------------------------------ */
 

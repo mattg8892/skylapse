@@ -666,7 +666,7 @@ React + Tailwind SPA served by the API. Screens:
    (Kp7 at 42.7°N, Kp6 at 45.5°N, hemisphere-symmetric); alerts once per Kp episode,
    latched until the storm subsides; never fires in daylight; fetch failures silent.
    Current Kp exposed in /api/status. OVATION probability map: future refinement.
-3. **Star count + sky quality trend — IMPLEMENTED (pipeline/analyze.py).** Per-frame
+3. **Star count + sky quality trend — REMOVED 2026-10-29.** It worked, and nobody could read it; the per-frame morphology was also the daemon's heaviest CPU. Was: IMPLEMENTED (pipeline/analyze.py). Per-frame
    threshold+blob count on the raw mosaic (skipped in daylight), stored in each JSON
    sidecar and in /api/status; GET /api/stars/{camera}/{night} returns the night's
    series for the chart. Tested: count scales with stars, craters under cloud blur.

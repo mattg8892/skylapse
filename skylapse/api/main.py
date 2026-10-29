@@ -1334,7 +1334,6 @@ def night_frames(camera_id: str, night: str, offset: int = 0,
         items.append({
             "name": jpeg.name,
             "timestamp": meta.get("timestamp", jpeg.stat().st_mtime),
-            "stars": meta.get("stars"),
             "has_dng": jpeg.with_suffix(".dng").exists(),
             "exposure_us": meta.get("exposure_us"),
             "gain": meta.get("gain"),
@@ -1454,26 +1453,6 @@ def delete_night(camera_id: str, night: str, before: float | None = None) -> dic
             folder.rmdir()
     return {"ok": True, "frames_deleted": deleted, "files_deleted": files,
             "night": night, "folder_removed": before is None and not folder.exists()}
-
-
-# -- sky quality --------------------------------------------------------------
-
-@app.get("/api/stars/{camera_id}/{night}")
-def star_history(camera_id: str, night: str) -> list[dict]:
-    """Per-frame star counts from the sidecars: the sky-quality trend chart.
-    A cratering count = clouds rolled in."""
-    folder = config.IMAGE_ROOT / camera_id / night
-    if not folder.is_dir():
-        raise HTTPException(404, "No such night")
-    out = []
-    for sidecar in sorted(folder.glob("img_*.json")):
-        try:
-            meta = json.loads(sidecar.read_text())
-        except json.JSONDecodeError:
-            continue
-        if meta.get("stars") is not None:
-            out.append({"t": meta["timestamp"], "stars": meta["stars"]})
-    return out
 
 
 # -- focus assist -------------------------------------------------------------
