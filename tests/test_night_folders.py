@@ -105,3 +105,16 @@ def test_the_frame_name_agrees_with_the_folder(store):
     ts = at(6, 30)
     assert process.day_folder(ts, "cam").name == "2026-08-17"
     assert process.local_time(ts).strftime("%Y%m%d_%H%M%S") == "20260818_063000"
+
+
+def test_frame_names_do_not_repeat_when_the_clock_falls_back():
+    """2026-11-01, America/Chicago: 01:00-01:59 happens twice. Local-time names
+    collided and the second hour overwrote the first -- an hour of sky lost.
+    UTC names are unique and sort in capture order straight through it."""
+    import calendar
+    first = calendar.timegm((2026, 11, 1, 6, 30, 27))     # 01:30:27 CDT
+    second = first + 3600                                   # 01:30:27 CST
+    a, b = process.frame_stamp(first), process.frame_stamp(second)
+    assert a != b
+    assert a < b, "names must sort in capture order"
+    assert a == "20261101_063027" and b == "20261101_073027"

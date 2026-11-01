@@ -5,7 +5,7 @@ The pipeline owns all processing so both drivers produce identical output.
 from __future__ import annotations
 
 import json
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 from pathlib import Path
 
@@ -236,6 +236,21 @@ def camera_zone():
         return None
 
 
+def frame_stamp(ts: float) -> str:
+    """The time part of a frame's filename, in UTC.
+
+    It was local time, which repeats itself for an hour every autumn: on
+    2026-11-01 the second 01:xx hour wrote files with the same names as the
+    first and overwrote them, and an hour of sky vanished from the night in a
+    single frame. UTC never repeats and sorts in capture order through both
+    clock changes. The night FOLDER stays on local time (noon to noon is a
+    local idea); the nights browser shows times from the sidecar timestamp,
+    and nothing parses a time out of a name, so this is the only place that
+    changes.
+    """
+    return datetime.fromtimestamp(ts, timezone.utc).strftime("%Y%m%d_%H%M%S")
+
+
 def local_time(ts: float) -> datetime:
     """A timestamp in the camera's own local time. One definition, used by the
     night folder and the frame name alike, so the two can never disagree."""
@@ -299,8 +314,7 @@ def save_jpeg(frame: Frame, camera_id: str, quality: int = 92,
                            frame.exposure_us, frame.gain, frame.sensor_temp_c)
 
     folder = day_folder(frame.timestamp, camera_id)
-    stamp = local_time(frame.timestamp).strftime("%Y%m%d_%H%M%S")
-    path = folder / f"img_{stamp}.jpg"
+    path = folder / f"img_{frame_stamp(frame.timestamp)}.jpg"
     _write_jpeg(img, path, quality)
     # Thumbnail now, while the debayered array is already in memory. Generating
     # these on demand meant the first scrub of a 1200-frame night made a phone
@@ -399,8 +413,7 @@ def save_dng(frame: Frame, camera_id: str,
              wb: tuple[float, float] = NEUTRAL_WB) -> Path:
     """Raw bayer -> DNG in the image store, beside the night's JPEGs."""
     folder = day_folder(frame.timestamp, camera_id)
-    stamp = local_time(frame.timestamp).strftime("%Y%m%d_%H%M%S")
-    return write_dng(frame, folder / f"img_{stamp}.dng", wb)
+    return write_dng(frame, folder / f"img_{frame_stamp(frame.timestamp)}.dng", wb)
 
 
 def _write_sidecar(image_path: Path, frame: Frame) -> None:
