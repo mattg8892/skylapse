@@ -104,3 +104,28 @@ figure.screen figcaption {
   font-size: var(--sl-text-xs);
   color: var(--sl-color-gray-3);
 }
+
+/* Video: the home hero plays a night on its own; gallery clips have controls. */
+.hero-html .hero-video {
+  width: 100%;
+  max-width: 28rem;
+  aspect-ratio: 4 / 3;
+  object-fit: cover;
+  border-radius: 1rem;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.45);
+  background: #000;
+}
+figure.clip {
+  margin: 1rem 0 1.75rem;
+}
+figure.clip video {
+  width: 100%;
+  aspect-ratio: 4 / 3;
+  border-radius: 0.75rem;
+  background: #000;
+}
+figure.clip figcaption {
+  margin-top: 0.5rem;
+  font-size: var(--sl-text-xs);
+  color: var(--sl-color-gray-3);
+}
