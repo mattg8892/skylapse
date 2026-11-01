@@ -1,0 +1,86 @@
+---
+// Starlight's header, plus a row of site navigation under it.
+// The home page uses the splash layout, which has no sidebar, so without this
+// row there was no way off the home page except the hero buttons.
+import Default from '@astrojs/starlight/components/Header.astro';
+
+const links = [
+  { label: 'Home', href: '/' },
+  { label: 'Parts list', href: '/parts/' },
+  { label: 'Build', href: '/build/' },
+  { label: 'Using the app', href: '/using/' },
+  { label: 'Help & status', href: '/help/' },
+  { label: 'Store', href: '/store/' },
+  { label: 'Gallery', href: '/gallery/' },
+];
+
+const here = Astro.url.pathname.replace(/\/?$/, '/');
+const isCurrent = (href: string) => (href === '/' ? here === '/' : here.startsWith(href));
+---
+
+<div class="sky-header">
+  <div class="sky-header-row">
+    <Default><slot /></Default>
+  </div>
+  <nav class="sky-nav print:hidden" aria-label="Site">
+    <ul>
+      {links.map(({ label, href }) => (
+        <li>
+          <a href={href} aria-current={isCurrent(href) ? 'page' : undefined}>{label}</a>
+        </li>
+      ))}
+    </ul>
+  </nav>
+</div>
+
+<style>
+  .sky-header {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+  }
+  .sky-header-row {
+    height: var(--sky-header-row-height);
+    flex: none;
+  }
+  .sky-nav {
+    flex: none;
+    height: var(--sky-nav-row-height);
+    display: flex;
+    align-items: center;
+    margin: 0 calc(-1 * var(--sl-nav-pad-x));
+    padding: 0 var(--sl-nav-pad-x);
+    border-top: 1px solid var(--sl-color-hairline-shade);
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+  .sky-nav::-webkit-scrollbar {
+    display: none;
+  }
+  .sky-nav ul {
+    display: flex;
+    gap: 0.25rem;
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    white-space: nowrap;
+  }
+  .sky-nav a {
+    display: inline-block;
+    padding: 0.3rem 0.7rem;
+    border-radius: 999px;
+    font-size: var(--sl-text-sm);
+    font-weight: 600;
+    color: var(--sl-color-gray-2);
+    text-decoration: none;
+    line-height: 1.4;
+  }
+  .sky-nav a:hover {
+    color: var(--sl-color-white);
+    background: var(--sl-color-gray-6);
+  }
+  .sky-nav a[aria-current='page'] {
+    color: var(--sl-color-accent-high);
+    background: var(--sl-color-accent-low);
+  }
+</style>

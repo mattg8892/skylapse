@@ -30,6 +30,23 @@
   --sl-color-black: #ffffff;
 }
 
+/* Two-row header: Starlight's own row, then the site nav. Starlight offsets the
+   sidebar, mobile TOC and content by --sl-nav-height, so it has to grow too. */
+:root {
+  --sky-header-row-height: 3.5rem;
+  --sky-nav-row-height: 2.5rem;
+  --sl-nav-height: calc(var(--sky-header-row-height) + var(--sky-nav-row-height));
+}
+@media (min-width: 50rem) {
+  :root {
+    --sky-header-row-height: 4rem;
+  }
+}
+/* Starlight centres the phone menu button on the whole header; keep it on the first row. */
+starlight-menu-button button {
+  top: calc((var(--sky-header-row-height) - var(--sl-menu-button-size)) / 2);
+}
+
 /* Header lockup: a touch larger than Starlight's default */
 .site-title img {
   height: 2.6rem;

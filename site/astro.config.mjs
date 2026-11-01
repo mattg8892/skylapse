@@ -40,6 +40,8 @@ export default defineConfig({
         baseUrl: 'https://github.com/mattg8892/skylapse/edit/main/site/',
       },
       customCss: ['./src/styles/custom.css'],
+      // A nav row under the header on every page; the splash home page has no sidebar.
+      components: { Header: './src/components/Header.astro' },
       lastUpdated: true,
       sidebar: [
         { label: 'Home', link: '/' },
